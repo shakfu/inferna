@@ -63,9 +63,9 @@ jobs:
           CIBW_ARCHS: ${{ matrix.archs || 'auto' }}
           # Single build per platform - the resulting wheel is tagged
           # cp312-abi3 and is valid on 3.12+. Floor is 3.12 because
-          # Cython uses vectorcall (limited-API since 3.12) for faster
-          # call paths. 3.11 would work but misses that perf win; 3.10
-          # fails because Py_buffer is not in the 3.10 stable ABI.
+          # nanobind's stable-ABI (Py_LIMITED_API) support targets
+          # CPython 3.12+; earlier versions lack the limited-API
+          # surface nanobind relies on.
           CIBW_BUILD: "cp312-*"
           # Per-platform environment. cibuildwheel resolves
           # CIBW_ENVIRONMENT_<PLAT> independently of pyproject.toml's
@@ -187,7 +187,7 @@ jobs:
           else
             source abi3-venv/bin/activate
           fi
-          # Verify every Cython extension was built against the stable
+          # Verify every nanobind extension was built against the stable
           # ABI. Naming conventions differ by platform:
           #   Linux/macOS: abi3 -> foo.abi3.so; version-specific ->
           #                foo.cpython-3XX-<plat>.so

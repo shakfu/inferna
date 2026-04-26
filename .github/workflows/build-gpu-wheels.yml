@@ -899,7 +899,7 @@ jobs:
           from inferna import estimate_gpu_layers, estimate_memory_usage
           from inferna import GenerationConfig, Response
 
-          # Cython extension imports
+          # nanobind extension imports
           from inferna.llama import llama_cpp
           print('llama_cpp extension loaded')
 
@@ -957,7 +957,7 @@ jobs:
       # -------------------------------------------------------------------
       # SYCL-only: install Intel's OpenCL CPU runtime so the SYCL dispatch
       # stack has a compliant device on a GPU-less runner, then run a
-      # 1-token decode. Exercises the full pipeline (Cython wrappers ->
+      # 1-token decode. Exercises the full pipeline (nanobind wrappers ->
       # libllama -> libggml-sycl -> SYCL runtime -> OpenCL CPU device ->
       # sampler -> teardown) on free hardware. Catches ABI/symbol/teardown
       # regressions that bare imports miss. Best-effort: if the Intel

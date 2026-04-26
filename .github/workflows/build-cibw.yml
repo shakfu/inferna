@@ -176,7 +176,7 @@ jobs:
           from inferna import estimate_gpu_layers, estimate_memory_usage
           from inferna import GenerationConfig, Response
 
-          # Cython extension imports
+          # nanobind extension imports
           from inferna.llama import llama_cpp
           print('llama_cpp extension loaded')
 
