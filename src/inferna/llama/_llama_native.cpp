@@ -323,16 +323,33 @@ struct LlamaContextW {
 
         // Mirror the upstream Python sanity check: refuse pathological n_ctx
         // values that would crash the allocator instead of returning NULL.
-        // Done in Python ints to keep arbitrary precision.
+        // Computed in uint64_t with overflow detection so the check is
+        // portable to MSVC (which lacks __int128).
         long long n_ctx_eff = cp->p.n_ctx ? cp->p.n_ctx : model->cached_n_ctx_train;
         if (n_ctx_eff > 0) {
-            __int128 est = (__int128) 4 * model->cached_n_layer * n_ctx_eff * model->cached_n_embd;
-            __int128 cap = (__int128) 100 << 40;  // 100 TiB
-            if (est > cap) {
+            auto mul_ov = [](uint64_t a, uint64_t b, uint64_t& out) -> bool {
+#if defined(__GNUC__) || defined(__clang__)
+                return __builtin_mul_overflow(a, b, &out);
+#else
+                out = a * b;
+                return a != 0 && out / a != b;
+#endif
+            };
+            uint64_t est = 4;
+            uint64_t tmp = 0;
+            bool overflow = false;
+            overflow |= mul_ov(est, (uint64_t) model->cached_n_layer, tmp); est = tmp;
+            overflow |= mul_ov(est, (uint64_t) n_ctx_eff,             tmp); est = tmp;
+            overflow |= mul_ov(est, (uint64_t) model->cached_n_embd,  tmp); est = tmp;
+            const uint64_t cap = 100ULL << 40;  // 100 TiB
+            if (overflow || est > cap) {
+                std::string size_str = overflow
+                    ? std::string("more than 16 EiB")
+                    : (std::to_string(est >> 30) + " GiB");
                 throw std::runtime_error(
                     "Refusing to create llama_context: requested n_ctx=" +
                     std::to_string(n_ctx_eff) + " would need an estimated ~" +
-                    std::to_string((long long)(est >> 30)) + " GiB of KV cache "
+                    size_str + " of KV cache "
                     "(model n_layer=" + std::to_string(model->cached_n_layer) +
                     ", n_embd=" + std::to_string(model->cached_n_embd) + "), "
                     "which exceeds the 100 TiB sanity cap. Lower n_ctx or use "
