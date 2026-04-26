@@ -20,14 +20,6 @@
 
 ## CI / Workflows
 
-### High Priority
-
-- [x] **Add `concurrency:` groups to all workflows** -- applied across `build-gpu-wheels.yml`, `build-gpu-wheels-abi3.yml`, `build-new-wheels.yml`, `check-vendor.yml`, `build-cibw.yml`, `build-cibw-abi3.yml`
-
-- [x] **Vendor-drift guard workflow (`check-vendor.yml` pattern)** -- llama.cpp's `check-vendor.yml` re-runs `scripts/sync_vendor.py` in CI and fails if the tree differs. inferna's `git status` currently shows modified vendored headers (`mtmd.h`, `log.h`, `ggml-backend.h`, `common.h`) -- exactly the class of silent drift that caused the `GGML_MAX_NAME=128` ABI-match incident. Add `.github/workflows/check-thirdparty.yml` that runs the vendor sync step and diffs. Implemented as `manage.py check_vendor` subcommand + `.github/workflows/check-vendor.yml`
-
-- [x] **Extend ccache to CPU cibw workflows** -- `hendrikmuhs/ccache-action@v1.2` now wired into `build-cibw.yml` + `build-cibw-abi3.yml` for Linux and macOS, keyed per-matrix-OS, with `CMAKE_{C,CXX}_COMPILER_LAUNCHER=ccache` passed through `CIBW_ENVIRONMENT_{LINUX,MACOS}`. Linux manylinux container installs ccache via `pyproject.toml`'s `before-all`. Windows (MSVC) ccache remains skipped pending debug-format / cmake-integration investigation
-
 ### Medium Priority
 
 - [ ] **Path-filtered `push` / `pull_request` triggers** -- llama.cpp's `build-vulkan.yml:5-25`, `release.yml:10-28`, `editorconfig.yml:9-14` all auto-trigger on narrow `paths:` filters. inferna is entirely `workflow_dispatch` today, so real regressions can ship to users. Auto-trigger CPU cibw on PRs touching `src/inferna/**`, `scripts/manage.py`, `pyproject.toml`; keep GPU wheels on `workflow_dispatch`
@@ -41,8 +33,6 @@
 ### Wheel Coverage (additional backend variants)
 
 Gap analysis vs. llama.cpp b8893 release assets. Ordered by effort/payoff.
-
-- [x] **Windows CUDA 13.1** -- shipped as `build_cuda13_windows` job in `build-new-wheels.yml:44` (wheel name `inferna-cuda13`, Jimver/cuda-toolkit@13.1.0)
 
 - [ ] **Windows SYCL (Intel Arc + Xe)** -- Linux SYCL is shipped (`build_sycl` in `build-gpu-wheels-abi3.yml:319`, wheel name `inferna-sycl`). Windows SYCL still pending: follows the same pattern as windows-cuda/vulkan -- download prebuilt, synthesize `.lib` via existing `_generate_import_libs()`, `delvewheel --include ggml-sycl.dll` with `--no-dll` for `sycl[78].dll`, `pi_level_zero.dll`, `pi_opencl.dll`, `svml_dispmd.dll`, `libmmd.dll`, `libiomp5md.dll` (user-installed Intel oneAPI runtime). Build-time dep: Intel oneAPI DPC++ on the Windows runner -- use `oneapi-src/setup-oneapi` or similar. Needs `_release_asset_name()` + `_dylib_names` extended to recognize Windows SYCL assets
 
@@ -74,10 +64,3 @@ Gap analysis vs. llama.cpp b8893 release assets. Ordered by effort/payoff.
 
 - [ ] Sharding for 1M+ vector workloads
 
-## RAG Pipeline Integration
-
-- [x] **Pipeline-integrated reranking + `RerankerProtocol`** -- `RerankerProtocol` shipped in `src/inferna/rag/types.py`; `Reranker` inherits from it. `RAGConfig(rerank=True, rerank_top_k=20, reranker=<instance>)` wired into `RAGPipeline._retrieve` (used by `query`, `stream`, `retrieve`). Default `rerank=False` preserves the legacy path.
-
-## Alternative vector-store backends
-
-- [x] **Qdrant adapter (`inferna/rag/stores/qdrant.py`)** -- Reference adapter shipped. `QdrantVectorStore` implements the seven `VectorStoreProtocol` methods against `qdrant_client.QdrantClient`; source dedup lives in per-point payload fields (`content_hash`, `source_label`, `indexed_at`), `is_source_indexed` is a filtered count, `get_source_by_label` is a scroll+count. Lazy-imported from `inferna.rag.QdrantVectorStore` and `inferna.rag.stores`. Optional `qdrant` dep group in `pyproject.toml`. Tests in `tests/test_rag_qdrant.py` (21 cases) skip when `qdrant-client` isn't installed. Chroma / LanceDB / pgvector can follow the same template.

@@ -1,6 +1,6 @@
-# inferna - Fast, Pythonic AI Inference
+# Inferna - Fast, Pythonic AI Inference
 
-inferna is a comprehensive no-dependencies Python library for local AI inference built on the state-of-the-art `.cpp` ecosystem:
+Inferna is a comprehensive no-dependencies Python library for local AI inference built on the state-of-the-art `.cpp` ecosystem:
 
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)** - Text generation, chat, embeddings, and text-to-speech
 
@@ -11,6 +11,8 @@ inferna is a comprehensive no-dependencies Python library for local AI inference
 It combines the performance of compiled C++ bindings (via [nanobind](https://github.com/wjakob/nanobind)) with a simple, high-level Python API for cross-modal AI inference.
 
 **[Documentation](https://shakfu.github.io/inferna/)** | **[PyPI](https://pypi.org/project/inferna/)** | **[Changelog](CHANGELOG.md)**
+
+> Inferna is a [nanobind](https://github.com/wjakob/nanobind)-based rewrite of [cyllama](https://github.com/shakfu/cyllama), an earlier Cython wrapper around the same `.cpp` ecosystem. The migration was driven by nanobind's lower binding overhead, simpler C++ integration, and faster build times; the high-level Python API and feature api have been carried forward and extended.
 
 ## Features
 

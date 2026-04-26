@@ -1,6 +1,6 @@
 [project]
 name = "inferna"
-version = "0.2.13"
+version = "0.1.0"
 description = "inferna is a comprehensive zero-dependencies Python library for local AI inference using the state-of-the-art llama, whisper, and stable-diffusion .cpp ecosystem."
 readme = "README.md"
 authors = [
