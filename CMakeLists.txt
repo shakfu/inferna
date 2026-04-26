@@ -599,8 +599,27 @@ target_link_directories(_llama_native PRIVATE ${COMMON_LINK_DIRS})
 target_compile_options(_llama_native PRIVATE ${CXX_COMPILE_OPTIONS})
 set_target_properties(_llama_native PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
-    BUILD_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB};${SDCPP_LIB}"
-    INSTALL_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB};${SDCPP_LIB}"
+)
+# BUILD_RPATH and INSTALL_RPATH both point at the absolute build-tree lib
+# dirs. This lets delocate (macOS) / auditwheel (Linux) resolve
+# `@rpath/libllama.0.dylib` during wheel repair via the extension's
+# LC_RPATH; the repair tool then copies the libs into inferna/.dylibs/
+# (macOS) or inferna.libs/ (Linux), rewrites LC_LOAD_DYLIB to
+# `@loader_path/...` / `$ORIGIN/...`, and sanitises the absolute paths
+# out of the final wheel. Editable installs also work because the
+# build-tree paths are valid on the dev host.
+#
+# In WITH_DYLIB builds the llama.cpp shared libs live in
+# `${LLAMACPP_DIR}/dynamic`, so prepend that dir; the static-lib dir
+# stays as a secondary fallback (e.g. for cpp-httplib). Mirrors the
+# cyllama `add_cython_extension` idiom.
+set(_LLAMA_NATIVE_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB};${SDCPP_LIB}")
+if(WITH_DYLIB AND LLAMACPP_DYLIB_DIR)
+    set(_LLAMA_NATIVE_RPATH "${LLAMACPP_DYLIB_DIR};${_LLAMA_NATIVE_RPATH}")
+endif()
+set_target_properties(_llama_native PROPERTIES
+    BUILD_RPATH "${_LLAMA_NATIVE_RPATH}"
+    INSTALL_RPATH "${_LLAMA_NATIVE_RPATH}"
 )
 if(WITH_DYLIB)
     target_link_libraries(_llama_native PRIVATE ${DYLIBS} ${SYSTEM_LIBS})

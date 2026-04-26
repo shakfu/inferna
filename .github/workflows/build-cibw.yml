@@ -16,6 +16,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build_wheels:
     name: Build wheels for ${{ matrix.os }}
@@ -140,9 +143,15 @@ jobs:
         id: find-wheel
         shell: bash
         run: |
+          # Smoke job runs on Python 3.12, so the cp312 wheel must exist.
+          # Falling back to any other version's wheel would just fail at
+          # `pip install` (incompatible tag), so make the missing-wheel
+          # case fail loudly here instead.
           WHEEL=$(find wheels -name "*cp312*" | head -1)
           if [ -z "$WHEEL" ]; then
-            WHEEL=$(find wheels -name "*.whl" | head -1)
+            echo "ERROR: no cp312 wheel found in wheels/"
+            ls -la wheels/
+            exit 1
           fi
           echo "wheel=$WHEEL" >> "$GITHUB_OUTPUT"
           echo "Found wheel: $WHEEL"
