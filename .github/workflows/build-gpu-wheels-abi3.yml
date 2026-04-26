@@ -103,7 +103,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-abi3-cuda-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels-abi3.yml') }}
+          key: deps-abi3-cuda-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels-abi3.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -111,7 +111,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==3.4.0
+        run: pip install cibuildwheel==3.4.1
 
       - name: Set CCACHE_DIR to workspace
         run: echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
@@ -216,7 +216,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-abi3-rocm-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels-abi3.yml') }}
+          key: deps-abi3-rocm-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels-abi3.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -332,7 +332,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-abi3-sycl-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels-abi3.yml') }}
+          key: deps-abi3-sycl-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels-abi3.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -440,7 +440,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-abi3-vulkan-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels-abi3.yml') }}
+          key: deps-abi3-vulkan-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels-abi3.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -542,7 +542,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-abi3-cuda-windows-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels-abi3.yml') }}
+          key: deps-abi3-cuda-windows-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels-abi3.yml') }}
 
       - name: Install CUDA Toolkit 12.4
         uses: Jimver/cuda-toolkit@v0.2.21
@@ -629,7 +629,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-abi3-vulkan-windows-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels-abi3.yml') }}
+          key: deps-abi3-vulkan-windows-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels-abi3.yml') }}
 
       - name: Install Vulkan SDK
         shell: pwsh
@@ -712,7 +712,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-abi3-vulkan-macos-intel-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels-abi3.yml') }}
+          key: deps-abi3-vulkan-macos-intel-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels-abi3.yml') }}
 
       - name: Install Vulkan SDK
         run: |
