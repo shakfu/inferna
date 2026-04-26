@@ -12,7 +12,19 @@ It combines the performance of compiled C++ bindings (via [nanobind](https://git
 
 **[Documentation](https://shakfu.github.io/inferna/)** | **[PyPI](https://pypi.org/project/inferna/)** | **[Changelog](CHANGELOG.md)**
 
-> Inferna is a [nanobind](https://github.com/wjakob/nanobind)-based rewrite of [cyllama](https://github.com/shakfu/cyllama), an earlier Cython wrapper around the same `.cpp` ecosystem. The migration was driven by nanobind's lower binding overhead, simpler C++ integration, and faster build times; the high-level Python API and feature api have been carried forward and extended.
+Inferna is a [nanobind](https://github.com/wjakob/nanobind)-based rewrite of [cyllama](https://github.com/shakfu/cyllama), an earlier Cython wrapper around the same `.cpp` ecosystem. The migration was driven by the promise of nanobind's lower binding overhead and simpler C++ integration; the high-level Python API and feature surface have been carried forward and extended.
+
+How inferna differs from cyllama:
+
+| | inferna | cyllama |
+|---|---|---|
+| Binding layer | nanobind | Cython |
+| Wheel format | stable ABI (`abi3`), one wheel per platform | per-Python-version wheels |
+| Minimum Python | 3.12 | 3.10 |
+| Release cadence | tracks major upstream releases of `llama.cpp` / `stable-diffusion.cpp` | tracks bleeding-edge `llama.cpp` / `stable-diffusion.cpp`, updated frequently |
+| Release lineage | `0.1.0` corresponds to cyllama `0.2.14` | -- |
+
+
 
 ## Features
 
@@ -46,17 +58,18 @@ It combines the performance of compiled C++ bindings (via [nanobind](https://git
 pip install inferna
 ```
 
-This installs the cpu-backend for linux and windows. For MacOS, the Metal backend is installed by default to take advantage of Apple Silicon.
+This installs the CPU backend for Linux and Windows. For macOS, the Metal backend is installed by default to take advantage of Apple Silicon.
 
 ### GPU-Accelerated Variants
 
-GPU variants are available on PyPI as separate packages (dynamically linked, Linux x86_64 only for now):
+GPU variants are available on PyPI as separate dynamically linked packages:
 
 ```sh
-pip install inferna-cuda12   # NVIDIA GPU (CUDA 12.4)
-pip install inferna-rocm     # AMD GPU (ROCm 6.3, requires glibc >= 2.35)
-pip install inferna-sycl     # Intel GPU (oneAPI SYCL 2025.3)
-pip install inferna-vulkan   # Cross-platform GPU (Vulkan)
+pip install inferna-cuda12   # NVIDIA GPU (CUDA 12.4)        -- Linux x86_64, Windows x86_64
+pip install inferna-cuda13   # NVIDIA GPU (CUDA 13.1)        -- Windows x86_64
+pip install inferna-rocm     # AMD GPU (ROCm 6.3)            -- Linux x86_64 (requires glibc >= 2.35)
+pip install inferna-sycl     # Intel GPU (oneAPI SYCL 2025.3) -- Linux x86_64
+pip install inferna-vulkan   # Cross-platform GPU (Vulkan)   -- Linux x86_64, Windows x86_64, macOS x86_64 (Intel)
 ```
 
 All variants install the same `inferna` Python package -- only the compiled backend differs. Install one at a time (they replace each other). GPU variants require the corresponding driver/runtime installed on your system.
@@ -631,7 +644,7 @@ models = list_cached_models()
 
 **Production-Ready**: Battle-tested and comprehensive
 
-- 1489+ passing tests with extensive coverage
+- Extensive test coverage across the bindings, high-level API, agents, and RAG layers
 
 - Comprehensive documentation and examples
 
@@ -649,10 +662,7 @@ models = list_cached_models()
 
 ## Status
 
-**Current Version**: 0.2.13 (Apr 2026)
-**llama.cpp Version**: b8833
-**Build System**: scikit-build-core + CMake
-**Test Coverage**: 1489+ tests passing
+**Build System**: scikit-build-core + CMake. See [pyproject.toml](pyproject.toml) for the current `inferna` version and [scripts/manage.py](scripts/manage.py) for pinned `llama.cpp` / `whisper.cpp` / `stable-diffusion.cpp` / `sqlite-vector` versions.
 
 ### Platform & GPU Availability
 
@@ -664,12 +674,16 @@ Pre-built wheels on PyPI:
 | `inferna` | CPU | Windows | x86_64 | static |
 | `inferna` | Metal | macOS | arm64 (Apple Silicon) | static |
 | `inferna` | Metal | macOS | x86_64 (Intel) | static |
-| `inferna-cuda12` | CUDA 12.4 | Linux | x86_64 | dynamic |
-| `inferna-rocm` | ROCm 6.3 | Linux | x86_64 | dynamic |
-| `inferna-sycl` | Intel SYCL (oneAPI 2025.3) | Linux | x86_64 | dynamic |
+| `inferna-cuda12` | CUDA | Linux | x86_64 | dynamic |
+| `inferna-cuda12` | CUDA | Windows | x86_64 | dynamic |
+| `inferna-cuda13` | CUDA | Windows | x86_64 | dynamic |
+| `inferna-rocm` | ROCm | Linux | x86_64 | dynamic |
+| `inferna-sycl` | Intel SYCL | Linux | x86_64 | dynamic |
 | `inferna-vulkan` | Vulkan | Linux | x86_64 | dynamic |
+| `inferna-vulkan` | Vulkan | Windows | x86_64 | dynamic |
+| `inferna-vulkan` | Vulkan | macOS | x86_64 (Intel, MoltenVK) | dynamic |
 
-We will be adding additional wheel support for more platforms in the future, starting with vulkan and cuda12 support Windows.
+Additional platforms (Windows SYCL / HIP, ARM64, Linux ROCm prebuilt, OpenVINO) are tracked in [TODO.md](TODO.md).
 
 Build from source (any platform with a C++ toolchain):
 
@@ -684,68 +698,6 @@ Build from source (any platform with a C++ toolchain):
 | OpenCL | `make build-opencl` | `make build-opencl` | `make build-opencl` |
 
 All source builds support both static (`make build-<backend>`) and dynamic (`make build-<backend>-dynamic`) linking.
-
-### Recent Releases
-
-See [CHANGELOG.md](CHANGELOG.md) for full release notes.
-
-- **v0.2.13** (Apr 2026) - `QdrantVectorStore` reference adapter for `VectorStoreProtocol`; pipeline-integrated reranking (`RAGConfig.rerank`) with `RerankerProtocol`; ccache + concurrency groups on CPU cibw workflows; Windows GPU-wheel `LoadLibraryW` PATH fix
-
-- **v0.2.12** - Windows-CUDA, Windows-Vulkan, and macOS-Intel Vulkan GPU wheels; canonical delocate/auditwheel/delvewheel packaging. Experimental abi3 wheels (cp312+)
-
-- **v0.2.11** (Apr 2026) - Pluggable RAG backends (`VectorStoreProtocol` / `EmbedderProtocol`) and MCP client API on `LLM`
-
-- **v0.2.10** (Apr 2026) - GPU wheel size halved; packaging fixes (`build_config.json`, auditwheel SONAME, Vulkan ABI)
-
-- **v0.2.9** (Apr 2026) - CUDA + SD stability fixes; `get_perf_data()` telemetry APIs
-
-- **v0.2.8** (Apr 2026) - Expanded Cython bindings across llama / whisper / SD; interactive-chat streaming & sampling
-
-- **v0.2.7** (Apr 2026) - SD defaults aligned with C library (fixes blank CUDA images)
-
-- **v0.2.6** (Apr 2026) - Hotfix: remove accidental test-only runtime dependency
-
-- **v0.2.5** (Apr 2026) - RAG hardening: persistent store, corpus dedup, vendored jinja2 chat templates
-
-- **v0.2.4** (Apr 2026) - Unified `inferna` CLI (`gen`, `chat`, `embed`, `rag`, …)
-
-- **v0.2.3** (Apr 2026) - Wheel packaging and GPU portability fixes
-
-- **v0.2.2** (Apr 2026) - CUDA wheel size stability
-
-- **v0.2.1** (Mar 2026) - Code-quality hardening, GIL release, async fixes
-
-- **v0.2.0** (Mar 2026) - Dynamic-linked GPU wheels on PyPI (CUDA, ROCm, SYCL, Vulkan)
-
-- **v0.1.21** (Mar 2026) - GPU wheel builds: CUDA + ROCm, sqlite-vector bundled
-
-- **v0.1.20** (Feb 2026) - Update llama.cpp + stable-diffusion.cpp
-
-- **v0.1.19** (Dec 2025) - Metal fix for stable-diffusion.cpp
-
-- **v0.1.18** (Dec 2025) - Remaining stable-diffusion.cpp wrapped
-
-- **v0.1.16** (Dec 2025) - Response class, Async API, Chat templates
-
-- **v0.1.12** (Nov 2025) - Initial wrapper of stable-diffusion.cpp
-
-- **v0.1.11** (Nov 2025) - ACP support, build improvements
-
-- **v0.1.10** (Nov 2025) - Agent Framework, bug fixes
-
-- **v0.1.9** (Nov 2025) - High-level APIs, integrations, batch processing, comprehensive documentation
-
-- **v0.1.8** (Nov 2025) - Speculative decoding API
-
-- **v0.1.7** (Nov 2025) - GGUF, JSON Schema, Downloads, N-gram Cache
-
-- **v0.1.6** (Nov 2025) - Multimodal test fixes
-
-- **v0.1.5** (Oct 2025) - Mongoose server, embedded server
-
-- **v0.1.4** (Oct 2025) - Memory estimation, performance optimizations
-
-See [CHANGELOG.md](CHANGELOG.md) for complete release history.
 
 ## Building from Source
 
@@ -913,10 +865,10 @@ bin/llama-cli -c 512 -n 32 -m models/Llama-3.2-1B-Instruct-Q8_0.gguf \
  -p "Is mathematics discovered or invented?"
 ```
 
-With 1489+ passing tests, the library is ready for both quick prototyping and production use:
+Run the full pytest suite:
 
 ```sh
-make test  # Run full test suite
+make test
 ```
 
 You can also explore interactively:
@@ -948,54 +900,6 @@ To serve docs locally: `make docs-serve`
 - **[Changelog](CHANGELOG.md)** - Complete release history
 
 - **Examples** - See `tests/examples/` for working code samples
-
-## Roadmap
-
-### Completed
-
-- [x] Full llama.cpp API wrapper with nanobind
-
-- [x] High-level API (`LLM`, `complete`, `chat`)
-
-- [x] Async API support (`AsyncLLM`, `complete_async`, `chat_async`)
-
-- [x] Response class with stats and serialization
-
-- [x] Built-in chat template system (llama.cpp templates)
-
-- [x] Batch processing utilities
-
-- [x] OpenAI-compatible API client
-
-- [x] LangChain integration
-
-- [x] Speculative decoding
-
-- [x] GGUF file manipulation
-
-- [x] JSON schema to grammar conversion
-
-- [x] Model download helper
-
-- [x] N-gram cache
-
-- [x] OpenAI-compatible servers (PythonServer, EmbeddedServer, LlamaServer) with chat and embeddings
-
-- [x] Whisper.cpp integration
-
-- [x] Multimodal support (LLAVA)
-
-- [x] Memory estimation utilities
-
-- [x] Agent Framework (ReActAgent, ConstrainedAgent, ContractAgent)
-
-- [x] Stable Diffusion (stable-diffusion.cpp) - image/video generation
-
-- [x] RAG utilities (text chunking, document processing)
-
-### Future
-
-- [ ] Web UI for testing
 
 ## Contributing
 
