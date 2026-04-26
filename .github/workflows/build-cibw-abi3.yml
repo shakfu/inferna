@@ -12,6 +12,12 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_release:
+        description: 'Upload wheels to GitHub Release'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -311,3 +317,33 @@ jobs:
         with:
           name: inferna-abi3-wheels-all
           path: dist/*.whl
+
+  upload_release:
+    name: Upload abi3 wheels to GitHub Release
+    needs: [collect_wheels, cross_version_smoke_test]
+    if: inputs.upload_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download collected abi3 wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: inferna-abi3-wheels-all
+          path: dist
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(python3 -c "
+          import re
+          text = open('pyproject.toml').read()
+          print(re.search(r'^version\s*=\s*\"([^\"]+)\"', text, re.M).group(1))
+          ")
+          TAG="${VERSION}"
+          echo "Version: ${VERSION}, Tag: ${TAG}"
+          gh release create "${TAG}" --prerelease --title "inferna ${TAG}" 2>/dev/null || true
+          gh release upload "${TAG}" dist/*.whl --clobber
