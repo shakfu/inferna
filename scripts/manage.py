@@ -1877,14 +1877,39 @@ class SqliteVectorBuilder(Builder):
         if fp16_src.exists():
             self.copy(fp16_src, dest / "fp16")
 
-        # Patch sqlite-vector.c to define _GNU_SOURCE for strcasestr on older
-        # glibc (e.g. manylinux/AlmaLinux 8 where strcasestr needs _GNU_SOURCE).
+        # Patch sqlite-vector.c to:
+        #   1. Define _GNU_SOURCE for strcasestr on older glibc
+        #      (e.g. manylinux/AlmaLinux 8 where strcasestr needs _GNU_SOURCE).
+        #   2. Map strcasecmp / strncasecmp to MSVC equivalents (_stricmp /
+        #      _strnicmp). Upstream uses POSIX names which MSVC's CRT lacks.
         sqlite_vector_c = dest / "sqlite-vector.c"
         if sqlite_vector_c.exists():
             content = sqlite_vector_c.read_text()
+            prepend = ""
             if "_GNU_SOURCE" not in content:
-                content = "#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n" + content
-                sqlite_vector_c.write_text(content)
+                prepend += "#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n"
+            if "INFERNA_MSVC_STRCASECMP_SHIM" not in content:
+                prepend += (
+                    "#if defined(_MSC_VER) && !defined(INFERNA_MSVC_STRCASECMP_SHIM)\n"
+                    "#define INFERNA_MSVC_STRCASECMP_SHIM\n"
+                    "#define strcasecmp  _stricmp\n"
+                    "#define strncasecmp _strnicmp\n"
+                    "#endif\n"
+                )
+            if prepend:
+                sqlite_vector_c.write_text(prepend + content)
+
+        # Patch distance-cpu.c to guard the GCC/Clang-only <cpuid.h> include
+        # behind a non-MSVC check. MSVC's cpuid intrinsics (__cpuidex,
+        # _xgetbv) live in <intrin.h>, which the file pulls in via the
+        # _MSC_VER branches that already exist below the include.
+        distance_cpu_c = dest / "distance-cpu.c"
+        if distance_cpu_c.exists():
+            content = distance_cpu_c.read_text()
+            old = "    #include <cpuid.h>"
+            new = "    #if !defined(_MSC_VER)\n        #include <cpuid.h>\n    #endif"
+            if old in content and new not in content:
+                distance_cpu_c.write_text(content.replace(old, new, 1))
 
 
 # ----------------------------------------------------------------------------
