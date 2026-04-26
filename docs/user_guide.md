@@ -1,0 +1,698 @@
+# User Guide
+
+Complete guide to using inferna for LLM inference.
+
+## Table of Contents
+
+1. [Getting Started](#getting-started)
+2. [Command-Line Interface](#command-line-interface)
+3. [High-Level API](#high-level-api)
+4. [Streaming Generation](#streaming-generation)
+5. [Framework Integrations](#framework-integrations)
+6. [Advanced Features](#advanced-features)
+7. [Performance Optimization](#performance-optimization)
+8. [Troubleshooting](#troubleshooting)
+
+## Getting Started
+
+### Installation
+
+```bash
+git clone https://github.com/shakfu/inferna.git
+cd inferna
+make  # Downloads llama.cpp, builds everything
+make download  # Download default test model
+```
+
+### Quick Start
+
+The simplest way to generate text:
+
+```python
+from inferna import complete
+
+response = complete(
+    "What is Python?",
+    model_path="models/Llama-3.2-1B-Instruct-Q8_0.gguf"
+)
+print(response)
+```
+
+## Command-Line Interface
+
+inferna provides a unified CLI with subcommands for all major functionality:
+
+```bash
+inferna <command> [options]
+```
+
+### Text Generation
+
+```bash
+# Single prompt (alias: gen)
+inferna generate -m models/llama.gguf -p "What is Python?"
+inferna gen -m models/llama.gguf -p "What is Python?" --stream
+
+# Read prompt from file or stdin
+inferna gen -m models/llama.gguf -f prompt.txt
+echo "Hello" | inferna gen -m models/llama.gguf
+
+# Sampling parameters
+inferna gen -m models/llama.gguf -p "Be creative" \
+    --temperature 0.9 --top-k 50 --top-p 0.95 -n 256
+
+# JSON output with stats
+inferna gen -m models/llama.gguf -p "Hello" --json
+
+# Show session statistics (prompt/gen tokens, timing, tokens/sec)
+inferna gen -m models/llama.gguf -p "Hello" --stats
+```
+
+### Chat
+
+```bash
+# Single-turn with system prompt
+inferna chat -m models/llama.gguf -p "Explain gravity" -s "You are a physicist"
+
+# Interactive chat (omit -p)
+inferna chat -m models/llama.gguf
+
+# Longer responses (default: 512 tokens)
+inferna chat -m models/llama.gguf -n 1024
+
+# Show accumulated session statistics on exit
+inferna chat -m models/llama.gguf --stats
+
+# With explicit chat template
+inferna chat -m models/llama.gguf -p "Hello" --template chatml
+```
+
+### Embeddings
+
+```bash
+# Embed one or more texts
+inferna embed -m models/bge-small.gguf -t "hello world" -t "another text"
+
+# From file (one text per line)
+inferna embed -m models/bge-small.gguf -f texts.txt
+
+# Check embedding dimensions
+inferna embed -m models/bge-small.gguf --dim
+
+# Similarity search with threshold
+inferna embed -m models/bge-small.gguf --similarity "machine learning" -f corpus.txt --threshold 0.5
+
+# Custom pooling and normalization
+inferna embed -m models/bge-small.gguf -t "hello" --pooling cls --no-normalize
+```
+
+### RAG (Retrieval-Augmented Generation)
+
+```bash
+# Single query against a directory of documents
+inferna rag -m models/llama.gguf -e models/bge-small.gguf \
+    -d docs/ -p "How do I configure X?" --stream
+
+# Index specific files and enter interactive mode
+inferna rag -m models/llama.gguf -e models/bge-small.gguf \
+    -f guide.md -f faq.md
+
+# With system instruction, top-k, and similarity threshold
+inferna rag -m models/llama.gguf -e models/bge-small.gguf \
+    -d docs/ -p "Summarize the architecture" \
+    -s "Answer in one paragraph" -k 3 --threshold 0.4
+
+# Show source chunks used for the answer
+inferna rag -m models/llama.gguf -e models/bge-small.gguf \
+    -f manual.md -p "What are the limits?" --sources
+```
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `-m, --model` | Path to GGUF generation model (required) |
+| `-e, --embedding-model` | Path to GGUF embedding model (required) |
+| `-f, --file` | File to index (repeatable) |
+| `-d, --dir` | Directory to index (repeatable) |
+| `--glob` | Glob pattern for directory loading (default: `**/*`) |
+| `-p, --prompt` | Single query (omit for interactive mode) |
+| `-s, --system` | System instruction |
+| `-n, --max-tokens` | Maximum tokens to generate (default: 200) |
+| `--temperature` | Generation temperature (default: 0.8) |
+| `-k, --top-k` | Number of chunks to retrieve (default: 5) |
+| `--threshold` | Minimum similarity threshold |
+| `-ngl, --n-gpu-layers` | GPU layers to offload (default: -1) |
+| `--stream` | Stream output tokens |
+| `--sources` | Show source chunks with similarity scores |
+
+### Other Commands
+
+```bash
+inferna server -m models/llama.gguf    # OpenAI-compatible server
+inferna transcribe -m models/ggml-base.en.bin audio.wav
+inferna tts -m models/tts.gguf -p "Hello world"
+inferna sd txt2img --model models/sd.gguf --prompt "a sunset"
+inferna agent run task.yaml            # Run agents
+inferna memory -m models/llama.gguf    # GPU memory estimation
+inferna info                           # Build and backend info
+```
+
+Use `inferna <command> --help` for full option details. Ctrl+C cleanly interrupts generation. See the [CLI Cheatsheet](cli-cheatsheet.md) for the complete reference covering all commands and sub-module CLIs.
+
+## High-Level API
+
+### Basic Generation
+
+The `complete()` function provides the simplest interface:
+
+```python
+from inferna import complete, GenerationConfig
+
+# Simple generation
+response = complete(
+    "Explain quantum computing",
+    model_path="models/llama.gguf",
+    max_tokens=200,
+    temperature=0.7
+)
+
+# With configuration object
+config = GenerationConfig(
+    max_tokens=500,
+    temperature=0.8,
+    top_p=0.95,
+    top_k=40,
+    repeat_penalty=1.1
+)
+
+response = complete(
+    "Write a poem about AI",
+    model_path="models/llama.gguf",
+    config=config
+)
+```
+
+### Chat Interface
+
+For multi-turn conversations with automatic chat template formatting:
+
+```python
+from inferna import chat
+
+messages = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What is machine learning?"},
+    {"role": "assistant", "content": "Machine learning is..."},
+    {"role": "user", "content": "Can you give an example?"}
+]
+
+response = chat(
+    messages,
+    model_path="models/llama.gguf",
+    temperature=0.7,
+    max_tokens=300
+)
+```
+
+The `chat()` function automatically applies the model's built-in chat template (stored in GGUF metadata). This ensures proper formatting for models like Llama 3, Mistral, ChatML-based models, and others.
+
+### Chat Templates
+
+inferna uses llama.cpp's built-in chat template system. Templates are read from model metadata and applied automatically.
+
+```python
+from inferna import LLM
+from inferna.api import apply_chat_template, get_chat_template
+
+# Get the template string from a model
+template = get_chat_template("models/llama.gguf")
+print(template)  # Shows Jinja-style template
+
+# Apply template to format messages
+messages = [
+    {"role": "system", "content": "You are helpful."},
+    {"role": "user", "content": "Hello!"}
+]
+prompt = apply_chat_template(messages, "models/llama.gguf")
+print(prompt)
+# Output (Llama 3 format):
+# <|begin_of_text|><|start_header_id|>system<|end_header_id|>
+#
+# You are helpful.<|eot_id|><|start_header_id|>user<|end_header_id|>
+#
+# Hello!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+```
+
+You can also use specific builtin templates:
+
+```python
+# Apply a specific template (llama3, chatml, mistral, etc.)
+prompt = apply_chat_template(messages, "models/any.gguf", template="chatml")
+```
+
+With the LLM class:
+
+```python
+with LLM("models/llama.gguf") as llm:
+    # Get the model's chat template
+    template = llm.get_chat_template()
+
+    # Chat directly
+    response = llm.chat([
+        {"role": "user", "content": "What is 2+2?"}
+    ])
+    print(response)
+```
+
+Supported templates include: llama2, llama3, llama4, chatml, mistral-v1/v3/v7, phi3, phi4, deepseek, deepseek2, deepseek3, gemma, falcon3, command-r, vicuna, zephyr, and many more. See the [llama.cpp wiki](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) for the full list.
+
+### LLM Class
+
+For repeated generations, use the `LLM` class for better performance:
+
+```python
+from inferna import LLM, GenerationConfig
+
+# Create generator (loads model once)
+gen = LLM("models/llama.gguf")
+
+# Generate multiple times
+prompts = [
+    "What is AI?",
+    "What is ML?",
+    "What is DL?"
+]
+
+for prompt in prompts:
+    response = gen(prompt)
+    print(f"Q: {prompt}")
+    print(f"A: {response}\n")
+```
+
+### Response Objects
+
+All generation functions return `Response` objects that provide structured access to results:
+
+```python
+from inferna import complete, Response
+
+# Response works like a string for backward compatibility
+response = complete("What is Python?", model_path="models/llama.gguf")
+print(response)  # Just works!
+
+# But also provides structured data
+print(f"Text: {response.text}")
+print(f"Finish reason: {response.finish_reason}")
+
+# Access generation statistics
+if response.stats:
+    print(f"Generated {response.stats.generated_tokens} tokens")
+    print(f"Speed: {response.stats.tokens_per_second:.1f} tokens/sec")
+    print(f"Time: {response.stats.total_time:.2f}s")
+
+# Serialize for logging/storage
+import json
+data = response.to_dict()
+json_str = response.to_json(indent=2)
+```
+
+The `Response` class implements string-like behavior, so existing code continues to work:
+
+```python
+# String operations all work
+if "programming" in response:
+    print("Mentioned programming!")
+
+full_text = response + " Additional text."
+length = len(response)
+```
+
+## Streaming Generation
+
+Stream responses token-by-token:
+
+```python
+from inferna import LLM
+
+gen = LLM("models/llama.gguf")
+
+# Stream to console
+for chunk in gen("Tell me a story", stream=True):
+    print(chunk, end="", flush=True)
+print()
+
+# Collect chunks
+chunks = []
+for chunk in gen("Count to 10", stream=True):
+    chunks.append(chunk)
+full_response = "".join(chunks)
+```
+
+### Token Callbacks
+
+Process each token as it's generated:
+
+```python
+from inferna import LLM
+
+gen = LLM("models/llama.gguf")
+
+tokens_seen = []
+
+def on_token(token: str):
+    tokens_seen.append(token)
+    print(f"Token: {repr(token)}")
+
+response = gen(
+    "Hello world",
+    on_token=on_token
+)
+
+print(f"\nTotal tokens: {len(tokens_seen)}")
+```
+
+## Framework Integrations
+
+### OpenAI-Compatible API
+
+Drop-in replacement for OpenAI client:
+
+```python
+from inferna.integrations.openai_compat import OpenAICompatibleClient
+
+client = OpenAICompatibleClient(
+    model_path="models/llama.gguf",
+    temperature=0.7
+)
+
+# Chat completions
+response = client.chat.completions.create(
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is Python?"}
+    ],
+    max_tokens=200
+)
+
+print(response.choices[0].message.content)
+
+# Streaming
+for chunk in client.chat.completions.create(
+    messages=[{"role": "user", "content": "Count to 5"}],
+    stream=True
+):
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### LangChain Integration
+
+Use with LangChain chains and agents:
+
+```python
+from inferna.integrations import InfernaLLM
+
+# Note: Requires langchain to be installed
+# pip install langchain
+
+llm = InfernaLLM(
+    model_path="models/llama.gguf",
+    temperature=0.7,
+    max_tokens=500
+)
+
+# Use in chains
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
+
+prompt = PromptTemplate.from_template(
+    "Tell me about {topic} in {style} style"
+)
+
+chain = LLMChain(llm=llm, prompt=prompt)
+
+result = chain.run(topic="AI", style="simple")
+print(result)
+
+# Streaming with callbacks
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+
+llm_streaming = InfernaLLM(
+    model_path="models/llama.gguf",
+    temperature=0.7,
+    streaming=True,
+    callbacks=[StreamingStdOutCallbackHandler()]
+)
+```
+
+## Advanced Features
+
+### Configuration Options
+
+Complete `GenerationConfig` options:
+
+```python
+from inferna import GenerationConfig
+
+config = GenerationConfig(
+    # Generation limits
+    max_tokens=512,           # Maximum tokens to generate
+
+    # Sampling parameters
+    temperature=0.8,          # 0.0 = greedy, higher = more random
+    top_k=40,                 # Top-k sampling
+    top_p=0.95,               # Nucleus sampling
+    min_p=0.05,               # Minimum probability threshold
+    repeat_penalty=1.0,       # Penalize repetition (1.0 = off)
+
+    # Model parameters
+    n_gpu_layers=-1,          # Layers to offload to GPU (-1 = all)
+    n_ctx=2048,               # Context window size
+    n_batch=512,              # Batch size for processing
+
+    # Control
+    seed=42,                  # Random seed (-1 = random)
+    stop_sequences=["END"],   # Stop generation at these strings
+
+    # Tokenization
+    add_bos=True,             # Add beginning-of-sequence token
+    parse_special=True        # Parse special tokens
+)
+```
+
+### Speculative Decoding
+
+2-3x speedup with compatible models:
+
+```python
+from inferna import (
+    LlamaModel, LlamaContext, LlamaModelParams, LlamaContextParams,
+    Speculative, SpeculativeParams
+)
+
+# Load target (main) model
+model_target = LlamaModel("models/llama-3b.gguf", LlamaModelParams())
+ctx_target = LlamaContext(model_target, LlamaContextParams())
+
+# Load draft (smaller, faster) model
+model_draft = LlamaModel("models/llama-1b.gguf", LlamaModelParams())
+ctx_draft = LlamaContext(model_draft, LlamaContextParams())
+
+# Setup speculative decoding
+params = SpeculativeParams(
+    n_max=16,      # Maximum tokens to draft
+    p_min=0.75     # Acceptance probability
+)
+spec = Speculative(params, ctx_target)
+
+# Generate draft tokens
+draft_tokens = spec.draft(
+    prompt_tokens=[1, 2, 3, 4],
+    last_token=5
+)
+```
+
+### Memory Estimation
+
+Estimate GPU memory requirements:
+
+```python
+from inferna import estimate_gpu_layers, estimate_memory_usage
+
+# Estimate optimal GPU layers
+estimate = estimate_gpu_layers(
+    model_path="models/llama.gguf",
+    available_vram_mb=8000,
+    n_ctx=2048
+)
+
+print(f"Recommended GPU layers: {estimate.n_gpu_layers}")
+print(f"Est. GPU memory: {estimate.gpu_memory_mb:.0f} MB")
+print(f"Est. CPU memory: {estimate.cpu_memory_mb:.0f} MB")
+
+# Detailed memory analysis
+memory_info = estimate_memory_usage(
+    model_path="models/llama.gguf",
+    n_ctx=2048,
+    n_batch=512
+)
+
+print(f"Model size: {memory_info.model_size_mb:.0f} MB")
+print(f"KV cache: {memory_info.kv_cache_mb:.0f} MB")
+print(f"Total: {memory_info.total_mb:.0f} MB")
+```
+
+## How LLM Generation Works
+
+Understanding how generation works helps you optimize performance.
+
+**Autoregressive generation** means generating tokens one at a time, where each new token depends on all previous tokens:
+
+1. Feed prompt to model, get probability distribution for next token
+2. Sample/select next token
+3. Feed that token back into the model
+4. Repeat until done
+
+### Prefill vs Decode
+
+- **Prefill**: Process all prompt tokens in parallel (batch operation, very fast)
+
+- **Decode**: Generate output tokens one-by-one (autoregressive, slower)
+
+| Phase   | Speed      | Notes                          |
+|---------|------------|--------------------------------|
+| Prefill | ~65k tok/s | Parallel batch processing      |
+| Decode  | ~40 tok/s  | Sequential, autoregressive     |
+
+### Performance Implications
+
+- **Time to First Token (TTFT)**: Dominated by prefill time. Longer prompts = longer TTFT.
+
+- **Generation Speed**: Limited by decode speed, regardless of hardware.
+
+- **Optimization Strategies**: KV caching, speculative decoding, and batching help mitigate the bottleneck.
+
+## Performance Optimization
+
+### GPU Acceleration
+
+```python
+from inferna import LLM, GenerationConfig
+
+# Offload all layers to GPU
+config = GenerationConfig(n_gpu_layers=-1)  # offload all layers
+gen = LLM("models/llama.gguf", config=config)
+
+# Partial GPU offloading (for large models)
+config = GenerationConfig(n_gpu_layers=20)  # First 20 layers only
+```
+
+### Batch Size Tuning
+
+```python
+# Larger batch = more throughput, more memory
+config = GenerationConfig(n_batch=1024)
+
+# Smaller batch = less memory, potentially slower
+config = GenerationConfig(n_batch=128)
+```
+
+### Context Window Management
+
+```python
+# Auto-size context (prompt + max_tokens)
+config = GenerationConfig(n_ctx=None, max_tokens=512)
+
+# Fixed context size
+config = GenerationConfig(n_ctx=4096, max_tokens=512)
+```
+
+## Troubleshooting
+
+### Out of Memory
+
+```python
+# Reduce GPU layers
+config = GenerationConfig(n_gpu_layers=10)
+
+# Reduce context size
+config = GenerationConfig(n_ctx=1024)
+
+# Reduce batch size
+config = GenerationConfig(n_batch=128)
+```
+
+### Slow Generation
+
+```python
+# Maximize GPU usage
+config = GenerationConfig(n_gpu_layers=-1)
+
+# Increase batch size
+config = GenerationConfig(n_batch=512)
+
+# Use speculative decoding (if you have a draft model)
+```
+
+### Quality Issues
+
+```python
+# More deterministic (lower temperature)
+config = GenerationConfig(temperature=0.1)
+
+# More diverse (higher temperature)
+config = GenerationConfig(temperature=1.2)
+
+# Adjust top-p for nucleus sampling
+config = GenerationConfig(top_p=0.9)
+
+# Reduce repetition
+config = GenerationConfig(repeat_penalty=1.2)
+```
+
+### Import Errors
+
+```bash
+# Rebuild after updates
+make build
+
+# Clean rebuild
+make remake
+
+# Check installation
+python -c "import inferna; print(inferna.__file__)"
+```
+
+## Best Practices
+
+1. **Reuse LLM Instances**: Create once, generate many times - avoid reloading the model
+2. **Monitor Memory**: Use memory estimation tools before loading large models
+3. **Tune Temperature**: Start at 0.7, adjust based on needs (lower for factual, higher for creative)
+4. **Use Stop Sequences**: Prevent over-generation with appropriate stop tokens
+5. **Stream Long Outputs**: Better UX for users waiting for responses
+6. **Profile Performance**: Measure before optimizing
+
+## Examples
+
+See the `tests/examples/` directory for complete working examples:
+
+- `generate_example.py` - Basic generation
+
+- `speculative_example.py` - Speculative decoding
+
+- `integration_example.py` - Framework integrations
+
+## Next Steps
+
+- Read the [Cookbook](cookbook.md) for common patterns
+
+- Check [API Reference](api_reference.md) for detailed documentation
+
+- See [Examples](https://github.com/shakfu/inferna/tree/main/tests/examples) for complete code
+
+## Support
+
+- GitHub Issues: <https://github.com/shakfu/inferna/issues>
+
+- Documentation: <https://github.com/shakfu/inferna>

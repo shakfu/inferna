@@ -1,0 +1,117 @@
+# Introduction
+
+inferna is a zero-dependency Python library for local AI inference. It provides high-performance Cython bindings to three powerful C++ inference engines:
+
+- **llama.cpp** - Large language model inference for text generation, chat, and embeddings
+
+- **whisper.cpp** - Automatic speech recognition (ASR) supporting 100+ languages
+
+- **stable-diffusion.cpp** - Image and video generation from text prompts
+
+## Why inferna?
+
+### Zero Dependencies
+
+Unlike other Python LLM libraries that require PyTorch, TensorFlow, or other heavy frameworks, inferna compiles directly against the C++ libraries. The only requirement is a GGUF model file.
+
+### High Performance
+
+By wrapping optimized C++ code with Cython (not Python bindings), inferna achieves near-native performance:
+
+- GPU acceleration via Metal (macOS), CUDA (NVIDIA), Vulkan (cross-platform)
+
+- Efficient memory management with KV caching
+
+- Batch processing for 3-10x throughput improvements
+
+- Speculative decoding for 2-3x faster generation
+
+### Pythonic API
+
+Despite the low-level foundations, inferna provides a clean, Pythonic interface:
+
+```python
+from inferna import complete
+
+response = complete(
+    "Explain quantum computing in simple terms",
+    model_path="models/llama.gguf",
+    temperature=0.7
+)
+print(response)
+```
+
+## What's Covered
+
+This documentation is organized into several parts:
+
+**Llama.cpp** - Text generation with large language models, including the high-level API, streaming, batch processing, server implementations, and advanced features like speculative decoding and context caching.
+
+**Whisper.cpp** - Speech-to-text transcription with support for timestamps, translation, and voice activity detection.
+
+**Stable-Diffusion.cpp** - Image generation from text prompts, supporting SD 1.x/2.x, SDXL, SD3, FLUX, and video generation models.
+
+**Agents** - A zero-dependency agent framework with three architectures: `ReActAgent` for general-purpose tasks, `ConstrainedAgent` for grammar-enforced tool calls, and `ContractAgent` for runtime verification.
+
+## Getting Started
+
+inferna uses [uv](https://github.com/astral-sh/uv) for fast, reliable Python package management. uv is a modern Python package manager written in Rust that provides:
+
+- **Speed**: 10-100x faster than pip for dependency resolution and installation
+
+- **Reliability**: Deterministic builds with lockfile support
+
+- **Simplicity**: Single tool for virtual environments, packages, and Python version management
+
+### Quick Start
+
+```bash
+# Install uv (if you don't have it)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and build
+git clone https://github.com/shakfu/inferna.git
+cd inferna
+
+# Sync dependencies (uv creates the virtual environment automatically)
+uv sync
+
+# Build inferna
+make
+
+# Download a test model
+make download
+
+# Try it out in a python terminal
+uv run python
+```
+
+```python
+>>> from inferna import complete
+>>> response = complete('Hello!', model_path='models/Llama-3.2-1B-Instruct-Q8_0.gguf')
+>>> print(response)
+```
+
+### Running Tests
+
+```bash
+# Run the full test suite
+make test
+
+# Or use uv directly
+uv run pytest tests/
+```
+
+### Using uv Commands
+
+Common uv commands for development:
+
+```bash
+uv sync              # Install/sync all dependencies
+uv add package       # Add a new dependency
+uv run python ...    # Run Python in the virtual environment
+uv run pytest ...    # Run pytest
+uv pip list          # List installed packages
+```
+
+For detailed installation instructions, see the [Installation Guide](installation.md).

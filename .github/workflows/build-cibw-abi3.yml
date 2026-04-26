@@ -1,0 +1,309 @@
+name: build-cibw-abi3
+
+# Experimental abi3 wheel build. Produces one wheel per platform tagged
+# cp312-abi3-<plat>, which by spec is importable on CPython 3.12+.
+#
+# This workflow is gated behind INFERNA_ABI3=ON (see docs/dev/abi3.md).
+# It runs in parallel to build-cibw.yml and does NOT replace it.
+# Trigger manually via workflow_dispatch.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_wheels:
+    name: Build abi3 wheels for ${{ matrix.os }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux-intel
+            runs-on: ubuntu-latest
+          - os: windows-intel
+            runs-on: windows-latest
+          - os: macos-intel
+            runs-on: macos-15-intel
+          - os: macos-arm
+            runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache thirdparty deps
+        id: cache-deps
+        uses: actions/cache@v5
+        with:
+          path: thirdparty/
+          key: deps-abi3-${{ matrix.os }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-cibw-abi3.yml') }}
+
+      - name: Set CCACHE_DIR to workspace
+        if: runner.os != 'Windows'
+        shell: bash
+        run: echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
+
+      - name: ccache
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ccache-abi3-${{ matrix.os }}
+          evict-old-files: 1d
+
+      - name: Build abi3 wheels
+        uses: pypa/cibuildwheel@v3.4.0
+        env:
+          CIBW_PLATFORM: ${{ matrix.platform || 'auto' }}
+          CIBW_ARCHS: ${{ matrix.archs || 'auto' }}
+          # Single build per platform - the resulting wheel is tagged
+          # cp312-abi3 and is valid on 3.12+. Floor is 3.12 because
+          # Cython uses vectorcall (limited-API since 3.12) for faster
+          # call paths. 3.11 would work but misses that perf win; 3.10
+          # fails because Py_buffer is not in the 3.10 stable ABI.
+          CIBW_BUILD: "cp312-*"
+          # Per-platform environment. cibuildwheel resolves
+          # CIBW_ENVIRONMENT_<PLAT> independently of pyproject.toml's
+          # [tool.cibuildwheel.<plat>] environment table, so each
+          # platform must carry its own copy of the relevant defaults
+          # from pyproject.toml AND the two abi3 opt-in vars. The
+          # macOS entry is critical: without MACOSX_DEPLOYMENT_TARGET
+          # the deployment target defaults to 10.9 and llama.cpp's
+          # std::filesystem::path usage fails to compile (introduced
+          # in macOS 10.15).
+          CIBW_ENVIRONMENT_LINUX: >-
+            SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
+            SKBUILD_WHEEL_PY_API=cp312
+            GGML_METAL=0
+            GGML_NATIVE=0
+            CCACHE_DIR=/project/.ccache
+            CCACHE_DEPEND=1
+            CMAKE_C_COMPILER_LAUNCHER=ccache
+            CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          CIBW_ENVIRONMENT_MACOS: >-
+            SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
+            SKBUILD_WHEEL_PY_API=cp312
+            MACOSX_DEPLOYMENT_TARGET=11.0
+            GGML_METAL=1
+            GGML_NATIVE=0
+            CCACHE_DIR=${{ github.workspace }}/.ccache
+            CCACHE_DEPEND=1
+            CMAKE_C_COMPILER_LAUNCHER=ccache
+            CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          CIBW_ENVIRONMENT_WINDOWS: >-
+            SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
+            SKBUILD_WHEEL_PY_API=cp312
+            GGML_METAL=0
+            GGML_NATIVE=0
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: abi3-wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  # Verify the abi3 wheel actually imports and runs on every Python
+  # version in the support range. cibuildwheel only tests on cp312
+  # during build, so this cross-version matrix is the real validation.
+  cross_version_smoke_test:
+    name: Smoke test py${{ matrix.python }} on ${{ matrix.os }}
+    needs: build_wheels
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux-intel, macos-arm, windows-intel]
+        python: ["3.12", "3.13", "3.14"]
+        include:
+          - os: linux-intel
+            runs-on: ubuntu-latest
+          - os: macos-arm
+            runs-on: macos-latest
+          - os: windows-intel
+            runs-on: windows-latest
+
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          allow-prereleases: true
+
+      - name: Download abi3 wheel artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: abi3-wheels-${{ matrix.os }}
+          path: wheels
+
+      - name: Cache test model
+        id: cache-model
+        uses: actions/cache@v5
+        with:
+          path: models/Llama-3.2-1B-Instruct-Q8_0.gguf
+          key: test-model-llama-3.2-1b-q8
+
+      - name: Download test model
+        if: steps.cache-model.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p models
+          curl -sL https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf \
+            -o models/Llama-3.2-1B-Instruct-Q8_0.gguf
+
+      - name: Find abi3 wheel
+        id: find-wheel
+        shell: bash
+        run: |
+          # Single abi3 wheel per platform - tagged cp312-abi3-<plat>.
+          WHEEL=$(find wheels -name "*abi3*.whl" | head -1)
+          if [ -z "$WHEEL" ]; then
+            echo "ERROR: no abi3 wheel found in wheels/"
+            ls -la wheels/
+            exit 1
+          fi
+          echo "wheel=$WHEEL" >> "$GITHUB_OUTPUT"
+          echo "Found abi3 wheel: $WHEEL"
+
+      - name: Install abi3 wheel in clean venv
+        shell: bash
+        run: |
+          python -m venv abi3-venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source abi3-venv/Scripts/activate
+          else
+            source abi3-venv/bin/activate
+          fi
+          python --version
+          pip install "${{ steps.find-wheel.outputs.wheel }}"
+
+      - name: Verify extension suffix is .abi3
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source abi3-venv/Scripts/activate
+          else
+            source abi3-venv/bin/activate
+          fi
+          # Verify every Cython extension was built against the stable
+          # ABI. Naming conventions differ by platform:
+          #   Linux/macOS: abi3 -> foo.abi3.so; version-specific ->
+          #                foo.cpython-3XX-<plat>.so
+          #   Windows:     abi3 -> foo.pyd (no tag); version-specific ->
+          #                foo.cp3XX-win_amd64.pyd
+          # inferna/rag/vector.* is excluded: it is a plain C shared
+          # library (sqlite-vector) loaded by SQLite, not a CPython
+          # extension, so it has no Python ABI to check.
+          python -c "
+          import pathlib, re, inferna
+          root = pathlib.Path(inferna.__file__).parent
+          bad = []
+          for ext in ('*.so', '*.pyd', '*.dylib'):
+              for p in root.rglob(ext):
+                  if p.parent.name == 'rag' and p.stem.split('.')[0] == 'vector':
+                      continue
+                  if p.suffix == '.pyd':
+                      # Windows: abi3 wheels produce plain name.pyd (no
+                      # soabi tag). Reject anything carrying a
+                      # cp3XX-<plat> tag.
+                      if re.search(r'\.cp\d+-', p.name):
+                          bad.append(str(p))
+                  else:
+                      # Linux/macOS: abi3 wheels produce name.abi3.so
+                      if '.abi3.' not in p.name:
+                          bad.append(str(p))
+          if bad:
+              print('Non-abi3 extensions found:')
+              for b in bad:
+                  print(f'  {b}')
+              raise SystemExit(1)
+          print('All compiled Python extensions are abi3-tagged')
+          "
+
+      - name: Smoke test - imports
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source abi3-venv/Scripts/activate
+          else
+            source abi3-venv/bin/activate
+          fi
+          python -c "
+          import inferna
+          print(f'inferna {inferna.__version__} imported on Python', __import__('sys').version)
+
+          from inferna import LLM, complete, chat, AsyncLLM
+          from inferna import batch_generate, BatchGenerator
+          from inferna import estimate_gpu_layers, estimate_memory_usage
+          from inferna import GenerationConfig, Response
+
+          from inferna.llama import llama_cpp
+          print('llama_cpp extension loaded')
+
+          from inferna.agents import ReActAgent, ConstrainedAgent, ContractAgent, tool
+          print('agents loaded')
+
+          from inferna.integrations.openai_compat import OpenAICompatibleClient
+          print('integrations loaded')
+
+          try:
+              from inferna.whisper import whisper_cpp
+              print('whisper_cpp extension loaded')
+          except ImportError as e:
+              print(f'whisper_cpp not available: {e}')
+
+          try:
+              from inferna.sd import stable_diffusion
+              print('stable_diffusion extension loaded')
+          except ImportError as e:
+              print(f'stable_diffusion not available: {e}')
+
+          print('All imports passed')
+          "
+
+      - name: Smoke test - inference
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source abi3-venv/Scripts/activate
+          else
+            source abi3-venv/bin/activate
+          fi
+          python -c "
+          from inferna import complete
+
+          response = complete(
+              'What is 2+2? Reply with just the number.',
+              model_path='models/Llama-3.2-1B-Instruct-Q8_0.gguf',
+              n_ctx=128,
+              max_tokens=16,
+          )
+          print(f'Response: {response}')
+          assert len(str(response).strip()) > 0, 'Empty response from model'
+          print('Inference smoke test passed')
+          "
+
+  collect_wheels:
+    name: Collect all abi3 wheels
+    needs: build_wheels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all abi3 wheel artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          pattern: abi3-wheels-*
+
+      - name: Collect into single directory
+        run: |
+          mkdir -p dist
+          find artifacts -name "*.whl" -exec cp {} dist/ \;
+          echo "=== Collected abi3 wheels ==="
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: inferna-abi3-wheels-all
+          path: dist/*.whl

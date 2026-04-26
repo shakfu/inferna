@@ -1,0 +1,215 @@
+[project]
+name = "inferna"
+version = "0.2.13"
+description = "inferna is a comprehensive zero-dependencies Python library for local AI inference using the state-of-the-art llama, whisper, and stable-diffusion .cpp ecosystem."
+readme = "README.md"
+authors = [
+    { name = "Shakeeb Alireza", email = "shakfu@users.noreply.github.com" }
+]
+license = "MIT"
+requires-python = ">=3.10"
+keywords = ["llama", "llm", "inference", "nanobind", "llama.cpp", "whisper.cpp", "stable-diffusion.cpp", "gguf", "ai", "machine-learning"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/shakfu/inferna"
+Repository = "https://github.com/shakfu/inferna"
+Issues = "https://github.com/shakfu/inferna/issues"
+
+[project.scripts]
+inferna = "inferna.__main__:main"
+
+[build-system]
+requires = ["scikit-build-core", "nanobind>=2.12.0"]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+cmake.version = ">=3.21"
+cmake.build-type = "Release"
+install.strip = true
+wheel.packages = ["src/inferna"]
+wheel.exclude = ["*.cpp", "*.c", "*.h", "*.hpp", "*.a", "*.lib"]
+wheel.license-files = ["LICENSE"]
+build-dir = "build/{wheel_tag}"
+sdist.include = [
+    "thirdparty/llama.cpp/include",
+    "thirdparty/llama.cpp/lib",
+    "thirdparty/llama.cpp/dynamic",
+    "thirdparty/stable-diffusion.cpp/include",
+    "thirdparty/stable-diffusion.cpp/lib",
+    "thirdparty/whisper.cpp/include",
+    "thirdparty/whisper.cpp/lib",
+    "thirdparty/sqlite-vector",
+]
+sdist.exclude = [
+    "bin/",
+    "build/",
+    "dist/",
+    ".git/",
+    "*.egg-info/",
+    "thirdparty/*/lib/*.a",
+    "thirdparty/*/lib/*.lib",
+]
+
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["src/inferna/_vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",  # Allow long lines (handled by formatter)
+    "E712",  # Allow == True/False comparisons (common in Cython property tests)
+    "E731",  # Allow lambda assignments
+    "E741",  # Allow ambiguous variable names (l, O, I)
+    "F841",  # Allow unused local variables (common in tests for side effects)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "E402"]  # Re-exports, native dep setup before imports
+"src/inferna/agents/*" = ["E402", "F811", "F821"]  # Conditional imports, forward refs, factory methods
+"src/inferna/api.py" = ["E402"]  # Import after path setup
+"src/inferna/batching.py" = ["E402"]  # Import after path setup
+"src/inferna/llama/mtmd/*" = ["F401"]  # Conditional numpy import
+"tests/*" = ["E402", "E722", "F401", "F811", "F821"]  # Test-specific relaxations
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+# Vendored libraries (jinja2, markupsafe) are not project code.
+exclude = ["src/inferna/_vendor/"]
+# check_untyped_defs = false
+
+# Third-party libraries without bundled type stubs. We don't take a hard
+# dependency on these (most are optional integrations), so we tell mypy
+# to treat their imports as untyped rather than requiring stubs to be
+# installed in the dev environment.
+[[tool.mypy.overrides]]
+module = ["requests", "langchain.*", "langchain_core.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# These modules subclass inferna.api.LLM, which under strict +
+# follow_imports=skip degrades to Any. The subclass relationship is
+# real, not a workaround — relax the strict subclass check rather than
+# dropping skip globally (which slows the whole typecheck pass).
+[[tool.mypy.overrides]]
+module = ["inferna.agents.constrained", "inferna.integrations.langchain"]
+disallow_subclassing_any = false
+
+[tool.pytest.ini_options]
+# "tests" is on pythonpath so that test modules can do
+# `from conftest import DEFAULT_MODEL` without relying on pytest's
+# rootdir-hack sys.path ordering, which breaks on full-directory collection.
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]
+# tests/examples/ holds demo scripts, not pytest tests. Exclude by
+# directory name so pytest never descends into it (also prevents a
+# nested conftest.py collision with tests/conftest.py).
+norecursedirs = ["examples"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: marks test as an integration test (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "pytest-memray>=1.8.0 ; sys_platform != 'win32'",
+    "pytest-mock>=3.14.1",
+    "auditwheel>=6.1.0 ; sys_platform == 'linux'",
+    "delocate>=0.12.0 ; sys_platform == 'darwin'",
+    "delvewheel>=1.10.0 ; sys_platform == 'win32'",
+    "ruff>=0.12.12",
+    "mypy>=1.13.0",
+    "numpy>=1.24.4",
+    "requests>=2.32.4",
+    "langchain>=0.0.27",
+    "twine>=6.1.0",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.0",
+    "nanobind>=2.12.0",
+]
+pdf = [
+    "docling>=2.31.0",
+]
+qdrant = [
+    "qdrant-client>=1.9.0",
+]
+
+# -----------------------------------------------------------------------------
+# cibuildwheel configuration for cross-platform wheel building
+# -----------------------------------------------------------------------------
+
+[tool.cibuildwheel]
+# Build for Python 3.10+
+build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
+
+# Skip musllinux (Alpine) - not commonly needed
+skip = "*-musllinux_* *-win32 *-manylinux_i686"
+
+# Build thirdparty deps before building the wheel
+before-build = "python scripts/manage.py build --all --deps-only --no-sd-examples && python -c \"from pathlib import Path; libs=list(Path('thirdparty/llama.cpp/lib').glob('*llama*')); assert libs, 'manage.py produced no libraries'\""
+
+# Test the built wheels
+test-groups = ["dev"]
+test-command = "pytest {project}/tests -x -q --ignore={project}/tests/examples -o pythonpath="
+
+# Build verbosity
+build-verbosity = 1
+
+[tool.cibuildwheel.linux]
+# Use manylinux2014 for broader compatibility
+manylinux-x86_64-image = "manylinux2014"
+manylinux-aarch64-image = "manylinux2014"
+
+# Install build dependencies and build thirdparty libs (once for all Python versions)
+# Use /opt/python/cp310 since system python3 is 3.6 on manylinux2014 (too old for manage.py)
+before-all = "yum install -y git ccache && /opt/python/cp310-cp310/bin/pip install cmake ninja && PATH=/opt/python/cp310-cp310/bin:$PATH /opt/python/cp310-cp310/bin/python scripts/manage.py build --all --deps-only --no-sd-examples && test -d thirdparty/llama.cpp/lib && ls thirdparty/llama.cpp/lib/*llama* >/dev/null 2>&1 || { echo 'ERROR: manage.py produced no libraries'; exit 1; }"
+
+# Disable global before-build on Linux (deps already built by before-all)
+before-build = ""
+
+# Environment variables for Linux builds
+environment = { GGML_METAL = "0", GGML_NATIVE = "0" }
+
+# Repair wheels with auditwheel
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.macos]
+# Environment variables for macOS builds
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", GGML_METAL = "1", GGML_NATIVE = "0" }
+
+# Repair wheels with delocate
+repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} --exclude libssl --exclude libcrypto"
+
+[tool.cibuildwheel.windows]
+# Environment variables for Windows builds
+environment = { GGML_METAL = "0", GGML_NATIVE = "0" }
+
+# Install delvewheel before repair
+before-build = "pip install delvewheel && python scripts/manage.py build --all --deps-only --no-sd-examples && python -c \"from pathlib import Path; libs=list(Path('thirdparty/llama.cpp/lib').glob('*llama*')); assert libs, 'manage.py produced no libraries'\""
+
+# Repair wheels with delvewheel
+repair-wheel-command = "delvewheel repair -w {dest_dir} {wheel}"
