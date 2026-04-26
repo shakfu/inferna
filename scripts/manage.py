@@ -144,13 +144,13 @@ if STABLE_BUILD:
     LLAMACPP_VERSION = "b8931"
     WHISPERCPP_VERSION = "v1.8.4"
     SDCPP_VERSION = "master-587-b8bdffc"
-    SQLITEVECTOR_VERSION = "0.9.93"
+    SQLITEVECTOR_VERSION = "0.9.95"
 else:
     # experimental bleeding-edge builds ` = ""` means get latest
     LLAMACPP_VERSION = "b8931"
     WHISPERCPP_VERSION = "v1.8.4"
     SDCPP_VERSION = "master-587-b8bdffc"
-    SQLITEVECTOR_VERSION = "0.9.93"
+    SQLITEVECTOR_VERSION = "0.9.95"
 if PLATFORM == "Darwin":
     MACOSX_DEPLOYMENT_TARGET = setenv("MACOSX_DEPLOYMENT_TARGET", "12.6")
 DEBUG = getenv("DEBUG", default=True)
@@ -1833,70 +1833,58 @@ class StableDiffusionCppBuilder(GgmlBuilder):
 
 
 class SqliteVectorBuilder(Builder):
-    """build sqlite-vector extension"""
+    """Stage sqlite-vector sources into thirdparty/ for the project CMake build.
+
+    The `vector` shared library itself is compiled by the top-level
+    CMakeLists.txt (see the `vector` target), which expects the C/H sources
+    flat under `thirdparty/sqlite-vector/`. This builder is responsible only
+    for fetching the upstream repo at the pinned version and copying the
+    needed files into that layout.
+    """
 
     name: str = "sqlite-vector"
     version: str = SQLITEVECTOR_VERSION
     repo_url: str = "https://github.com/sqliteai/sqlite-vector.git"
     libs: list[str] = ["vector"]
-    # SQLite loadable extensions have no static form.
+    # SQLite loadable extensions have no static form, and the shared form is
+    # produced by the top-level CMake build, not by this builder.
     produces_static: bool = False
-
-    @staticmethod
-    def _dynamic_lib_filename(name: str) -> str:
-        """SQLite extensions use a bare `<name>.<ext>` filename (no `lib` prefix)."""
-        if PLATFORM == "Darwin":
-            return f"{name}.dylib"
-        if PLATFORM == "Windows":
-            return f"{name}.dll"
-        return f"{name}.so"
+    produces_dynamic: bool = False
 
     @property
-    def dynamic_lib(self) -> Path:
-        """The extension is installed directly into the package's rag/ subdir."""
-        return self.package_dest
-
-    @property
-    def extension_name(self) -> str:
-        """Get platform-specific extension name"""
-        return self._dynamic_lib_filename("vector")
-
-    @property
-    def package_dest(self) -> Path:
-        """Destination directory in the package for runtime extension"""
-        return self.project.cwd / "src" / "inferna" / "rag"
+    def thirdparty_dest(self) -> Path:
+        """Flat-layout staging dir consumed by CMakeLists.txt (`_VECTOR_SRC_DIR`)."""
+        return self.project.thirdparty / self.name
 
     def build(self, shared: bool = True) -> None:
-        """sqlite-vector main build function using make"""
+        """Stage upstream sources into `thirdparty/sqlite-vector/`."""
         if not self.src_dir.exists():
             self.setup()
-        self.log.info(f"building {self.name}")
+        dest = self.thirdparty_dest
+        self.log.info(f"staging {self.name} sources into {dest}")
 
-        # Ensure destination directory exists
-        self.package_dest.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            self.remove(dest)
+        dest.mkdir(parents=True, exist_ok=True)
 
-        # Clean any previous build
-        self.cmd("make clean", cwd=self.src_dir)
+        # Core extension sources/headers live in upstream `src/`.
+        self.glob_copy(self.src_dir / "src", dest, patterns=["*.c", "*.h"])
 
-        # Build the extension using make
-        # Patch source to define _GNU_SOURCE for strcasestr on older glibc
-        # (e.g. manylinux/AlmaLinux 8 where strcasestr needs _GNU_SOURCE)
-        sqlite_vector_c = self.src_dir / "src" / "sqlite-vector.c"
+        # SQLite amalgamation headers and fp16 helper live in upstream `libs/`.
+        libs_src = self.src_dir / "libs"
+        self.glob_copy(libs_src, dest, patterns=["sqlite3.h", "sqlite3ext.h"])
+        fp16_src = libs_src / "fp16"
+        if fp16_src.exists():
+            self.copy(fp16_src, dest / "fp16")
+
+        # Patch sqlite-vector.c to define _GNU_SOURCE for strcasestr on older
+        # glibc (e.g. manylinux/AlmaLinux 8 where strcasestr needs _GNU_SOURCE).
+        sqlite_vector_c = dest / "sqlite-vector.c"
         if sqlite_vector_c.exists():
             content = sqlite_vector_c.read_text()
             if "_GNU_SOURCE" not in content:
                 content = "#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n" + content
                 sqlite_vector_c.write_text(content)
-        self.cmd("make extension", cwd=self.src_dir)
-
-        # Copy the extension to package directory (for runtime use)
-        dist_dir = self.src_dir / "dist"
-        ext_path = dist_dir / self.extension_name
-        if ext_path.exists():
-            self.copy(ext_path, self.package_dest)
-            self.log.info(f"Copied {self.extension_name} to {self.package_dest}")
-        else:
-            self.log.warning(f"Extension not found: {ext_path}")
 
 
 # ----------------------------------------------------------------------------
@@ -2816,6 +2804,17 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 dep_dir = thirdparty / dep
                 for subdir in ["bin", "lib", "include"]:
                     self.remove(dep_dir / subdir, silent=not verbose)
+
+            # sqlite-vector is staged flat into thirdparty/sqlite-vector/
+            # by SqliteVectorBuilder; wipe the whole staging dir on reset.
+            self.remove(thirdparty / "sqlite-vector", silent=not verbose)
+
+            # CMake installs the sqlite-vector loadable extension here as
+            # part of the editable wheel build; remove the platform-specific
+            # variants so it gets rebuilt cleanly.
+            rag_dir = src / "rag"
+            for ext in ("vector.dylib", "vector.so", "vector.dll"):
+                self.remove(rag_dir / ext, silent=not verbose)
 
         self.log.info("Clean complete")
 
