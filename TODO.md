@@ -50,6 +50,14 @@ Gap analysis vs. llama.cpp b8893 release assets. Ordered by effort/payoff.
 
 - [ ] **Monotonic `b<commit-count>` build-tag scheme** -- llama.cpp's `get-tag-name/action.yml` uses `fetch-depth: 0` + `git rev-list --count HEAD` to produce `b${BUILD_NUMBER}` on `master`, `${branch}-b${count}-${sha7}` on branches. Lets every CI-built wheel be distinguishable without bumping `pyproject.toml` version on every pre-release. Apply in `build-cibw.yml` / `build-gpu-wheels.yml` upload steps
 
+## Nanobind Wrappers (low priority, from review)
+
+- [ ] **Deduplicate `ggml_backend_load_all` initialization** across `_llama_native.cpp`, `_whisper_native.cpp`, and `_sd_native.cpp`. Extract a shared helper so the three modules cannot drift on backend setup.
+
+- [ ] **Consolidate `LlamaBatch.set_batch` / `add_sequence` fill loops** in `src/inferna/llama/_llama_native.cpp`. Both methods duplicate the per-token `pos` / `seq_id` / `n_seq_id` / `logits` / `token` assignment; factor the inner loop into a single helper parameterized by starting offset and `seq_id`.
+
+- [ ] **Validate ggml header consistency across translation units.** `_whisper_native.cpp` and `_sd_native.cpp` forward-declare ggml backend APIs while `_llama_native.cpp` includes the full ggml headers. Currently consistent, but check for cross-TU ABI drift on each upstream ggml header bump.
+
 ## RAG Scaling (see docs/dev/scaling_rag.md)
 
 - [ ] Persistent quantization state in database metadata (quantize() exists but state is in-memory only)

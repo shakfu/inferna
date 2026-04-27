@@ -479,7 +479,11 @@ NB_MODULE(_whisper_native, m) {
                  s.try_acquire_busy();
                  int rc = 0;
                  try {
-                     rc = whisper_encode(s.ctx, offset, n_threads);
+                     whisper_context* ctx = s.ctx;
+                     {
+                         nb::gil_scoped_release rel;
+                         rc = whisper_encode(ctx, offset, n_threads);
+                     }
                  } catch (...) { s.release_busy(); throw; }
                  s.release_busy();
                  if (rc != 0) {

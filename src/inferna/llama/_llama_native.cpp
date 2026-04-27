@@ -766,25 +766,40 @@ NB_MODULE(_llama_native, m) {
     nb::class_<LlamaAdapterLoraW>(m, "LlamaAdapterLora")
         .def("meta_val_str", [](LlamaAdapterLoraW& s, const std::string& key){
             if (key.empty()) throw std::invalid_argument("key must not be an empty string");
-            char buf[512];
-            int rc = llama_adapter_meta_val_str(s.ptr, key.c_str(), buf, sizeof(buf));
+            std::vector<char> buf(512);
+            int rc = llama_adapter_meta_val_str(s.ptr, key.c_str(), buf.data(), (int) buf.size());
             if (rc == -1) throw std::invalid_argument("failed to retrieve metadata value");
-            return std::string(buf);
+            if (rc >= (int) buf.size()) {
+                buf.resize(rc + 1);
+                rc = llama_adapter_meta_val_str(s.ptr, key.c_str(), buf.data(), (int) buf.size());
+                if (rc == -1) throw std::invalid_argument("failed to retrieve metadata value");
+            }
+            return std::string(buf.data(), rc);
         })
         .def("meta_count", [](LlamaAdapterLoraW& s){
             return llama_adapter_meta_count(s.ptr);
         })
         .def("meta_key_by_index", [](LlamaAdapterLoraW& s, int idx){
-            char buf[512];
-            int rc = llama_adapter_meta_key_by_index(s.ptr, idx, buf, sizeof(buf));
+            std::vector<char> buf(512);
+            int rc = llama_adapter_meta_key_by_index(s.ptr, idx, buf.data(), (int) buf.size());
             if (rc == -1) throw std::invalid_argument("failed to retrieve metadata key");
-            return std::string(buf);
+            if (rc >= (int) buf.size()) {
+                buf.resize(rc + 1);
+                rc = llama_adapter_meta_key_by_index(s.ptr, idx, buf.data(), (int) buf.size());
+                if (rc == -1) throw std::invalid_argument("failed to retrieve metadata key");
+            }
+            return std::string(buf.data(), rc);
         }, "idx"_a = 0)
         .def("meta_val_str_by_index", [](LlamaAdapterLoraW& s, int idx){
-            char buf[512];
-            int rc = llama_adapter_meta_val_str_by_index(s.ptr, idx, buf, sizeof(buf));
+            std::vector<char> buf(512);
+            int rc = llama_adapter_meta_val_str_by_index(s.ptr, idx, buf.data(), (int) buf.size());
             if (rc == -1) throw std::invalid_argument("failed to retrieve metadata value");
-            return std::string(buf);
+            if (rc >= (int) buf.size()) {
+                buf.resize(rc + 1);
+                rc = llama_adapter_meta_val_str_by_index(s.ptr, idx, buf.data(), (int) buf.size());
+                if (rc == -1) throw std::invalid_argument("failed to retrieve metadata value");
+            }
+            return std::string(buf.data(), rc);
         }, "idx"_a = 0);
 
     // -------------------------------------------------------------------------
@@ -845,22 +860,44 @@ NB_MODULE(_llama_native, m) {
             return nb::cast(w, nb::rv_policy::take_ownership);
         })
         .def("meta_val_str", [](LlamaModelW& s, const std::string& key){
-            char buf[128];
-            int rc = llama_model_meta_val_str(s.ptr, key.c_str(), buf, sizeof(buf));
+            std::vector<char> buf(512);
+            int rc = llama_model_meta_val_str(s.ptr, key.c_str(), buf.data(), (int) buf.size());
             if (rc == -1) throw std::invalid_argument(
                 "could not get metadata value from " + key);
-            return std::string(buf);
+            if (rc >= (int) buf.size()) {
+                buf.resize(rc + 1);
+                rc = llama_model_meta_val_str(s.ptr, key.c_str(), buf.data(), (int) buf.size());
+                if (rc == -1) throw std::invalid_argument(
+                    "could not get metadata value from " + key);
+            }
+            return std::string(buf.data(), rc);
         })
         .def("meta_count", [](LlamaModelW& s){ return llama_model_meta_count(s.ptr); })
         .def("meta_key_by_index", [](LlamaModelW& s, int index){
-            char buf[128];
-            llama_model_meta_key_by_index(s.ptr, index, buf, sizeof(buf));
-            return std::string(buf);
+            std::vector<char> buf(512);
+            int rc = llama_model_meta_key_by_index(s.ptr, index, buf.data(), (int) buf.size());
+            if (rc == -1) throw std::invalid_argument(
+                "could not get metadata key at index " + std::to_string(index));
+            if (rc >= (int) buf.size()) {
+                buf.resize(rc + 1);
+                rc = llama_model_meta_key_by_index(s.ptr, index, buf.data(), (int) buf.size());
+                if (rc == -1) throw std::invalid_argument(
+                    "could not get metadata key at index " + std::to_string(index));
+            }
+            return std::string(buf.data(), rc);
         })
         .def("meta_val_str_by_index", [](LlamaModelW& s, int index){
-            char buf[128];
-            llama_model_meta_val_str_by_index(s.ptr, index, buf, sizeof(buf));
-            return std::string(buf);
+            std::vector<char> buf(512);
+            int rc = llama_model_meta_val_str_by_index(s.ptr, index, buf.data(), (int) buf.size());
+            if (rc == -1) throw std::invalid_argument(
+                "could not get metadata value at index " + std::to_string(index));
+            if (rc >= (int) buf.size()) {
+                buf.resize(rc + 1);
+                rc = llama_model_meta_val_str_by_index(s.ptr, index, buf.data(), (int) buf.size());
+                if (rc == -1) throw std::invalid_argument(
+                    "could not get metadata value at index " + std::to_string(index));
+            }
+            return std::string(buf.data(), rc);
         })
         .def("has_encoder", [](LlamaModelW& s){ return (bool) llama_model_has_encoder(s.ptr); })
         .def("has_decoder", [](LlamaModelW& s){ return (bool) llama_model_has_decoder(s.ptr); })
@@ -949,6 +986,10 @@ NB_MODULE(_llama_native, m) {
             int n = s.p.n_tokens;
             if (n >= s.n_tokens_capacity)
                 throw std::out_of_range("Batch is full (capacity=" + std::to_string(s.n_tokens_capacity) + ")");
+            if ((int) seq_ids.size() > s.n_seq_max)
+                throw std::invalid_argument(
+                    "seq_ids length (" + std::to_string(seq_ids.size()) +
+                    ") exceeds n_seq_max (" + std::to_string(s.n_seq_max) + ")");
             s.p.token[n] = id;
             s.p.pos[n]   = pos;
             s.p.n_seq_id[n] = (int32_t) seq_ids.size();
@@ -959,6 +1000,12 @@ NB_MODULE(_llama_native, m) {
         }, "id"_a, "pos"_a, "seq_ids"_a, "logits"_a)
         .def("set_batch", [](LlamaBatchW& s, std::vector<int> batch, int n_past, bool logits_all){
             int n = (int) batch.size();
+            if (n > s.n_tokens_capacity)
+                throw std::out_of_range(
+                    "batch length (" + std::to_string(n) +
+                    ") exceeds capacity (" + std::to_string(s.n_tokens_capacity) + ")");
+            if (s.n_seq_max < 1)
+                throw std::invalid_argument("set_batch requires n_seq_max >= 1");
             s.p.n_tokens = n;
             for (int i = 0; i < n; ++i) {
                 s.p.pos[i] = n_past + i;
@@ -972,6 +1019,12 @@ NB_MODULE(_llama_native, m) {
         .def("add_sequence", [](LlamaBatchW& s, std::vector<int> batch, int seq_id, bool logits_all){
             int n = (int) batch.size();
             int n0 = s.p.n_tokens;
+            if (n0 + n > s.n_tokens_capacity)
+                throw std::out_of_range(
+                    "add_sequence would exceed capacity (n_tokens=" + std::to_string(n0) +
+                    " + " + std::to_string(n) + " > " + std::to_string(s.n_tokens_capacity) + ")");
+            if (s.n_seq_max < 1)
+                throw std::invalid_argument("add_sequence requires n_seq_max >= 1");
             s.p.n_tokens += n;
             for (int i = 0; i < n; ++i) {
                 int j = n0 + i;
@@ -1022,7 +1075,13 @@ NB_MODULE(_llama_native, m) {
             if (rc < 0) throw std::runtime_error("error encoding batch");
         })
         .def("decode", [](LlamaContextW& s, LlamaBatchW& batch){
-            int rc = llama_decode(s.ptr, batch.p);
+            llama_context* ctx = s.ptr;
+            llama_batch b = batch.p;
+            int rc;
+            {
+                nb::gil_scoped_release rel;
+                rc = llama_decode(ctx, b);
+            }
             s.n_tokens = batch.p.n_tokens;
             if (rc == 1) throw std::invalid_argument(
                 "could not find a KV slot for the batch (try reducing the size "
