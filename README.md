@@ -1,18 +1,16 @@
 # Inferna - Python AI Inference
 
-Inferna is a no-dependencies Python library for local AI inference built on the `.cpp` ecosystem:
+Inferna is a Python library for running local AI models across text, speech, and image modalities. It wraps three established C++ inference engines behind a single high-level API:
 
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)** - Text generation, chat, embeddings, and text-to-speech
-
 - **[whisper.cpp](https://github.com/ggerganov/whisper.cpp)** - Speech-to-text transcription and translation
-
 - **[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)** - Image and video generation
 
-It provides C++ bindings (via [nanobind](https://github.com/wjakob/nanobind)) with a high-level Python API for cross-modal AI inference.
+The bindings are built with [nanobind](https://github.com/wjakob/nanobind), and the package itself has no required Python dependencies.
 
 **[Documentation](https://shakfu.github.io/inferna/)** | **[PyPI](https://pypi.org/project/inferna/)** | **[Changelog](CHANGELOG.md)**
 
-Inferna is a [nanobind](https://github.com/wjakob/nanobind)-based rewrite of [cyllama](https://github.com/shakfu/cyllama), an earlier Cython wrapper around the same `.cpp` ecosystem. The migration was driven by the promise of nanobind's lower binding overhead and simpler C++ integration; the high-level Python API and feature surface have been carried forward and extended.
+Inferna is a nanobind-based rewrite of its sibling project, cyllama — a [cython](https://cython.org/) wrapper of the same .cpp ecosystem that remains actively maintained. The migration was motivated by the promise of nanobind's lower binding overhead and simpler C++ integration, and by the desire for a different development and packaging trajectory.
 
 How inferna differs from cyllama:
 
@@ -23,8 +21,6 @@ How inferna differs from cyllama:
 | Minimum Python | 3.12 | 3.10 |
 | Release cadence | tracks major upstream releases of `llama.cpp` / `stable-diffusion.cpp` | tracks bleeding-edge `llama.cpp` / `stable-diffusion.cpp`, updated frequently |
 | Release lineage | `0.1.0` corresponds to cyllama `0.2.14` | -- |
-
-
 
 ## Features
 
