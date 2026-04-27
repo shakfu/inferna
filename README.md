@@ -16,11 +16,11 @@ How inferna differs from cyllama:
 
 | | inferna | cyllama |
 |---|---|---|
-| Binding layer | nanobind | Cython |
-| Wheel format | stable ABI (`abi3`), one wheel per platform | per-Python-version wheels |
-| Minimum Python | 3.12 | 3.10 |
-| Release cadence | tracks major upstream releases of `llama.cpp` / `stable-diffusion.cpp` | tracks bleeding-edge `llama.cpp` / `stable-diffusion.cpp`, updated frequently |
-| Release lineage | `0.1.0` corresponds to cyllama `0.2.14` | -- |
+| **Binding layer** | nanobind | Cython |
+| **Wheel format** | stable ABI (`abi3`), one wheel per platform | per-Python-version wheels |
+| **Minimum Python** | 3.12 | 3.10 |
+| **Release cadence** | tracks major upstream releases of `llama.cpp` / `stable-diffusion.cpp` | tracks bleeding-edge `llama.cpp` / `stable-diffusion.cpp`, updated frequently |
+| **Release lineage** | `0.1.0` corresponds to cyllama `0.2.14` | -- |
 
 ## Features
 
