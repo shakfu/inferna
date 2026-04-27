@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.1.1]
+
+### Fixed
+
+- Fixed `AttributeError: 'LlamaContext' object has no attribute 'params'` in `inferna chat` by storing the originally-constructed `LlamaContextParams` on the chat object and reusing it when creating a fresh context per generation.
+- Fixed sqlite-vector extension lookup in editable installs: `SqliteVectorStore.EXTENSION_PATH` now searches every entry in the `inferna.rag` package `__path__`, so the `vector.{dylib,so,dll}` artifact is found whether it lives next to the source tree or in the scikit-build-core editable mirror under site-packages.
+
 ## [0.1.0]
 
 ### Added

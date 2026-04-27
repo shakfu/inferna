@@ -56,9 +56,9 @@ pip install inferna
 
 This installs the CPU backend for Linux and Windows. For macOS, the Metal backend is installed by default to take advantage of Apple Silicon.
 
-### GPU-Accelerated Variants
+### GPU-Accelerated Variants (DISABLED FOR NOW)
 
-GPU variants are available on PyPI as separate dynamically linked packages:
+GPU variants are NOT YET available on PyPI as separate dynamically linked packages:
 
 ```sh
 pip install inferna-cuda12   # NVIDIA GPU (CUDA 12.4)        -- Linux x86_64, Windows x86_64

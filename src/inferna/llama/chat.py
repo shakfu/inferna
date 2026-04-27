@@ -84,6 +84,7 @@ class Chat:
         ctx_params = LlamaContextParams()
         ctx_params.n_ctx = n_ctx
         ctx_params.n_batch = n_ctx
+        self.ctx_params = ctx_params
         self.context = LlamaContext(self.model, ctx_params)
 
         # Initialize sampler with caller-provided parameters
@@ -237,7 +238,7 @@ class Chat:
                 it is generated.  Used for streaming output.
         """
         # Create a fresh context for this generation to avoid state issues
-        fresh_context = LlamaContext(self.model, self.context.params, verbose=False)
+        fresh_context = LlamaContext(self.model, self.ctx_params, verbose=False)
 
         response = ""
         n_past = 0

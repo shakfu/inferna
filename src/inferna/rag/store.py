@@ -75,9 +75,28 @@ class SqliteVectorStore(VectorStoreProtocol):
         >>> store = VectorStore.open("vectors.db")
     """
 
-    # Path to sqlite-vector extension (without file extension)
-    # The extension is built to: src/inferna/rag/vector.{dylib,so,dll}
-    EXTENSION_PATH = Path(__file__).parent / "vector"
+    # Path to sqlite-vector extension (without file extension).
+    # In an editable scikit-build-core install the python sources live in
+    # src/inferna/rag/ but compiled artifacts (vector.{dylib,so,dll}) are
+    # installed into the site-packages mirror. Search every directory on
+    # the rag package's __path__ to handle both layouts.
+    @staticmethod
+    def _resolve_extension_path() -> Path:
+        suffix = (
+            ".dylib" if sys.platform == "darwin"
+            else ".dll" if sys.platform == "win32"
+            else ".so"
+        )
+        from . import __path__ as _rag_path
+        for candidate_dir in _rag_path:
+            candidate = Path(candidate_dir) / f"vector{suffix}"
+            if candidate.exists():
+                return candidate.with_suffix("")
+        # Fall back to the source-tree path so the error message points
+        # at a stable, user-recognisable location.
+        return Path(__file__).parent / "vector"
+
+    EXTENSION_PATH = _resolve_extension_path()
 
     # Valid distance metrics
     VALID_METRICS = {"cosine", "l2", "dot", "l1", "squared_l2"}
