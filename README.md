@@ -1,6 +1,6 @@
-# Inferna - Fast, Pythonic AI Inference
+# Inferna - Python AI Inference
 
-Inferna is a comprehensive no-dependencies Python library for local AI inference built on the state-of-the-art `.cpp` ecosystem:
+Inferna is a no-dependencies Python library for local AI inference built on the `.cpp` ecosystem:
 
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)** - Text generation, chat, embeddings, and text-to-speech
 
@@ -8,7 +8,7 @@ Inferna is a comprehensive no-dependencies Python library for local AI inference
 
 - **[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)** - Image and video generation
 
-It combines the performance of compiled C++ bindings (via [nanobind](https://github.com/wjakob/nanobind)) with a simple, high-level Python API for cross-modal AI inference.
+It provides C++ bindings (via [nanobind](https://github.com/wjakob/nanobind)) with a high-level Python API for cross-modal AI inference.
 
 **[Documentation](https://shakfu.github.io/inferna/)** | **[PyPI](https://pypi.org/project/inferna/)** | **[Changelog](CHANGELOG.md)**
 
@@ -32,11 +32,11 @@ How inferna differs from cyllama:
 
 - Streaming -- token-by-token output with callbacks
 
-- Batch processing -- process multiple prompts 3-10x faster
+- Batch processing -- process multiple prompts in parallel
 
 - GPU acceleration -- Metal (macOS), CUDA (NVIDIA), ROCm (AMD), Vulkan (cross-platform), SYCL (Intel)
 
-- Speculative decoding -- 2-3x speedup with draft models
+- Speculative decoding -- accelerate generation with draft models
 
 - Agent framework -- ReActAgent, ConstrainedAgent, ContractAgent with tool calling
 
@@ -147,9 +147,9 @@ print(response)
 
 ## Key Features
 
-### Simple by Default, Powerful When Needed
+### High-Level API
 
-**High-Level API** - Get started in seconds:
+**High-Level API**:
 
 ```python
 from inferna import complete, chat, LLM
@@ -170,16 +170,16 @@ response1 = llm("Question 1")
 response2 = llm("Question 2")  # Model stays loaded!
 ```
 
-**Streaming Support** - Real-time token-by-token output:
+**Streaming Support** - Token-by-token output:
 
 ```python
 for chunk in complete("Tell me a story", model_path="model.gguf", stream=True):
     print(chunk, end="", flush=True)
 ```
 
-### Performance Optimized
+### Performance Features
 
-**Batch Processing** - Process multiple prompts 3-10x faster:
+**Batch Processing** - Process multiple prompts in parallel:
 
 ```python
 from inferna import batch_generate
@@ -188,7 +188,7 @@ prompts = ["What is 2+2?", "What is 3+3?", "What is 4+4?"]
 responses = batch_generate(prompts, model_path="model.gguf")
 ```
 
-**Speculative Decoding** - 2-3x speedup with draft models:
+**Speculative Decoding** - Use a draft model to accelerate generation:
 
 ```python
 from inferna.llama.llama_cpp import Speculative, SpeculativeParams
@@ -198,7 +198,7 @@ spec = Speculative(params, ctx_target)
 draft_tokens = spec.draft(prompt_tokens, last_token)
 ```
 
-**Memory Optimization** - Smart GPU layer allocation:
+**Memory Optimization** - GPU layer allocation:
 
 ```python
 from inferna import estimate_gpu_layers
@@ -210,7 +210,7 @@ estimate = estimate_gpu_layers(
 print(f"Recommended GPU layers: {estimate.n_gpu_layers}")
 ```
 
-**N-gram Cache** - 2-10x speedup for repetitive text:
+**N-gram Cache** - Reuse n-gram matches as draft tokens for repetitive text:
 
 ```python
 from inferna.llama.llama_cpp import NgramCache
@@ -242,7 +242,7 @@ Note: Caching requires a fixed seed (not the default random sentinel) since rand
 
 ### Framework Integrations
 
-**OpenAI-Compatible API** - Drop-in replacement:
+**OpenAI-Compatible API**:
 
 ```python
 from inferna.integrations import OpenAIClient
@@ -256,7 +256,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-**LangChain Integration** - Seamless ecosystem access:
+**LangChain Integration** - LangChain `LLM` interface:
 
 ```python
 from inferna.integrations import InfernaLLM
@@ -289,7 +289,7 @@ result = agent.run("What is 25 * 4?")
 print(result.answer)
 ```
 
-**ConstrainedAgent** - Grammar-enforced tool calling for 100% reliability:
+**ConstrainedAgent** - Grammar-enforced tool calling (guarantees valid tool-call syntax):
 
 ```python
 from inferna.agents import ConstrainedAgent
@@ -572,23 +572,23 @@ models = list_cached_models()
 
 ### Text Generation (llama.cpp)
 
-- [x] **Full llama.cpp API** - Complete nanobind wrapper with strong typing
+- [x] **llama.cpp API** - nanobind wrapper
 
-- [x] **High-Level API** - Simple, Pythonic interface (`LLM`, `complete`, `chat`)
+- [x] **High-Level API** - `LLM`, `complete`, `chat`
 
 - [x] **Streaming Support** - Token-by-token generation with callbacks
 
-- [x] **Batch Processing** - Efficient parallel inference
+- [x] **Batch Processing** - Parallel inference
 
 - [x] **Multimodal** - LLAVA and vision-language models
 
-- [x] **Speculative Decoding** - 2-3x inference speedup with draft models
+- [x] **Speculative Decoding** - Draft-model-based generation
 
 ### Speech Recognition (whisper.cpp)
 
-- [x] **Full whisper.cpp API** - Complete nanobind wrapper
+- [x] **whisper.cpp API** - nanobind wrapper
 
-- [x] **High-Level API** - Simple `transcribe()` function
+- [x] **High-Level API** - `transcribe()` function
 
 - [x] **Multiple Formats** - WAV, MP3, FLAC, and more
 
@@ -598,7 +598,7 @@ models = list_cached_models()
 
 ### Image & Video Generation (stable-diffusion.cpp)
 
-- [x] **Full stable-diffusion.cpp API** - Complete nanobind wrapper
+- [x] **stable-diffusion.cpp API** - nanobind wrapper
 
 - [x] **Text-to-Image** - SD 1.x/2.x, SDXL, SD3, FLUX, FLUX2, Z-Image
 
@@ -616,49 +616,11 @@ models = list_cached_models()
 
 - [x] **GPU Acceleration** - Metal, CUDA, ROCm, Vulkan, SYCL backends
 
-- [x] **Memory Optimization** - Smart GPU layer allocation
+- [x] **Memory Optimization** - GPU layer allocation
 
 - [x] **Agent Framework** - ReActAgent, ConstrainedAgent, ContractAgent
 
 - [x] **Framework Integration** - OpenAI API, LangChain, FastAPI
-
-## Why Inferna?
-
-**Performance**: Compiled C++ bindings (nanobind) with minimal overhead
-
-- Strong type checking at compile time
-
-- Zero-copy data passing where possible
-
-- Efficient memory management
-
-- Native integration with llama.cpp optimizations
-
-**Simplicity**: From 50 lines to 1 line for basic generation
-
-- Intuitive, Pythonic API design
-
-- Automatic resource management
-
-- Sensible defaults, full control when needed
-
-**Production-Ready**: Battle-tested and comprehensive
-
-- Extensive test coverage across the bindings, high-level API, agents, and RAG layers
-
-- Comprehensive documentation and examples
-
-- Proper error handling and logging
-
-- Framework integration for real applications
-
-**Up-to-Date**: Tracks bleeding-edge llama.cpp
-
-- Regular updates with latest features
-
-- All high-priority APIs wrapped
-
-- Performance optimizations included
 
 ## Status
 
