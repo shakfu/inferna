@@ -196,7 +196,6 @@ struct LlamaModelW {
     bool owner = true;
     std::string path_model;
     bool verbose = true;
-    nb::object params;  // hold the LlamaModelParams Python object alive
 
     // Cached metadata (populated on init).
     int      cached_n_embd      = -1;
@@ -299,10 +298,16 @@ struct LlamaContextW {
     llama_context* ptr = nullptr;
     bool owner = true;
     nb::object model_obj;   // keep parent model alive
-    nb::object params_obj;  // keep params alive
     bool verbose = true;
     int  n_tokens = 0;
     bool cancel_flag = false;
+
+    // Throw a normal Python exception if the context has been closed,
+    // instead of letting llama.cpp dereference a null pointer.
+    void ensure_valid() const {
+        if (!ptr) throw std::runtime_error(
+            "LlamaContext has been closed and is no longer usable");
+    }
 
     LlamaContextW(nb::object model_o, std::optional<LlamaContextParamsW*> p_opt, bool verbose_)
         : model_obj(std::move(model_o)), verbose(verbose_)
@@ -848,7 +853,9 @@ NB_MODULE(_llama_native, m) {
             LlamaModelW& s = nb::cast<LlamaModelW&>(self_obj);
             nb::module_ os = nb::module_::import_("os");
             if (!nb::cast<bool>(os.attr("path").attr("exists")(path_lora))) {
-                throw nb::python_error();  // FileNotFoundError raised below
+                std::string msg = "LoRA adapter file not found: " + path_lora;
+                PyErr_SetString(PyExc_FileNotFoundError, msg.c_str());
+                throw nb::python_error();
             }
             llama_adapter_lora* a = llama_adapter_lora_init(s.ptr, path_lora.c_str());
             if (!a) throw std::invalid_argument(
@@ -1056,15 +1063,18 @@ NB_MODULE(_llama_native, m) {
         .def("close", [](LlamaContextW& s){
             if (s.ptr && s.owner) { llama_free(s.ptr); s.ptr = nullptr; }
         })
-        .def_prop_ro("n_ctx",      [](LlamaContextW& s){ return llama_n_ctx(s.ptr); })
-        .def_prop_ro("n_ctx_seq",  [](LlamaContextW& s){ return llama_n_ctx_seq(s.ptr); })
-        .def_prop_ro("n_batch",    [](LlamaContextW& s){ return llama_n_batch(s.ptr); })
-        .def_prop_ro("n_ubatch",   [](LlamaContextW& s){ return llama_n_ubatch(s.ptr); })
-        .def_prop_ro("n_seq_max",  [](LlamaContextW& s){ return llama_n_seq_max(s.ptr); })
+        .def_prop_ro("is_valid", [](LlamaContextW& s){ return s.ptr != nullptr; })
+        .def_prop_ro("n_ctx",      [](LlamaContextW& s){ s.ensure_valid(); return llama_n_ctx(s.ptr); })
+        .def_prop_ro("n_ctx_seq",  [](LlamaContextW& s){ s.ensure_valid(); return llama_n_ctx_seq(s.ptr); })
+        .def_prop_ro("n_batch",    [](LlamaContextW& s){ s.ensure_valid(); return llama_n_batch(s.ptr); })
+        .def_prop_ro("n_ubatch",   [](LlamaContextW& s){ s.ensure_valid(); return llama_n_ubatch(s.ptr); })
+        .def_prop_ro("n_seq_max",  [](LlamaContextW& s){ s.ensure_valid(); return llama_n_seq_max(s.ptr); })
         .def_prop_ro("pooling_type", [](LlamaContextW& s){
+            s.ensure_valid();
             return (int) llama_pooling_type(s.ptr);
         })
         .def("encode", [](LlamaContextW& s, LlamaBatchW& batch){
+            s.ensure_valid();
             llama_context* ctx = s.ptr;
             llama_batch b = batch.p;
             int rc;
@@ -1075,6 +1085,7 @@ NB_MODULE(_llama_native, m) {
             if (rc < 0) throw std::runtime_error("error encoding batch");
         })
         .def("decode", [](LlamaContextW& s, LlamaBatchW& batch){
+            s.ensure_valid();
             llama_context* ctx = s.ptr;
             llama_batch b = batch.p;
             int rc;
@@ -1090,53 +1101,65 @@ NB_MODULE(_llama_native, m) {
             return rc;
         })
         .def("set_n_threads", [](LlamaContextW& s, int n, int nb){
+            s.ensure_valid();
             llama_set_n_threads(s.ptr, n, nb);
         })
-        .def("n_threads", [](LlamaContextW& s){ return llama_n_threads(s.ptr); })
-        .def("n_threads_batch", [](LlamaContextW& s){ return llama_n_threads_batch(s.ptr); })
+        .def("n_threads", [](LlamaContextW& s){ s.ensure_valid(); return llama_n_threads(s.ptr); })
+        .def("n_threads_batch", [](LlamaContextW& s){ s.ensure_valid(); return llama_n_threads_batch(s.ptr); })
         .def("set_embeddings_mode", [](LlamaContextW& s, bool e){
+            s.ensure_valid();
             llama_set_embeddings(s.ptr, e);
         })
         .def("set_causal_attn", [](LlamaContextW& s, bool c){
+            s.ensure_valid();
             llama_set_causal_attn(s.ptr, c);
         })
         .def("install_cancel_callback", [](LlamaContextW& s){
+            s.ensure_valid();
             llama_set_abort_callback(s.ptr, _cancel_flag_callback, &s.cancel_flag);
         })
         .def_prop_rw("cancel",
             [](LlamaContextW& s){ return s.cancel_flag; },
             [](LlamaContextW& s, bool v){ s.cancel_flag = v; })
-        .def("synchronize", [](LlamaContextW& s){ llama_synchronize(s.ptr); })
-        .def("get_state_size", [](LlamaContextW& s){ return llama_state_get_size(s.ptr); })
+        .def("synchronize", [](LlamaContextW& s){ s.ensure_valid(); llama_synchronize(s.ptr); })
+        .def("get_state_size", [](LlamaContextW& s){ s.ensure_valid(); return llama_state_get_size(s.ptr); })
         .def("kv_cache_clear", [](LlamaContextW& s, bool clear_data){
+            s.ensure_valid();
             llama_memory_t mem = llama_get_memory(s.ptr);
             if (mem) llama_memory_clear(mem, clear_data);
         }, "clear_data"_a = true)
         .def("memory_seq_rm", [](LlamaContextW& s, int seq_id, int p0, int p1){
+            s.ensure_valid();
             llama_memory_t mem = llama_get_memory(s.ptr);
             return mem ? (bool) llama_memory_seq_rm(mem, seq_id, p0, p1) : false;
         })
         .def("memory_seq_cp", [](LlamaContextW& s, int src, int dst, int p0, int p1){
+            s.ensure_valid();
             llama_memory_t mem = llama_get_memory(s.ptr);
             if (mem) llama_memory_seq_cp(mem, src, dst, p0, p1);
         })
         .def("memory_seq_keep", [](LlamaContextW& s, int seq_id){
+            s.ensure_valid();
             llama_memory_t mem = llama_get_memory(s.ptr);
             if (mem) llama_memory_seq_keep(mem, seq_id);
         })
         .def("memory_seq_add", [](LlamaContextW& s, int seq_id, int p0, int p1, int delta){
+            s.ensure_valid();
             llama_memory_t mem = llama_get_memory(s.ptr);
             if (mem) llama_memory_seq_add(mem, seq_id, p0, p1, delta);
         })
         .def("memory_seq_pos_min", [](LlamaContextW& s, int seq_id){
+            s.ensure_valid();
             llama_memory_t mem = llama_get_memory(s.ptr);
             return mem ? llama_memory_seq_pos_min(mem, seq_id) : -1;
         })
         .def("memory_seq_pos_max", [](LlamaContextW& s, int seq_id){
+            s.ensure_valid();
             llama_memory_t mem = llama_get_memory(s.ptr);
             return mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
         })
         .def("get_logits", [](LlamaContextW& s){
+            s.ensure_valid();
             LlamaModelW& model = nb::cast<LlamaModelW&>(s.model_obj);
             int n = llama_vocab_n_tokens(llama_model_get_vocab(model.ptr));
             float* logits = llama_get_logits(s.ptr);
@@ -1144,6 +1167,7 @@ NB_MODULE(_llama_native, m) {
             return std::vector<float>(logits, logits + n);
         })
         .def("get_logits_ith", [](LlamaContextW& s, int i){
+            s.ensure_valid();
             LlamaModelW& model = nb::cast<LlamaModelW&>(s.model_obj);
             int n = llama_vocab_n_tokens(llama_model_get_vocab(model.ptr));
             float* logits = llama_get_logits_ith(s.ptr, i);
@@ -1151,6 +1175,7 @@ NB_MODULE(_llama_native, m) {
             return std::vector<float>(logits, logits + n);
         })
         .def("get_embeddings", [](LlamaContextW& s){
+            s.ensure_valid();
             LlamaModelW& model = nb::cast<LlamaModelW&>(s.model_obj);
             int n_embd = model.cached_n_embd;
             float* e = llama_get_embeddings(s.ptr);
@@ -1158,6 +1183,7 @@ NB_MODULE(_llama_native, m) {
             return std::vector<float>(e, e + n_embd);
         })
         .def("get_embeddings_ith", [](LlamaContextW& s, int i){
+            s.ensure_valid();
             LlamaModelW& model = nb::cast<LlamaModelW&>(s.model_obj);
             int n_embd = model.cached_n_embd;
             float* e = llama_get_embeddings_ith(s.ptr, i);
@@ -1165,6 +1191,7 @@ NB_MODULE(_llama_native, m) {
             return std::vector<float>(e, e + n_embd);
         })
         .def("get_perf_data", [](LlamaContextW& s){
+            s.ensure_valid();
             llama_perf_context_data d = llama_perf_context(s.ptr);
             nb::dict out;
             out["t_start_ms"]  = d.t_start_ms;
@@ -1176,8 +1203,8 @@ NB_MODULE(_llama_native, m) {
             out["n_reused"]    = d.n_reused;
             return out;
         })
-        .def("print_perf_data", [](LlamaContextW& s){ llama_perf_context_print(s.ptr); })
-        .def("reset_perf_data", [](LlamaContextW& s){ llama_perf_context_reset(s.ptr); });
+        .def("print_perf_data", [](LlamaContextW& s){ s.ensure_valid(); llama_perf_context_print(s.ptr); })
+        .def("reset_perf_data", [](LlamaContextW& s){ s.ensure_valid(); llama_perf_context_reset(s.ptr); });
 
     // -------------------------------------------------------------------------
     // LlamaSampler

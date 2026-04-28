@@ -813,8 +813,8 @@ def set_preview_callback(
         try:
             wrapped = [SDImage(native) for native in frames]
             callback(step, wrapped, is_noisy)
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning("Exception in sd preview callback: %s", e)
     _n.set_preview_callback(_wrap, int(mode), interval, denoised, noisy)
 
 

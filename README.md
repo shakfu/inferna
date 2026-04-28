@@ -86,10 +86,27 @@ print(_backend.metal)  # True if built with Metal
 
 ### Build from source with a specific backend
 
+A source install is a two-phase build: the third-party C++ libraries
+(`llama.cpp`, `whisper.cpp`, `stable-diffusion.cpp`) must be built first
+because they are intentionally excluded from the sdist (see
+`pyproject.toml`'s `sdist.exclude` entry for `thirdparty/*/lib/`). The
+nanobind extensions in `pip install` then link against those prebuilt
+libraries.
+
 ```sh
-GGML_CUDA=1 pip install inferna --no-binary inferna
-GGML_VULKAN=1 pip install inferna --no-binary inferna
+# 1. Clone the repo and build the third-party deps in place.
+git clone https://github.com/shakfu/inferna && cd inferna
+GGML_CUDA=1 python scripts/manage.py build --all --deps-only --no-sd-examples
+
+# 2. Build and install the wheel against the prebuilt deps.
+GGML_CUDA=1 pip install . --no-build-isolation
 ```
+
+`pip install inferna --no-binary inferna` (sdist-only, no clone) will
+**not** work because the deps build step has no place to run. Use the
+prebuilt wheels from PyPI, or follow the two-phase flow above. CI uses
+the same `manage.py build --deps-only` step via cibuildwheel's
+`before-build` hook.
 
 ## Command-Line Interface
 

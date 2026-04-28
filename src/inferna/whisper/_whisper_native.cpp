@@ -18,6 +18,8 @@
 
 #include "whisper.h"
 
+#include "common/busy_lock.hpp"
+
 // Forward-declare ggml-backend symbols rather than including ggml-backend.h:
 // whisper.cpp and llama.cpp ship their own copies of that header (with subtle
 // signature drift), and including either alongside whisper.h's transitive
@@ -104,14 +106,16 @@ struct WhisperContextW {
     WhisperContextW(const WhisperContextW&) = delete;
     WhisperContextW& operator=(const WhisperContextW&) = delete;
 
+    static constexpr const char* kBusyMsg =
+        "WhisperContext is currently being used by another thread. "
+        "whisper.cpp contexts are not thread-safe -- create one "
+        "WhisperContext per thread instead of sharing a single "
+        "instance across threads.";
+
     void try_acquire_busy() {
         nb::object acquired = busy_lock.attr("acquire")("blocking"_a = false);
         if (!nb::cast<bool>(acquired)) {
-            throw std::runtime_error(
-                "WhisperContext is currently being used by another thread. "
-                "whisper.cpp contexts are not thread-safe -- create one "
-                "WhisperContext per thread instead of sharing a single "
-                "instance across threads.");
+            throw std::runtime_error(kBusyMsg);
         }
     }
     void release_busy() { busy_lock.attr("release")(); }
@@ -414,6 +418,10 @@ NB_MODULE(_whisper_native, m) {
              "model_path"_a, "params"_a = nb::none())
         .def_prop_ro("_busy_lock", [](WhisperContextW& s){ return s.busy_lock; })
         .def("_try_acquire_busy", &WhisperContextW::try_acquire_busy)
+        .def("close", [](WhisperContextW& s){
+            if (s.ctx) { whisper_free(s.ctx); s.ctx = nullptr; }
+        })
+        .def_prop_ro("is_valid", [](WhisperContextW& s){ return s.ctx != nullptr; })
         .def("version",       [](WhisperContextW&) { return std::string(whisper_version()); })
         .def("system_info",   [](WhisperContextW&) { return std::string(whisper_print_system_info()); })
         .def("n_vocab",            [](WhisperContextW& s){ return whisper_n_vocab(s.ctx); })
@@ -476,16 +484,13 @@ NB_MODULE(_whisper_native, m) {
         })
         .def("encode",
              [](WhisperContextW& s, int offset, int n_threads) {
-                 s.try_acquire_busy();
-                 int rc = 0;
-                 try {
-                     whisper_context* ctx = s.ctx;
-                     {
-                         nb::gil_scoped_release rel;
-                         rc = whisper_encode(ctx, offset, n_threads);
-                     }
-                 } catch (...) { s.release_busy(); throw; }
-                 s.release_busy();
+                 inferna::BusyGuard guard(s.busy_lock, WhisperContextW::kBusyMsg);
+                 whisper_context* ctx = s.ctx;
+                 int rc;
+                 {
+                     nb::gil_scoped_release rel;
+                     rc = whisper_encode(ctx, offset, n_threads);
+                 }
                  if (rc != 0) {
                      throw std::runtime_error(
                          "Encoding failed with error " + std::to_string(rc));
@@ -511,13 +516,12 @@ NB_MODULE(_whisper_native, m) {
                  whisper_context* ctx = s.ctx;
                  whisper_full_params c_params = params->c;
 
-                 s.try_acquire_busy();
-                 int rc = 0;
-                 try {
+                 inferna::BusyGuard guard(s.busy_lock, WhisperContextW::kBusyMsg);
+                 int rc;
+                 {
                      nb::gil_scoped_release rel;
                      rc = whisper_full(ctx, c_params, data, n_samples);
-                 } catch (...) { s.release_busy(); throw; }
-                 s.release_busy();
+                 }
                  if (rc != 0) {
                      throw std::runtime_error(
                          "Whisper full processing failed with error " + std::to_string(rc));

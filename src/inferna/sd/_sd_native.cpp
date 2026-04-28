@@ -27,6 +27,8 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 
+#include "common/busy_lock.hpp"
+
 // Forward-declare ggml-backend to avoid header conflicts (same workaround
 // used in the whisper module).
 extern "C" {
@@ -223,14 +225,16 @@ struct SDContextW {
     SDContextW(const SDContextW&) = delete;
     SDContextW& operator=(const SDContextW&) = delete;
 
+    static constexpr const char* kBusyMsg =
+        "SDContext is currently being used by another thread. "
+        "stable-diffusion.cpp contexts are not thread-safe -- "
+        "create one SDContext per thread instead of sharing a "
+        "single instance across threads.";
+
     void try_acquire_busy() {
         nb::object acquired = busy_lock.attr("acquire")("blocking"_a = false);
         if (!nb::cast<bool>(acquired)) {
-            throw std::runtime_error(
-                "SDContext is currently being used by another thread. "
-                "stable-diffusion.cpp contexts are not thread-safe -- "
-                "create one SDContext per thread instead of sharing a "
-                "single instance across threads.");
+            throw std::runtime_error(kBusyMsg);
         }
     }
     void release_busy() { busy_lock.attr("release")(); }
@@ -778,6 +782,9 @@ NB_MODULE(_sd_native, m) {
         .def(nb::init<SDContextParamsW&>(), "params"_a)
         .def_prop_ro("_busy_lock", [](SDContextW& s){ return s.busy_lock; })
         .def("_try_acquire_busy", &SDContextW::try_acquire_busy)
+        .def("close", [](SDContextW& s){
+            if (s.ctx) { free_sd_ctx(s.ctx); s.ctx = nullptr; }
+        })
         .def_prop_ro("is_valid", [](SDContextW& s){ return s.ctx != nullptr; })
         .def_prop_ro("supports_image_generation", [](SDContextW& s){
             if (!s.ctx) throw std::runtime_error("Context not initialized");
@@ -803,12 +810,11 @@ NB_MODULE(_sd_native, m) {
             int batch = params.p.batch_count;
             sd_image_t* result = nullptr;
 
-            s.try_acquire_busy();
-            try {
+            {
+                inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
                 nb::gil_scoped_release rel;
                 result = generate_image(s.ctx, &params.p);
-            } catch (...) { s.release_busy(); throw; }
-            s.release_busy();
+            }
 
             if (!result) throw std::runtime_error("Image generation failed");
 
@@ -874,12 +880,11 @@ NB_MODULE(_sd_native, m) {
 
             int num_frames_out = 0;
             sd_image_t* result = nullptr;
-            s.try_acquire_busy();
-            try {
+            {
+                inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
                 nb::gil_scoped_release rel;
                 result = generate_video(s.ctx, &vid_params, &num_frames_out);
-            } catch (...) { s.release_busy(); throw; }
-            s.release_busy();
+            }
 
             if (!result) throw std::runtime_error("Video generation failed");
 
