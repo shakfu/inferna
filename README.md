@@ -1,6 +1,6 @@
 # Inferna - an experiment
 
-**WARNING**: inferna is an experimental recent automatic ai-driven translation and is buggy, not stable, and not working with different gpu architectures. Don't use it. Use [cyllama](https://pypi.org/project/cyllama) instead which is much more mature and tested.
+**WARNING**: inferna is an experimental recent ai-driven translation and is buggy, not stable, and not working with different gpu architectures. Don't use it. Use [cyllama](https://pypi.org/project/cyllama) instead which is much more mature and tested.
 
 ---
 

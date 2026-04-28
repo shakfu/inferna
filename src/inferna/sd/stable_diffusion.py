@@ -581,8 +581,11 @@ class SDContext(_n.SDContext):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # Native dtor will free the underlying ctx when refcount drops to zero;
-        # we don't have an explicit close, but mark as no longer usable.
+        # Deterministic teardown — release the native context as soon as
+        # the with-block exits. Without this, the ctx (and its GPU buffers)
+        # would linger until GC ran, which on macOS Metal accumulates
+        # working-set pressure across consecutive contexts.
+        self.close()
         return None
 
     def get_default_sample_method(self) -> SampleMethod:

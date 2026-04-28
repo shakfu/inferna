@@ -86,6 +86,13 @@ struct MtmdContextW {
     MtmdContextW() = default;
     MtmdContextW(const MtmdContextW&) = delete;
     MtmdContextW& operator=(const MtmdContextW&) = delete;
+
+    // Throw a normal Python exception if the context has been closed,
+    // instead of letting mtmd dereference a null pointer.
+    void ensure_valid() const {
+        if (!ptr) throw std::runtime_error(
+            "MtmdContext has been closed and is no longer usable");
+    }
 };
 
 }  // namespace
@@ -340,26 +347,35 @@ void register_mtmd(nb::module_& m) {
                          "Failed to initialize mtmd context from: " + mmproj_path);
              },
              "mmproj_path"_a, "llama_model"_a, "params"_a = nb::none())
+        .def("close", [](MtmdContextW& s){
+            if (s.ptr) { mtmd_free(s.ptr); s.ptr = nullptr; }
+        })
+        .def_prop_ro("is_valid", [](MtmdContextW& s){ return s.ptr != nullptr; })
         .def_prop_ro("supports_vision", [](MtmdContextW& s){
-            return s.ptr ? (bool) mtmd_support_vision(s.ptr) : false;
+            s.ensure_valid();
+            return (bool) mtmd_support_vision(s.ptr);
         })
         .def_prop_ro("supports_audio", [](MtmdContextW& s){
-            return s.ptr ? (bool) mtmd_support_audio(s.ptr) : false;
+            s.ensure_valid();
+            return (bool) mtmd_support_audio(s.ptr);
         })
         .def_prop_ro("audio_sample_rate", [](MtmdContextW& s){
-            return s.ptr ? mtmd_get_audio_sample_rate(s.ptr) : -1;
+            s.ensure_valid();
+            return mtmd_get_audio_sample_rate(s.ptr);
         })
         .def_prop_ro("uses_non_causal", [](MtmdContextW& s){
-            return s.ptr ? (bool) mtmd_decode_use_non_causal(s.ptr, nullptr) : false;
+            s.ensure_valid();
+            return (bool) mtmd_decode_use_non_causal(s.ptr, nullptr);
         })
         .def_prop_ro("uses_mrope", [](MtmdContextW& s){
-            return s.ptr ? (bool) mtmd_decode_use_mrope(s.ptr) : false;
+            s.ensure_valid();
+            return (bool) mtmd_decode_use_mrope(s.ptr);
         })
         .def("tokenize",
             [](MtmdContextW& s, const std::string& text,
                std::vector<MtmdBitmapW*> bitmaps,
                bool add_special, bool parse_special){
-                if (!s.ptr) throw std::runtime_error("Context not initialized");
+                s.ensure_valid();
 
                 mtmd_input_text input_text{};
                 input_text.text          = text.c_str();
@@ -392,28 +408,25 @@ void register_mtmd(nb::module_& m) {
             },
             "text"_a, "bitmaps"_a, "add_special"_a = true, "parse_special"_a = true)
         .def("encode_chunk", [](MtmdContextW& s, MtmdInputChunkW& chunk){
-            if (!s.ptr) throw std::runtime_error("Context not initialized");
+            s.ensure_valid();
             return mtmd_encode_chunk(s.ptr, chunk.ptr);
         })
         .def("get_output_embeddings",
             [](MtmdContextW& s, int n_tokens, int n_embd){
-                if (!s.ptr) throw std::runtime_error("Context not initialized");
+                // Flat row-major (n_tokens * n_embd) matches LlamaContext.get_logits.
+                // Returning nb::list[nb::list[float]] would allocate one PyFloat per
+                // element — 2.4M allocations for a typical CLIP projector.
+                s.ensure_valid();
                 float* embd = mtmd_get_output_embd(s.ptr);
                 if (!embd) throw std::runtime_error("No embeddings available");
-                nb::list out;
-                for (int i = 0; i < n_tokens; ++i) {
-                    nb::list row;
-                    for (int j = 0; j < n_embd; ++j)
-                        row.append(embd[i * n_embd + j]);
-                    out.append(row);
-                }
-                return out;
+                size_t total = (size_t) n_tokens * (size_t) n_embd;
+                return std::vector<float>(embd, embd + total);
             }, "n_tokens"_a, "n_embd"_a)
         .def("eval_chunks",
             [](MtmdContextW& s, nb::object llama_ctx,
                MtmdInputChunksW& chunks, int n_past, int seq_id,
                int32_t n_batch, bool logits_last){
-                if (!s.ptr) throw std::runtime_error("Context not initialized");
+                s.ensure_valid();
                 ::llama_context* ctx_ptr = inferna::unwrap_ctx(llama_ctx);
                 llama_pos new_n_past = 0;
                 int32_t rc = mtmd_helper_eval_chunks(

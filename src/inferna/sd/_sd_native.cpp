@@ -268,39 +268,39 @@ static nb::object g_log_cb;
 static nb::object g_progress_cb;
 static nb::object g_preview_cb;
 
+// Acquire the GIL *before* the is_valid/is_none check on each global cb —
+// the worker thread cannot race with set_*_callback (which mutates the
+// nb::object under the GIL) once the GIL is held.
 extern "C" void _c_log_cb(sd_log_level_t level, const char* text, void* /*data*/) {
-    if (g_log_cb.is_valid() && !g_log_cb.is_none()) {
-        nb::gil_scoped_acquire gil;
-        try {
-            g_log_cb((int)level, text ? std::string(text) : std::string());
-        } catch (...) {
-            // Swallow exceptions in the C log callback — never let them
-            // propagate back into native code from a Python handler.
-        }
+    nb::gil_scoped_acquire gil;
+    if (!g_log_cb.is_valid() || g_log_cb.is_none()) return;
+    try {
+        g_log_cb((int)level, text ? std::string(text) : std::string());
+    } catch (...) {
+        // Swallow exceptions in the C log callback — never let them
+        // propagate back into native code from a Python handler.
     }
 }
 extern "C" void _c_progress_cb(int step, int steps, float time, void* /*data*/) {
-    if (g_progress_cb.is_valid() && !g_progress_cb.is_none()) {
-        nb::gil_scoped_acquire gil;
-        try { g_progress_cb(step, steps, time); }
-        catch (...) {}
-    }
+    nb::gil_scoped_acquire gil;
+    if (!g_progress_cb.is_valid() || g_progress_cb.is_none()) return;
+    try { g_progress_cb(step, steps, time); }
+    catch (...) {}
 }
 extern "C" void _c_preview_cb(int step, int frame_count, sd_image_t* frames,
                               bool is_noisy, void* /*data*/) {
-    if (g_preview_cb.is_valid() && !g_preview_cb.is_none()) {
-        nb::gil_scoped_acquire gil;
-        try {
-            nb::list py_frames;
-            for (int i = 0; i < frame_count; ++i) {
-                auto* img = new SDImageW{};
-                img->img = frames[i];
-                img->owns = false;  // preview only — caller owns the buffer
-                py_frames.append(nb::cast(img, nb::rv_policy::take_ownership));
-            }
-            g_preview_cb(step, py_frames, is_noisy);
-        } catch (...) {}
-    }
+    nb::gil_scoped_acquire gil;
+    if (!g_preview_cb.is_valid() || g_preview_cb.is_none()) return;
+    try {
+        nb::list py_frames;
+        for (int i = 0; i < frame_count; ++i) {
+            auto* img = new SDImageW{};
+            img->img = frames[i];
+            img->owns = false;  // preview only — caller owns the buffer
+            py_frames.append(nb::cast(img, nb::rv_policy::take_ownership));
+        }
+        g_preview_cb(step, py_frames, is_noisy);
+    } catch (...) {}
 }
 
 // =============================================================================

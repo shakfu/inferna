@@ -68,7 +68,11 @@ extern "C" bool _llama_progress_cb(float progress, void* user_data) {
         nb::object result = cb(progress);
         return nb::cast<bool>(result);
     } catch (...) {
-        return true;  // swallow callback errors and continue model loading
+        // llama.cpp's progress-callback contract: return false to abort the
+        // load. A handler exception (incl. KeyboardInterrupt) signals the
+        // user wants out, so propagate that as an abort rather than silently
+        // continuing.
+        return false;
     }
 }
 
@@ -283,11 +287,14 @@ extern "C" bool _cancel_flag_callback(void* user_data) {
     return user_data && *static_cast<bool*>(user_data);
 }
 
-// Module-level logging callback bridge.
+// Module-level logging callback bridge. The log callback fires from any
+// ggml worker thread; set_log_callback mutates g_log_cb under the GIL.
+// Acquire the GIL *before* touching g_log_cb so the is_valid/is_none check
+// cannot race with a swap on the main thread.
 static nb::object g_log_cb;
 extern "C" void _llama_log_cb(ggml_log_level level, const char* text, void* /*user_data*/) {
-    if (!g_log_cb.is_valid() || g_log_cb.is_none()) return;
     nb::gil_scoped_acquire gil;
+    if (!g_log_cb.is_valid() || g_log_cb.is_none()) return;
     try {
         g_log_cb((int)level, text ? std::string(text) : std::string());
     } catch (...) {}
@@ -745,15 +752,18 @@ NB_MODULE(_llama_native, m) {
             }
             return std::vector<int>(tokens.begin(), tokens.begin() + n);
         }, "text"_a, "add_special"_a, "parse_special"_a)
-        .def("token_to_piece", [](LlamaVocabW& s, int token, int lstrip, bool special) {
+        .def("token_to_piece", [](LlamaVocabW& s, int token, int lstrip, bool special) -> nb::object {
             char buf[128];
             int len = llama_token_to_piece(s.ptr, token, buf, sizeof(buf), lstrip, special);
             if (len < 0) throw std::invalid_argument(
                 "Failed to convert token " + std::to_string(token) + " to piece");
-            // errors='replace' would be ideal — std::string accepts arbitrary bytes,
-            // but Python decode follows. We hand back raw bytes here and let
-            // callers decode if needed; tests pass plain ASCII or do their own decode.
-            return std::string(buf, len);
+            // Byte-level BPE pieces can be partial UTF-8 sequences (lone
+            // continuation bytes etc.). Decode with errors="replace" so a
+            // single bad piece does not raise UnicodeDecodeError out of the
+            // hot generation loop.
+            PyObject* str = PyUnicode_DecodeUTF8(buf, len, "replace");
+            if (!str) throw nb::python_error();
+            return nb::steal(str);
         }, "token"_a, "lstrip"_a = 0, "special"_a = false)
         .def("detokenize", [](LlamaVocabW& s, const std::vector<int>& tokens,
                                 int text_len_max, bool remove_special, bool unparse_special) {
