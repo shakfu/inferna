@@ -41,22 +41,22 @@ _shutdown_requested = False
 class MongooseConnection:
     """Per-request response writer; wraps an opaque mongoose connection id."""
 
-    __slots__ = ("_conn_id",)
+    __slots__ = ("_conn_id", "_mgr")
 
-    def __init__(self, conn_id: int = 0):
+    def __init__(self, mgr=None, conn_id: int = 0):
+        self._mgr = mgr
         self._conn_id = conn_id
 
     @property
     def is_valid(self) -> bool:
-        return self._conn_id != 0
+        return self._conn_id != 0 and self._mgr is not None
 
     def send_json(self, data: dict, status_code: int = 200) -> bool:
         if not self.is_valid:
             return False
         body = json.dumps(data)
-        _mg.send_reply(self._conn_id, status_code,
-                        "Content-Type: application/json\r\n", body)
-        return True
+        return self._mgr.send_reply(self._conn_id, status_code,
+                                     "Content-Type: application/json\r\n", body)
 
     def send_error(self, status_code: int, message: str) -> bool:
         return self.send_json(
@@ -220,12 +220,12 @@ class EmbeddedServer:
     def _dispatch(self, conn_id: int, method: str, uri: str, body: str) -> None:
         """Bridge from the C event handler into our Python routing."""
         try:
-            conn = MongooseConnection(conn_id)
+            conn = MongooseConnection(self._mgr, conn_id)
             self.handle_http_request(conn, method, uri, headers={}, body=body)
         except Exception as e:
             self._logger.error(f"Event handler error: {e}")
-            _mg.send_reply(conn_id, 500, "Content-Type: text/plain\r\n",
-                            "Internal Server Error")
+            self._mgr.send_reply(conn_id, 500, "Content-Type: text/plain\r\n",
+                                  "Internal Server Error")
 
     def handle_http_request(self, conn: MongooseConnection, method: str, uri: str,
                             headers: dict, body: str) -> None:

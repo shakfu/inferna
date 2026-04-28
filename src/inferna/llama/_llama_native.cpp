@@ -726,14 +726,22 @@ NB_MODULE(_llama_native, m) {
         .def("fim_sep", [](LlamaVocabW& s){ return llama_vocab_fim_sep(s.ptr); })
         .def("tokenize", [](LlamaVocabW& s, const std::string& text,
                               bool add_special, bool parse_special) {
-            int n_vocab = llama_vocab_n_tokens(s.ptr);
-            int max_tokens = std::min((int)(text.size() * 2 + 100), n_vocab);
-            std::vector<llama_token> tokens(max_tokens);
+            // llama_tokenize returns the negative required size when the
+            // buffer is too small; honor that contract by retrying once
+            // with the exact capacity it asked for.
+            int cap = (int) text.size() + 16;
+            std::vector<llama_token> tokens(cap);
             int n = llama_tokenize(s.ptr, text.c_str(), (int)text.size(),
-                                    tokens.data(), max_tokens, add_special, parse_special);
+                                    tokens.data(), cap, add_special, parse_special);
             if (n < 0) {
-                throw std::runtime_error(
-                    "Failed to tokenize: text=\"" + text + "\" n_tokens=" + std::to_string(n));
+                cap = -n;
+                tokens.resize(cap);
+                n = llama_tokenize(s.ptr, text.c_str(), (int)text.size(),
+                                    tokens.data(), cap, add_special, parse_special);
+                if (n < 0) {
+                    throw std::runtime_error(
+                        "Failed to tokenize after retry: rc=" + std::to_string(n));
+                }
             }
             return std::vector<int>(tokens.begin(), tokens.begin() + n);
         }, "text"_a, "add_special"_a, "parse_special"_a)

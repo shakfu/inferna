@@ -152,7 +152,9 @@ else:
     SDCPP_VERSION = "master-587-b8bdffc"
     SQLITEVECTOR_VERSION = "0.9.95"
 if PLATFORM == "Darwin":
-    MACOSX_DEPLOYMENT_TARGET = setenv("MACOSX_DEPLOYMENT_TARGET", "12.6")
+    # Source of truth: matches pyproject.toml [tool.cibuildwheel.macos]
+    # environment.MACOSX_DEPLOYMENT_TARGET and Makefile.
+    MACOSX_DEPLOYMENT_TARGET = setenv("MACOSX_DEPLOYMENT_TARGET", "11.0")
 DEBUG = getenv("DEBUG", default=True)
 COLOR = getenv("COLOR", default=True)
 
@@ -2006,12 +2008,11 @@ class WheelBuilder(ShellCmd):
         thanks: @henryiii
         post: https://github.com/pypa/wheel/issues/573
 
-        For arm64, the minimal deployment target is 11.0.
-        On x86_64 (or universal2), use 10.9 as a default.
+        Aligned with pyproject.toml [tool.cibuildwheel.macos] / Makefile —
+        floor at 11.0 on both arm64 and x86_64 to keep build artifacts and
+        wheel metadata consistent across phases.
         """
-        min_osx_ver = "10.9"
-        if self.is_macos_arm64 and not self.universal:
-            min_osx_ver = "11.0"
+        min_osx_ver = "11.0"
         os.environ["MACOSX_DEPLOYMENT_TARGET"] = min_osx_ver
         return min_osx_ver
 

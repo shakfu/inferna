@@ -112,6 +112,13 @@ struct WhisperContextW {
         "WhisperContext per thread instead of sharing a single "
         "instance across threads.";
 
+    // Throw a normal Python exception if the context has been closed,
+    // instead of letting whisper.cpp dereference a null pointer.
+    void ensure_valid() const {
+        if (!ctx) throw std::runtime_error(
+            "WhisperContext has been closed and is no longer usable");
+    }
+
     void try_acquire_busy() {
         nb::object acquired = busy_lock.attr("acquire")("blocking"_a = false);
         if (!nb::cast<bool>(acquired)) {
@@ -419,45 +426,49 @@ NB_MODULE(_whisper_native, m) {
         .def_prop_ro("_busy_lock", [](WhisperContextW& s){ return s.busy_lock; })
         .def("_try_acquire_busy", &WhisperContextW::try_acquire_busy)
         .def("close", [](WhisperContextW& s){
+            s.ensure_valid();
             if (s.ctx) { whisper_free(s.ctx); s.ctx = nullptr; }
         })
         .def_prop_ro("is_valid", [](WhisperContextW& s){ return s.ctx != nullptr; })
         .def("version",       [](WhisperContextW&) { return std::string(whisper_version()); })
         .def("system_info",   [](WhisperContextW&) { return std::string(whisper_print_system_info()); })
-        .def("n_vocab",            [](WhisperContextW& s){ return whisper_n_vocab(s.ctx); })
-        .def("n_text_ctx",         [](WhisperContextW& s){ return whisper_n_text_ctx(s.ctx); })
-        .def("n_audio_ctx",        [](WhisperContextW& s){ return whisper_n_audio_ctx(s.ctx); })
-        .def("is_multilingual",    [](WhisperContextW& s){ return (bool)whisper_is_multilingual(s.ctx); })
-        .def("model_n_vocab",        [](WhisperContextW& s){ return whisper_model_n_vocab(s.ctx); })
-        .def("model_n_audio_ctx",    [](WhisperContextW& s){ return whisper_model_n_audio_ctx(s.ctx); })
-        .def("model_n_audio_state",  [](WhisperContextW& s){ return whisper_model_n_audio_state(s.ctx); })
-        .def("model_n_audio_head",   [](WhisperContextW& s){ return whisper_model_n_audio_head(s.ctx); })
-        .def("model_n_audio_layer",  [](WhisperContextW& s){ return whisper_model_n_audio_layer(s.ctx); })
-        .def("model_n_text_ctx",     [](WhisperContextW& s){ return whisper_model_n_text_ctx(s.ctx); })
-        .def("model_n_text_state",   [](WhisperContextW& s){ return whisper_model_n_text_state(s.ctx); })
-        .def("model_n_text_head",    [](WhisperContextW& s){ return whisper_model_n_text_head(s.ctx); })
-        .def("model_n_text_layer",   [](WhisperContextW& s){ return whisper_model_n_text_layer(s.ctx); })
-        .def("model_n_mels",         [](WhisperContextW& s){ return whisper_model_n_mels(s.ctx); })
-        .def("model_ftype",          [](WhisperContextW& s){ return whisper_model_ftype(s.ctx); })
-        .def("model_type",           [](WhisperContextW& s){ return whisper_model_type(s.ctx); })
+        .def("n_vocab",            [](WhisperContextW& s){ s.ensure_valid(); return whisper_n_vocab(s.ctx); })
+        .def("n_text_ctx",         [](WhisperContextW& s){ s.ensure_valid(); return whisper_n_text_ctx(s.ctx); })
+        .def("n_audio_ctx",        [](WhisperContextW& s){ s.ensure_valid(); return whisper_n_audio_ctx(s.ctx); })
+        .def("is_multilingual",    [](WhisperContextW& s){ s.ensure_valid(); return (bool)whisper_is_multilingual(s.ctx); })
+        .def("model_n_vocab",        [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_vocab(s.ctx); })
+        .def("model_n_audio_ctx",    [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_audio_ctx(s.ctx); })
+        .def("model_n_audio_state",  [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_audio_state(s.ctx); })
+        .def("model_n_audio_head",   [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_audio_head(s.ctx); })
+        .def("model_n_audio_layer",  [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_audio_layer(s.ctx); })
+        .def("model_n_text_ctx",     [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_text_ctx(s.ctx); })
+        .def("model_n_text_state",   [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_text_state(s.ctx); })
+        .def("model_n_text_head",    [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_text_head(s.ctx); })
+        .def("model_n_text_layer",   [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_text_layer(s.ctx); })
+        .def("model_n_mels",         [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_n_mels(s.ctx); })
+        .def("model_ftype",          [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_ftype(s.ctx); })
+        .def("model_type",           [](WhisperContextW& s){ s.ensure_valid(); return whisper_model_type(s.ctx); })
         .def("model_type_readable",  [](WhisperContextW& s){
+            s.ensure_valid();
             return std::string(whisper_model_type_readable(s.ctx)); })
         .def("token_to_str", [](WhisperContextW& s, int token) {
+            s.ensure_valid();
             const char* r = whisper_token_to_str(s.ctx, token);
             return r ? std::string(r) : std::string();
         })
-        .def("token_eot",        [](WhisperContextW& s){ return whisper_token_eot(s.ctx); })
-        .def("token_sot",        [](WhisperContextW& s){ return whisper_token_sot(s.ctx); })
-        .def("token_solm",       [](WhisperContextW& s){ return whisper_token_solm(s.ctx); })
-        .def("token_prev",       [](WhisperContextW& s){ return whisper_token_prev(s.ctx); })
-        .def("token_nosp",       [](WhisperContextW& s){ return whisper_token_nosp(s.ctx); })
-        .def("token_not",        [](WhisperContextW& s){ return whisper_token_not(s.ctx); })
-        .def("token_beg",        [](WhisperContextW& s){ return whisper_token_beg(s.ctx); })
-        .def("token_lang",       [](WhisperContextW& s, int lang_id){ return whisper_token_lang(s.ctx, lang_id); })
-        .def("token_translate",  [](WhisperContextW& s){ return whisper_token_translate(s.ctx); })
-        .def("token_transcribe", [](WhisperContextW& s){ return whisper_token_transcribe(s.ctx); })
+        .def("token_eot",        [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_eot(s.ctx); })
+        .def("token_sot",        [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_sot(s.ctx); })
+        .def("token_solm",       [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_solm(s.ctx); })
+        .def("token_prev",       [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_prev(s.ctx); })
+        .def("token_nosp",       [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_nosp(s.ctx); })
+        .def("token_not",        [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_not(s.ctx); })
+        .def("token_beg",        [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_beg(s.ctx); })
+        .def("token_lang",       [](WhisperContextW& s, int lang_id){ s.ensure_valid(); return whisper_token_lang(s.ctx, lang_id); })
+        .def("token_translate",  [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_translate(s.ctx); })
+        .def("token_transcribe", [](WhisperContextW& s){ s.ensure_valid(); return whisper_token_transcribe(s.ctx); })
         .def("tokenize",
              [](WhisperContextW& s, const std::string& text, int max_tokens) {
+                 s.ensure_valid();
                  std::vector<whisper_token> tokens(max_tokens);
                  int n = whisper_tokenize(s.ctx, text.c_str(), tokens.data(), max_tokens);
                  if (n < 0) {
@@ -470,6 +481,7 @@ NB_MODULE(_whisper_native, m) {
              },
              "text"_a, "max_tokens"_a = 512)
         .def("token_count", [](WhisperContextW& s, const std::string& t){
+            s.ensure_valid();
             return whisper_token_count(s.ctx, t.c_str()); })
         .def("lang_max_id", [](WhisperContextW&) { return whisper_lang_max_id(); })
         .def("lang_id",     [](WhisperContextW&, const std::string& lang) {
@@ -484,6 +496,7 @@ NB_MODULE(_whisper_native, m) {
         })
         .def("encode",
              [](WhisperContextW& s, int offset, int n_threads) {
+                 s.ensure_valid();
                  inferna::BusyGuard guard(s.busy_lock, WhisperContextW::kBusyMsg);
                  whisper_context* ctx = s.ctx;
                  int rc;
@@ -501,6 +514,7 @@ NB_MODULE(_whisper_native, m) {
              [](WhisperContextW& s,
                 nb::ndarray<float, nb::ndim<1>, nb::c_contig, nb::device::cpu> samples,
                 std::optional<WhisperFullParamsW*> params_opt) {
+                 s.ensure_valid();
                  // Hold a default-constructed instance if no params given,
                  // so the c_str-backing storage stays alive for the call.
                  std::unique_ptr<WhisperFullParamsW> default_owner;
@@ -529,35 +543,44 @@ NB_MODULE(_whisper_native, m) {
                  return rc;
              },
              "samples"_a, "params"_a = nb::none())
-        .def("full_n_segments",  [](WhisperContextW& s){ return whisper_full_n_segments(s.ctx); })
-        .def("full_lang_id",     [](WhisperContextW& s){ return whisper_full_lang_id(s.ctx); })
+        .def("full_n_segments",  [](WhisperContextW& s){ s.ensure_valid(); return whisper_full_n_segments(s.ctx); })
+        .def("full_lang_id",     [](WhisperContextW& s){ s.ensure_valid(); return whisper_full_lang_id(s.ctx); })
         .def("full_get_segment_t0", [](WhisperContextW& s, int i){
+            s.ensure_valid();
             return whisper_full_get_segment_t0(s.ctx, i); })
         .def("full_get_segment_t1", [](WhisperContextW& s, int i){
+            s.ensure_valid();
             return whisper_full_get_segment_t1(s.ctx, i); })
         .def("full_get_segment_text", [](WhisperContextW& s, int i){
+            s.ensure_valid();
             const char* r = whisper_full_get_segment_text(s.ctx, i);
             return r ? std::string(r) : std::string();
         })
         .def("full_n_tokens", [](WhisperContextW& s, int i){
+            s.ensure_valid();
             return whisper_full_n_tokens(s.ctx, i); })
         .def("full_get_token_text", [](WhisperContextW& s, int i, int j){
+            s.ensure_valid();
             const char* r = whisper_full_get_token_text(s.ctx, i, j);
             return r ? std::string(r) : std::string();
         })
         .def("full_get_token_id", [](WhisperContextW& s, int i, int j){
+            s.ensure_valid();
             return whisper_full_get_token_id(s.ctx, i, j); })
         .def("full_get_token_data", [](WhisperContextW& s, int i, int j){
+            s.ensure_valid();
             WhisperTokenDataW out;
             out.c = whisper_full_get_token_data(s.ctx, i, j);
             return out;
         })
         .def("full_get_token_p", [](WhisperContextW& s, int i, int j){
+            s.ensure_valid();
             return whisper_full_get_token_p(s.ctx, i, j); })
         .def("full_get_segment_no_speech_prob", [](WhisperContextW& s, int i){
+            s.ensure_valid();
             return whisper_full_get_segment_no_speech_prob(s.ctx, i); })
-        .def("print_timings", [](WhisperContextW& s){ whisper_print_timings(s.ctx); })
-        .def("reset_timings", [](WhisperContextW& s){ whisper_reset_timings(s.ctx); });
+        .def("print_timings", [](WhisperContextW& s){ s.ensure_valid(); whisper_print_timings(s.ctx); })
+        .def("reset_timings", [](WhisperContextW& s){ s.ensure_valid(); whisper_reset_timings(s.ctx); });
 
     // -------------------------------------------------------------------------
     // WhisperState — keeps a reference to its parent context.

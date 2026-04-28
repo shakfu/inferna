@@ -235,6 +235,39 @@ jobs:
           print('Inference smoke test passed')
           "
 
+      # Check out the source so we have access to the test suite. The
+      # installed wheel above is what gets exercised — pytest just provides
+      # the test definitions.
+      - uses: actions/checkout@v6
+        with:
+          path: src-checkout
+
+      - name: Run pytest against installed wheel
+        shell: bash
+        # pytest -x bails on first failure to keep CI fast on a smoke run.
+        # We move models into the checkout so conftest fixtures find them.
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source smoke-venv/Scripts/activate
+          else
+            source smoke-venv/bin/activate
+          fi
+          pip install pytest pytest-asyncio pytest-mock
+          mkdir -p src-checkout/models
+          cp models/Llama-3.2-1B-Instruct-Q8_0.gguf src-checkout/models/
+          cd src-checkout
+          # Drop tests that need extra fixtures the smoke env doesn't have
+          # (whisper/sd models, qdrant, etc.). The core api/agents/batching
+          # suite is the safety net we want against regressions.
+          pytest -x -q --no-header \
+            -o pythonpath= \
+            tests/test_generate.py \
+            tests/test_chat.py \
+            tests/test_batching.py \
+            tests/test_context.py \
+            tests/test_params.py \
+            tests/test_model.py
+
   collect_wheels:
     name: Collect all wheels
     needs: build_wheels

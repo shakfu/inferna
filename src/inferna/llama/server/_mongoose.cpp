@@ -111,15 +111,23 @@ NB_MODULE(_mongoose, m) {
             }
             return n;
         })
+        .def("send_reply", [](Manager& s, uintptr_t conn_id, int status_code,
+                               const std::string& headers, const std::string& body){
+            // Validate the opaque conn_id by walking the manager's live
+            // connection list. Mongoose closes/frees connections on its own
+            // poll cycle, so a stale or fabricated pointer would otherwise
+            // dereference into freed (or arbitrary) memory.
+            mg_connection* target = reinterpret_cast<mg_connection*>(conn_id);
+            if (!target) return false;
+            for (mg_connection* c = s.mgr.conns; c; c = c->next) {
+                if (c == target) {
+                    if (c->is_closing) return false;
+                    inferna_mg_http_reply(c, status_code, headers.c_str(),
+                                           "%s", body.c_str());
+                    return true;
+                }
+            }
+            return false;
+        }, "conn_id"_a, "status_code"_a, "headers"_a, "body"_a)
         .def_prop_ro("is_listening", [](Manager& s){ return s.listener != nullptr; });
-
-    // Reply primitives — operate on the opaque connection id we surfaced
-    // in the handler callback.
-    m.def("send_reply", [](uintptr_t conn_id, int status_code,
-                            const std::string& headers, const std::string& body){
-        mg_connection* c = reinterpret_cast<mg_connection*>(conn_id);
-        if (!c) return false;
-        inferna_mg_http_reply(c, status_code, headers.c_str(), "%s", body.c_str());
-        return true;
-    }, "conn_id"_a, "status_code"_a, "headers"_a, "body"_a);
 }

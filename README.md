@@ -1,4 +1,8 @@
-# Inferna - Python AI Inference
+# Inferna - an experiment
+
+**WARNING**: inferna is an experimental recent automatic ai-driven translation and is buggy, not stable, and not working with different gpu architectures. Don't use it. Use [cyllama](https://pypi.org/project/cyllama) instead which is much more mature and tested.
+
+---
 
 Inferna is a Python library for running local AI models across text, speech, and image modalities. It wraps three established C++ inference engines behind a single high-level API:
 

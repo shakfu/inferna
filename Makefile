@@ -1,7 +1,9 @@
 # inferna Makefile
-VERSION := 0.1.20
 
-export MACOSX_DEPLOYMENT_TARGET := 14.7
+# Source of truth: matches pyproject.toml [tool.cibuildwheel.macos]
+# environment.MACOSX_DEPLOYMENT_TARGET. Use ?= so developers can override
+# with intent for local experimentation.
+export MACOSX_DEPLOYMENT_TARGET ?= 11.0
 
 # Find system Python (python3 or python) - manage.py only uses stdlib
 SYSTEM_PYTHON := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
@@ -115,7 +117,7 @@ publish-test: check
 .PHONY: test coverage memray leaks
 
 test:
-	@uv run pytest -s
+	@uv run pytest -s --durations=50 --durations-min=1.0
 
 coverage:
 	@uv run pytest --cov=inferna --cov-report html
@@ -262,49 +264,67 @@ build-hip-dynamic: clean
 build-opencl-dynamic: clean
 	@GGML_OPENCL=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic
 
-# Static wheel builds
+# Static wheel builds. Each target rebuilds the third-party deps with the
+# matching backend flag before running uv build, so the wheel is guaranteed
+# not to ship dylibs from a stale prior backend (e.g. Metal libs in a wheel
+# claiming CUDA support).
 wheel-cpu:
+	@$(_CPU_ONLY) $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
 	@$(_CPU_ONLY) uv build --wheel
 
 wheel-metal:
+	@GGML_METAL=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
 	@GGML_METAL=1 uv build --wheel
 
 wheel-cuda:
+	@GGML_CUDA=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
 	@GGML_CUDA=1 uv build --wheel
 
 wheel-vulkan:
+	@GGML_VULKAN=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
 	@GGML_VULKAN=1 uv build --wheel
 
 wheel-sycl:
+	@GGML_SYCL=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
 	@GGML_SYCL=1 uv build --wheel
 
 wheel-hip:
+	@GGML_HIP=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
 	@GGML_HIP=1 uv build --wheel
 
 wheel-opencl:
+	@GGML_OPENCL=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
 	@GGML_OPENCL=1 uv build --wheel
 
-# Dynamic wheel builds
+# Dynamic wheel builds — same rule as static, plus --dynamic on the
+# manage.py invocation.
 wheel-cpu-dynamic:
+	@$(_CPU_ONLY) WITH_DYLIB=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@$(_CPU_ONLY) WITH_DYLIB=1 uv build --wheel
 
 wheel-metal-dynamic:
+	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
 
 wheel-cuda-dynamic:
+	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} uv build --wheel
 
 wheel-vulkan-dynamic:
+	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
 
 wheel-sycl-dynamic:
+	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
 
 wheel-hip-dynamic:
+	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
 
 wheel-opencl-dynamic:
-	@GGML_OPENCL=1 WITH_DYLIB=1 uv build --wheel
+	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
+	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
 
 # =============================================================================
 # CLI and server tests

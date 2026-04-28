@@ -19,22 +19,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
-- `LlamaContext`, `WhisperContext`, and `SDContext` now share a uniform lifecycle surface: each exposes `close()` and `is_valid`. `LlamaContext` additionally has an internal `ensure_valid()` guard called by every method that dereferences its native pointer, so calls after `close()` raise `RuntimeError` instead of crashing the interpreter.
+- `LlamaContext`, `WhisperContext`, and `SDContext` now share a uniform lifecycle surface: each exposes `close()` and `is_valid`. Both `LlamaContext` and `WhisperContext` additionally have an internal `ensure_valid()` guard called by every method that dereferences the native pointer, so calls after `close()` raise `RuntimeError` instead of crashing the interpreter.
 - `inferna::BusyGuard` (`src/inferna/common/busy_lock.hpp`): a small RAII helper for the per-context Python `threading.Lock` used by the whisper and sd wrappers. Replaces the duplicated `try { gil_release ... } catch (...) { release; throw; } release;` pattern in `_whisper_native.cpp` and `_sd_native.cpp`.
+- `Manager.send_reply()` (`_mongoose`): validated reply primitive that walks the mongoose connection list and rejects stale or fabricated connection ids before dereferencing. Replaces the unvalidated module-level `_mg.send_reply(uintptr_t, ...)` free function.
+- CI: `build-cibw.yml` smoke job now runs a fast `pytest` subset (`test_generate`, `test_chat`, `test_batching`, `test_context`, `test_params`, `test_model` — 106 tests) against the installed wheel on linux/macos-arm/windows after the inference smoke test. Previously CI exercised only imports plus a 16-token completion.
 
 ### Changed
 
+- `LlamaVocab.tokenize()` now honors llama.cpp's negative-return contract: if the initial buffer is too small, it resizes to the required capacity (`-rc`) and retries once. Previously it capped the buffer at `min(text.size()*2 + 100, n_vocab)` — a nonsensical cap that produced spurious tokenization failures on long inputs and small-vocab models.
 - `LlamaModel.lora_adapter_init()` now raises `FileNotFoundError` (with a helpful message) when the LoRA path does not exist, instead of throwing `nb::python_error()` with no Python exception set.
 - `set_preview_callback()` in `inferna.sd.stable_diffusion` now logs a warning when a user callback raises, matching the behavior of the progress and log callbacks. Previously the exception was silently swallowed.
+- `MACOSX_DEPLOYMENT_TARGET` is now consistently `11.0` across `Makefile`, `scripts/manage.py` (both the module-level default and `WheelBuilder.get_min_osx_ver`), and `pyproject.toml`'s cibuildwheel macOS section. Previously the four sites carried `14.7` / `12.6` / `10.9`-or-`11.0` / `11.0`, producing wheels with mismatched `LC_BUILD_VERSION` minimums depending on which build path was taken.
+- `Makefile` `wheel-<backend>` and `wheel-<backend>-dynamic` targets now invoke `scripts/manage.py build --all --deps-only` (with the matching backend env) before `uv build --wheel`. Without this, a local `make wheel-cuda` on a Metal-built tree would silently produce a wheel claiming CUDA support but linking Metal-built archives. cibuildwheel's `before-build` hook already handled this in CI; local make did not.
+- `wheel-opencl-dynamic` now sets `SD_USE_VENDORED_GGML=0` to match every other dynamic wheel target. Previously OpenCL dynamic builds linked SD against its vendored ggml while llama.cpp shipped a separate ggml dylib — exactly the ABI mismatch the `GGML_MAX_NAME=128` plumbing was added to prevent.
+- `MongooseConnection` (`inferna.llama.server.embedded`) now carries a reference to the owning `Manager`. Reply paths route through `manager.send_reply()`, which validates the connection id is live before dereferencing.
 - README "Build from source with a specific backend" now describes the mandatory two-phase install flow (`scripts/manage.py build --deps-only` followed by `pip install . --no-build-isolation`) and notes that `pip install inferna --no-binary inferna` from sdist alone will not work because `thirdparty/*/lib/` is intentionally excluded.
+- `make test` now runs `pytest -s --durations=50 --durations-min=1.0` to surface the 50 slowest tests (≥1s) on every run, making test-suite drift visible in local development.
 
 ### Removed
 
 - Vestigial `nb::object params` field on `LlamaModelW` and `nb::object params_obj` field on `LlamaContextW`. Both were declared with "keep alive" comments but never assigned.
+- Unused `VERSION := 0.1.20` variable from `Makefile`. It was never substituted into any rule and never updated by `make bump`, so it could only mislead.
 
 ### Fixed
 
 - `LlamaContext` post-close crash surface: `n_ctx`, `n_ctx_seq`, `n_batch`, `n_ubatch`, `n_seq_max`, `pooling_type`, `encode`, `decode`, `set_n_threads`, `n_threads`, `n_threads_batch`, `set_embeddings_mode`, `set_causal_attn`, `install_cancel_callback`, `synchronize`, `get_state_size`, `kv_cache_clear`, all `memory_seq_*`, `get_logits`, `get_logits_ith`, `get_embeddings`, `get_embeddings_ith`, `get_perf_data`, `print_perf_data`, and `reset_perf_data` now raise `RuntimeError` if invoked after `close()` instead of dereferencing a null pointer.
+- `WhisperContext` post-close crash surface: every native accessor (`n_vocab`, `n_text_ctx`, `n_audio_ctx`, all `model_*`, all `token_*`, `tokenize`, `encode`, `full`, all `full_get_*`, `print_timings`, `reset_timings`, etc.) now raises `RuntimeError` after `close()` instead of segfaulting on a null `whisper_context*`. Previously `close()` set the pointer to `nullptr` but no method gate enforced the lifecycle.
+- `_mg.send_reply()` (the unvalidated module-level reply primitive) accepted any `uintptr_t` and dereferenced it directly. A stale connection id (kept past request scope) or a fabricated value would trigger undefined behavior on freed memory. Replaced by `Manager.send_reply()` which walks `mgr.conns` and rejects pointers not in the live list (and pointers whose connections are mid-close).
 
 ## [0.1.1]
 
