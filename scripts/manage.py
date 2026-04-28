@@ -965,6 +965,44 @@ class Builder(AbstractBuilder):
         else:
             self.git_clone(self.repo_url, recurse=True, cwd=self.project.src)
 
+    def verify_checkout(self) -> None:
+        """Fail loudly if a pre-existing checkout does not match self.version.
+
+        `build()` only calls `setup()` when the source directory is absent.
+        If a previous run left a partial checkout, changing `--llama-version`
+        between runs would otherwise silently use the old commit. This
+        method is the fence: the only reliable recovery is `make reset`
+        (or manual delete) so we surface the mismatch instead of guessing.
+        """
+        if not self.version or not self.src_dir.exists():
+            return
+        if not (self.src_dir / ".git").exists():
+            return
+        try:
+            actual = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=str(self.src_dir),
+                encoding="utf8", stderr=subprocess.DEVNULL,
+            ).strip()
+            expected = subprocess.check_output(
+                ["git", "rev-parse", self.version], cwd=str(self.src_dir),
+                encoding="utf8", stderr=subprocess.DEVNULL,
+            ).strip()
+        except subprocess.CalledProcessError:
+            # Tag/branch not present locally (e.g. shallow clone of a
+            # different ref). Surface the mismatch rather than masking it.
+            self.fail(
+                f"{self.name} checkout at {self.src_dir} cannot resolve "
+                f"requested version '{self.version}'. Run 'make reset' "
+                f"and rebuild, or manually re-clone."
+            )
+        if actual != expected:
+            self.fail(
+                f"{self.name} checkout at {self.src_dir} is at {actual[:12]} "
+                f"but {self.version} resolves to {expected[:12]}. The build "
+                f"would silently use the wrong commit. Run 'make reset' to "
+                f"clean and rebuild."
+            )
+
 
 class GgmlBuilder(Builder):
     """Builder base for ggml-backed projects (llama.cpp / whisper.cpp / sd.cpp).
@@ -1171,6 +1209,8 @@ class LlamaCppBuilder(GgmlBuilder):
         """main build function"""
         if not self.src_dir.exists():
             self.setup()
+        else:
+            self.verify_checkout()
         self.log.info(f"building {self.name}")
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
@@ -1235,6 +1275,8 @@ class LlamaCppBuilder(GgmlBuilder):
         # but skip the copy_lib steps which look for .a files.
         if not self.src_dir.exists():
             self.setup()
+        else:
+            self.verify_checkout()
         self.log.info(f"building {self.name} (shared)")
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
@@ -1691,6 +1733,8 @@ class WhisperCppBuilder(GgmlBuilder):
         """whisper.cpp main build function"""
         if not self.src_dir.exists():
             self.setup()
+        else:
+            self.verify_checkout()
         self.log.info(f"building {self.name}")
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
@@ -1792,6 +1836,8 @@ class StableDiffusionCppBuilder(GgmlBuilder):
         """stable-diffusion.cpp main build function"""
         if not self.src_dir.exists():
             self.setup()
+        else:
+            self.verify_checkout()
         self.log.info(f"building {self.name}")
 
         # Sync ggml ABI from llama.cpp before compiling so that enum
@@ -1862,6 +1908,8 @@ class SqliteVectorBuilder(Builder):
         """Stage upstream sources into `thirdparty/sqlite-vector/`."""
         if not self.src_dir.exists():
             self.setup()
+        else:
+            self.verify_checkout()
         dest = self.thirdparty_dest
         self.log.info(f"staging {self.name} sources into {dest}")
 

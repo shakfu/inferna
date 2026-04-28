@@ -38,11 +38,16 @@ requires = ["scikit-build-core", "nanobind>=2.12.0"]
 build-backend = "scikit_build_core.build"
 
 [tool.scikit-build]
-cmake.version = ">=3.21"
+cmake.version = ">=3.26"
 cmake.build-type = "Release"
 install.strip = true
 wheel.packages = ["src/inferna"]
-wheel.exclude = ["*.cpp", "*.c", "*.h", "*.hpp", "*.a", "*.lib"]
+# Belt-and-suspenders: CMake's install rules already constrain what enters
+# the wheel, but stripping source/static-archive patterns here protects
+# against accidentally-installed companions. NOTE: `*.lib` is intentionally
+# absent — on Windows, delvewheel relocates DLLs into `inferna.libs/` and
+# can copy companion `.lib` import libraries that we want to keep.
+wheel.exclude = ["*.cpp", "*.c", "*.h", "*.hpp", "*.a"]
 wheel.license-files = ["LICENSE"]
 build-dir = "build/{wheel_tag}"
 sdist.include = [
@@ -199,6 +204,15 @@ repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
 [tool.cibuildwheel.macos]
 # Environment variables for macOS builds
 environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", GGML_METAL = "1", GGML_NATIVE = "0" }
+
+# Build thirdparty deps once (before-all) instead of once-per-Python (the
+# global before-build), mirroring the Linux strategy. Without this, macOS
+# rebuilt llama.cpp/whisper.cpp/sd.cpp 5x for cp310-cp314 and re-cloned
+# the upstream repos each time.
+before-all = "python scripts/manage.py build --all --deps-only --no-sd-examples && test -d thirdparty/llama.cpp/lib && ls thirdparty/llama.cpp/lib/*llama* >/dev/null 2>&1 || { echo 'ERROR: manage.py produced no libraries'; exit 1; }"
+
+# Disable global before-build on macOS (deps already built by before-all).
+before-build = ""
 
 # Repair wheels with delocate
 repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} --exclude libssl --exclude libcrypto"

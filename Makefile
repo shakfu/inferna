@@ -36,10 +36,20 @@ MODEL := models/Llama-3.2-1B-Instruct-Q8_0.gguf
 MODEL_RAG := models/all-MiniLM-L6-v2-Q5_K_S.gguf
 MODEL_LLAVA := models/llava-llama-3-8b-v1_1-int4.gguf
 
-# Library detection
+# Library detection. Pick the platform-appropriate shared-lib extension
+# so file-target rules work on Linux / Windows in addition to macOS.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    SHLIB_EXT := dylib
+else ifeq ($(UNAME_S),Linux)
+    SHLIB_EXT := so
+else
+    SHLIB_EXT := dll
+endif
+
 WITH_DYLIB ?= 0
 ifeq ($(WITH_DYLIB),1)
-    LIBLAMMA := $(LLAMACPP)/dynamic/libllama.dylib
+    LIBLAMMA := $(LLAMACPP)/dynamic/libllama.$(SHLIB_EXT)
 else
     LIBLAMMA := $(LLAMACPP)/lib/libllama.a
 endif
@@ -89,10 +99,10 @@ wheel-abi3: $(LIBLAMMA)
 		--config-setting=cmake.define.INFERNA_ABI3=ON \
 		--config-setting=wheel.py-api=cp312
 
-wheel-dynamic: $(LLAMACPP)/dynamic/libllama.dylib
+wheel-dynamic: $(LLAMACPP)/dynamic/libllama.$(SHLIB_EXT)
 	@WITH_DYLIB=1 uv build --wheel
 
-$(LLAMACPP)/dynamic/libllama.dylib:
+$(LLAMACPP)/dynamic/libllama.$(SHLIB_EXT):
 	@$(SYSTEM_PYTHON) scripts/manage.py build --llama-cpp --dynamic --deps-only
 
 dist: $(LIBLAMMA)

@@ -513,17 +513,22 @@ endif()
 # OpenSSL linking removed: EmbeddedServer doesn't expose SSL config,
 # and absolute homebrew paths break wheel portability.
 
-if(GGML_CUDA)
+# In WITH_DYLIB mode each backend's runtime is already linked into the
+# pre-built ggml-* dylib that ships in the wheel; the extension itself
+# does not reference Vulkan / CUDA / HIP / SYCL / OpenCL symbols. Skip
+# `find_package(REQUIRED)` so dev machines don't need the full SDK
+# installed just to build the wrapper.
+if(GGML_CUDA AND NOT WITH_DYLIB)
     find_package(CUDAToolkit REQUIRED)
     list(APPEND SYSTEM_LIBS CUDA::cudart CUDA::cublas CUDA::cuda_driver)
 endif()
 
-if(GGML_VULKAN)
+if(GGML_VULKAN AND NOT WITH_DYLIB)
     find_package(Vulkan REQUIRED)
     list(APPEND SYSTEM_LIBS Vulkan::Vulkan)
 endif()
 
-if(GGML_HIP)
+if(GGML_HIP AND NOT WITH_DYLIB)
     # HIP/ROCm backend requires hip, hipblas, and rocblas
     # Note: Only link hip::host (runtime), NOT hip::device (which adds HIP compiler flags)
     # The actual HIP kernels are in libggml-hip.a which was compiled with hipcc
@@ -535,7 +540,7 @@ if(GGML_HIP)
     list(APPEND SYSTEM_LIBS hip::host roc::rocblas roc::hipblas)
 endif()
 
-if(GGML_SYCL)
+if(GGML_SYCL AND NOT WITH_DYLIB)
     # SYCL backend - add -fsycl to link flags only (not compile flags).
     # Using IntelSYCL::SYCL_CXX adds -fsycl globally which forces C files
     # to be compiled as C++, causing duplicate symbol errors with mongoose.
@@ -550,7 +555,7 @@ if(GGML_SYCL)
     message(STATUS "SYCL backend: linking with -fsycl and ${_sycl_lib}")
 endif()
 
-if(GGML_OPENCL)
+if(GGML_OPENCL AND NOT WITH_DYLIB)
     # OpenCL backend
     find_package(OpenCL REQUIRED)
     list(APPEND SYSTEM_LIBS ${OpenCL_LIBRARIES})
