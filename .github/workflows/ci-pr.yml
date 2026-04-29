@@ -1,0 +1,89 @@
+name: ci-pr
+
+# Slim PR-only CI: build a single Python (cp312, Linux x86_64 CPU) and run
+# a fast pytest subset. Catches the common breakage class — wrapper or
+# Python regressions that the full cibw matrix would also catch but at
+# 30+ runner-minutes per platform. The full matrix remains
+# workflow_dispatch-only (build-cibw.yml).
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      # Anything that affects the wheel or the test suite.
+      - 'src/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - 'pyproject.toml'
+      - 'scripts/manage.py'
+      - '.github/workflows/ci-pr.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_test:
+    name: PR smoke (linux-cp312-cpu)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Cache thirdparty deps
+        id: cache-deps
+        uses: actions/cache@v5
+        with:
+          path: thirdparty/
+          key: deps-cipr-${{ hashFiles('scripts/manage.py', 'pyproject.toml') }}
+
+      - name: Build third-party deps (CPU only)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        env:
+          GGML_METAL: "0"
+          GGML_NATIVE: "0"
+        run: python scripts/manage.py build --all --deps-only --no-sd-examples
+
+      - name: Install build dependencies
+        run: pip install scikit-build-core nanobind cmake ninja
+
+      - name: Install inferna (PEP 517, no isolation so deps are visible)
+        env:
+          GGML_METAL: "0"
+          GGML_NATIVE: "0"
+        run: pip install . --no-build-isolation -v
+
+      - name: Cache test model
+        id: cache-model
+        uses: actions/cache@v5
+        with:
+          path: models/Llama-3.2-1B-Instruct-Q8_0.gguf
+          key: test-model-llama-3.2-1b-q8
+
+      - name: Download test model
+        if: steps.cache-model.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          curl -sL https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf \
+            -o models/Llama-3.2-1B-Instruct-Q8_0.gguf
+
+      - name: Smoke test - imports
+        run: python -c "import inferna; from inferna import LLM, complete, chat; print(f'inferna {inferna.__version__}')"
+
+      - name: Run pytest subset
+        run: |
+          pip install pytest pytest-asyncio pytest-mock
+          pytest -x -q --no-header \
+            -o pythonpath= \
+            tests/test_generate.py \
+            tests/test_chat.py \
+            tests/test_batching.py \
+            tests/test_context.py \
+            tests/test_params.py \
+            tests/test_model.py

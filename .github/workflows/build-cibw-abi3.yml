@@ -345,5 +345,5 @@ jobs:
           ")
           TAG="${VERSION}"
           echo "Version: ${VERSION}, Tag: ${TAG}"
-          gh release create "${TAG}" --prerelease --title "inferna ${TAG}" 2>/dev/null || true
+          (gh release view "${TAG}" >/dev/null 2>&1 && echo "Release ${TAG} already exists") || gh release create "${TAG}" --prerelease --title "inferna ${TAG}"
           gh release upload "${TAG}" dist/*.whl --clobber

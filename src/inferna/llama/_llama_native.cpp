@@ -26,6 +26,7 @@
 #include "gguf.h"
 
 #include "_llama_native.hpp"
+#include "common/backend_loader.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -301,6 +302,25 @@ extern "C" void _llama_log_cb(ggml_log_level level, const char* text, void* /*us
 }
 extern "C" void _llama_no_log_cb(ggml_log_level, const char*, void*) {}
 
+// LlamaContext concurrency policy
+// --------------------------------
+// Unlike WhisperContextW and SDContextW, this struct does NOT carry a
+// `busy_lock` (Python-level non-blocking thread-safety guard). The reason
+// is asymmetric upstream contracts:
+//
+//   * llama.cpp's main hot paths (`llama_encode` / `llama_decode`) are
+//     designed for one-thread-per-context use, but the wrappers here
+//     release the GIL around them and rely on application-level discipline
+//     for ordering. Higher-level Python code (`api.LLM`, `batching.*`)
+//     already serializes per-context use.
+//   * whisper.cpp / stable-diffusion.cpp expose a wider surface where
+//     concurrent native calls into a single context produce undefined
+//     behavior or crashes; the per-context Python lock there is a defense
+//     against that, not a perf optimization.
+//
+// If you ever need to add a busy-lock-style guard here, mirror the
+// `WhisperContextW::kBusyMsg` / `inferna::BusyGuard` pattern used in
+// `_whisper_native.cpp` and `_sd_native.cpp`.
 struct LlamaContextW {
     llama_context* ptr = nullptr;
     bool owner = true;
@@ -412,6 +432,19 @@ struct LlamaSamplerW {
     LlamaSamplerW(const LlamaSamplerW&) = delete;
     LlamaSamplerW& operator=(const LlamaSamplerW&) = delete;
 };
+
+// Inner-init helpers (e.g. llama_sampler_init_grammar on a malformed
+// grammar) can return NULL; passing that to llama_sampler_chain_add
+// silently no-ops the chain entry. Wrap every add_* through this guard
+// so callers get a clear error at the boundary instead of a baffling
+// sampler that quietly skips the rule they configured.
+static inline void chain_add_checked(llama_sampler* chain, llama_sampler* inner,
+                                       const char* init_name) {
+    if (!inner) throw std::invalid_argument(
+        std::string("llama_sampler_init_") + init_name +
+        " returned NULL (likely invalid arguments)");
+    llama_sampler_chain_add(chain, inner);
+}
 
 // =============================================================================
 // GGUFContext
@@ -679,14 +712,26 @@ NB_MODULE(_llama_native, m) {
         .def_prop_rw("key",
             [](LlamaModelKvOverrideW& s){ return std::string(s.p.key); },
             [](LlamaModelKvOverrideW& s, const std::string& v){
-                std::strncpy(s.p.key, v.c_str(), sizeof(s.p.key) - 1);
-                s.p.key[sizeof(s.p.key) - 1] = '\0';
+                // The underlying llama_model_kv_override.key is a fixed-size
+                // char buffer. Silently truncating a too-long key would
+                // surface later as a confusing "key not found" failure;
+                // raise here instead so the caller learns immediately.
+                if (v.size() >= sizeof(s.p.key))
+                    throw std::invalid_argument(
+                        "key is " + std::to_string(v.size()) +
+                        " bytes; max is " + std::to_string(sizeof(s.p.key) - 1));
+                std::memcpy(s.p.key, v.c_str(), v.size());
+                s.p.key[v.size()] = '\0';
             })
         .def_prop_rw("val_str",
             [](LlamaModelKvOverrideW& s){ return std::string(s.p.val_str); },
             [](LlamaModelKvOverrideW& s, const std::string& v){
-                std::strncpy(s.p.val_str, v.c_str(), sizeof(s.p.val_str) - 1);
-                s.p.val_str[sizeof(s.p.val_str) - 1] = '\0';
+                if (v.size() >= sizeof(s.p.val_str))
+                    throw std::invalid_argument(
+                        "val_str is " + std::to_string(v.size()) +
+                        " bytes; max is " + std::to_string(sizeof(s.p.val_str) - 1));
+                std::memcpy(s.p.val_str, v.c_str(), v.size());
+                s.p.val_str[v.size()] = '\0';
             });
 
     // -------------------------------------------------------------------------
@@ -773,8 +818,8 @@ NB_MODULE(_llama_native, m) {
                                        buf.data(), text_len_max,
                                        remove_special, unparse_special);
             if (rc < 0) throw std::runtime_error(
-                "Failed to detokenize: text=\"" + std::to_string(rc) +
-                "\" n_tokens=" + std::to_string(vec.size()));
+                "Failed to detokenize: rc=" + std::to_string(rc) +
+                " n_tokens=" + std::to_string(vec.size()));
             std::string out(buf.data(), rc);
             // Strip leading whitespace from the detokenized output.
             size_t start = 0;
@@ -1246,48 +1291,48 @@ NB_MODULE(_llama_native, m) {
         })
         .def("get_seed", [](LlamaSamplerW& s){ return llama_sampler_get_seed(s.ptr); })
         .def("add_greedy", [](LlamaSamplerW& s){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_greedy());
+            chain_add_checked(s.ptr, llama_sampler_init_greedy(), "greedy");
         })
         .def("add_dist", [](LlamaSamplerW& s, uint32_t seed){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_dist(seed));
+            chain_add_checked(s.ptr, llama_sampler_init_dist(seed), "dist");
         })
         .def("add_top_k", [](LlamaSamplerW& s, int32_t k){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_top_k(k));
+            chain_add_checked(s.ptr, llama_sampler_init_top_k(k), "top_k");
         })
         .def("add_top_p", [](LlamaSamplerW& s, float p, size_t mk){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_top_p(p, mk));
+            chain_add_checked(s.ptr, llama_sampler_init_top_p(p, mk), "top_p");
         })
         .def("add_min_p", [](LlamaSamplerW& s, float p, size_t mk){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_min_p(p, mk));
+            chain_add_checked(s.ptr, llama_sampler_init_min_p(p, mk), "min_p");
         })
         .def("add_typical", [](LlamaSamplerW& s, float p, size_t mk){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_typical(p, mk));
+            chain_add_checked(s.ptr, llama_sampler_init_typical(p, mk), "typical");
         })
         .def("add_temp", [](LlamaSamplerW& s, float t){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_temp(t));
+            chain_add_checked(s.ptr, llama_sampler_init_temp(t), "temp");
         })
         .def("add_temp_ext", [](LlamaSamplerW& s, float t, float d, float e){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_temp_ext(t, d, e));
+            chain_add_checked(s.ptr, llama_sampler_init_temp_ext(t, d, e), "temp_ext");
         })
         .def("add_xtc", [](LlamaSamplerW& s, float p, float t, size_t mk, uint32_t seed){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_xtc(p, t, mk, seed));
+            chain_add_checked(s.ptr, llama_sampler_init_xtc(p, t, mk, seed), "xtc");
         })
         .def("add_mirostat", [](LlamaSamplerW& s, int n_vocab, uint32_t seed,
                                   float tau, float eta, int m){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m));
+            chain_add_checked(s.ptr, llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m), "mirostat");
         })
         .def("add_mirostat_v2", [](LlamaSamplerW& s, uint32_t seed, float tau, float eta){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_mirostat_v2(seed, tau, eta));
+            chain_add_checked(s.ptr, llama_sampler_init_mirostat_v2(seed, tau, eta), "mirostat_v2");
         })
         .def("add_grammar", [](LlamaSamplerW& s, LlamaVocabW& vocab,
                                  const std::string& grammar_str, const std::string& grammar_root){
-            llama_sampler_chain_add(s.ptr,
-                llama_sampler_init_grammar(vocab.ptr, grammar_str.c_str(), grammar_root.c_str()));
+            chain_add_checked(s.ptr,
+                llama_sampler_init_grammar(vocab.ptr, grammar_str.c_str(), grammar_root.c_str()),
+                "grammar");
         })
         .def("add_penalties", [](LlamaSamplerW& s, int last_n, float repeat,
                                   float freq, float present){
-            llama_sampler_chain_add(s.ptr,
-                llama_sampler_init_penalties(last_n, repeat, freq, present));
+            chain_add_checked(s.ptr, llama_sampler_init_penalties(last_n, repeat, freq, present), "penalties");
         })
         .def("add_logit_bias", [](LlamaSamplerW& s, int n_vocab, nb::list biases){
             std::vector<llama_logit_bias> arr;
@@ -1299,12 +1344,13 @@ NB_MODULE(_llama_native, m) {
                 b.bias  = nb::cast<float>(t[1]);
                 arr.push_back(b);
             }
-            llama_sampler_chain_add(s.ptr,
+            chain_add_checked(s.ptr,
                 llama_sampler_init_logit_bias(n_vocab, (int) arr.size(),
-                                                arr.empty() ? nullptr : arr.data()));
+                                                arr.empty() ? nullptr : arr.data()),
+                "logit_bias");
         })
         .def("add_infill", [](LlamaSamplerW& s, LlamaVocabW& vocab){
-            llama_sampler_chain_add(s.ptr, llama_sampler_init_infill(vocab.ptr));
+            chain_add_checked(s.ptr, llama_sampler_init_infill(vocab.ptr), "infill");
         })
         .def("sample", [](LlamaSamplerW& s, LlamaContextW& ctx, int idx){
             return llama_sampler_sample(s.ptr, ctx.ptr, idx);
@@ -1346,23 +1392,7 @@ NB_MODULE(_llama_native, m) {
     m.def("ggml_time_us", [](){ return ggml_time_us(); });
 
     m.def("ggml_backend_load_all", [](){
-        // Discover and load backend plugins relative to this extension's
-        // install location, then any extras reported by the Python-side
-        // `inferna._internal.backend_dl` resolver.
-        nb::module_ os = nb::module_::import_("os");
-        nb::module_ backend_dl = nb::module_::import_("inferna._internal.backend_dl");
-        nb::object __file__ = nb::module_::import_("inferna.llama._llama_native").attr("__file__");
-        std::string this_file = nb::cast<std::string>(__file__);
-        std::string this_dir  = nb::cast<std::string>(os.attr("path").attr("dirname")(
-            os.attr("path").attr("abspath")(this_file)));
-        ggml_backend_load_all_from_path(this_dir.c_str());
-        std::string site = nb::cast<std::string>(os.attr("path").attr("dirname")(
-            os.attr("path").attr("dirname")(this_dir)));
-        nb::object paths = backend_dl.attr("libs_to_load")(site);
-        for (nb::handle p : paths) {
-            std::string sp = nb::cast<std::string>(p);
-            ggml_backend_load(sp.c_str());
-        }
+        inferna::load_all_backends("inferna.llama._llama_native");
     });
 
     m.def("ggml_backend_unload", [](const std::string& name){

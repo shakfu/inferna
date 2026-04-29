@@ -33,6 +33,10 @@ extern "C" {
     void ggml_backend_load_all_from_path(const char* dir_path);
 }
 
+// Pulled in after the extern "C" forward decls so the inline helper sees
+// `ggml_backend_load*` declarations.
+#include "common/backend_loader.hpp"
+
 namespace nb = nanobind;
 using namespace nb::literals;
 
@@ -597,27 +601,7 @@ NB_MODULE(_whisper_native, m) {
     // Module-level functions
     // -------------------------------------------------------------------------
     m.def("ggml_backend_load_all", [](){
-        // Mirror the Python-side backend discovery used by the llama module.
-        nb::module_ os = nb::module_::import_("os");
-        nb::module_ backend_dl = nb::module_::import_("inferna._internal.backend_dl");
-        nb::object __file__ = nb::module_::import_("inferna.whisper.whisper_cpp").attr("__file__");
-        std::string this_file = nb::cast<std::string>(__file__);
-        std::string this_dir  = nb::cast<std::string>(os.attr("path").attr("dirname")(
-            os.attr("path").attr("abspath")(this_file)));
-        std::string llama_dir = nb::cast<std::string>(os.attr("path").attr("join")(
-            os.attr("path").attr("dirname")(this_dir), "llama"));
-        if (nb::cast<bool>(os.attr("path").attr("isdir")(llama_dir))) {
-            ggml_backend_load_all_from_path(llama_dir.c_str());
-        } else {
-            ggml_backend_load_all_from_path(this_dir.c_str());
-        }
-        std::string site = nb::cast<std::string>(
-            os.attr("path").attr("dirname")(os.attr("path").attr("dirname")(this_dir)));
-        nb::object paths = backend_dl.attr("libs_to_load")(site);
-        for (nb::handle p : paths) {
-            std::string sp = nb::cast<std::string>(p);
-            ggml_backend_load(sp.c_str());
-        }
+        inferna::load_all_backends("inferna.whisper._whisper_native");
     }, "Load all available ggml backends (CUDA, Metal, Vulkan, etc.).");
 
     m.def("disable_logging", [](){

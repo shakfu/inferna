@@ -3,6 +3,11 @@ name: build-gpu-wheels
 permissions:
   contents: read
 
+# Single source of truth for cibuildwheel — referenced as
+# ${{ env.CIBW_VERSION }} below so per-job pins cannot drift.
+env:
+  CIBW_VERSION: "3.4.0"
+
 on:
   workflow_dispatch:
     inputs:
@@ -96,7 +101,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-cuda-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels.yml') }}
+          key: deps-cuda-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -104,7 +109,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==3.4.0
+        run: pip install "cibuildwheel==${{ env.CIBW_VERSION }}"
 
       - name: Set CCACHE_DIR to workspace
         run: echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
@@ -142,8 +147,7 @@ jobs:
             ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }} &&
             touch /project/thirdparty/.deps-complete
           CIBW_BEFORE_BUILD_LINUX: >
-            sed -i 's/^name = "inferna"/name = "inferna-cuda12"/' {project}/pyproject.toml &&
-            grep -q '^name = "inferna-cuda12"' {project}/pyproject.toml || { echo "ERROR: sed rename to inferna-cuda12 failed"; exit 1; } &&
+            cd {project} && python scripts/ci_rename_package.py inferna-cuda12 &&
             cd {project} && python scripts/manage.py write_build_config
           CIBW_ENVIRONMENT_LINUX: >
             GGML_CUDA=1
@@ -207,7 +211,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-rocm-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels.yml') }}
+          key: deps-rocm-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -215,7 +219,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==3.4.0
+        run: pip install "cibuildwheel==${{ env.CIBW_VERSION }}"
 
       - name: Set CCACHE_DIR to workspace
         run: echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
@@ -256,8 +260,7 @@ jobs:
             ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }} &&
             touch /project/thirdparty/.deps-complete
           CIBW_BEFORE_BUILD_LINUX: >
-            sed -i 's/^name = "inferna"/name = "inferna-rocm"/' {project}/pyproject.toml &&
-            grep -q '^name = "inferna-rocm"' {project}/pyproject.toml || { echo "ERROR: sed rename to inferna-rocm failed"; exit 1; } &&
+            cd {project} && python scripts/ci_rename_package.py inferna-rocm &&
             cd {project} && python scripts/manage.py write_build_config
           CIBW_ENVIRONMENT_LINUX: >
             GGML_NATIVE=OFF
@@ -321,7 +324,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-sycl-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels.yml') }}
+          key: deps-sycl-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -329,7 +332,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==3.4.0
+        run: pip install "cibuildwheel==${{ env.CIBW_VERSION }}"
 
       - name: Set CCACHE_DIR to workspace
         run: echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
@@ -366,8 +369,7 @@ jobs:
             ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }} &&
             touch /project/thirdparty/.deps-complete
           CIBW_BEFORE_BUILD_LINUX: >
-            sed -i 's/^name = "inferna"/name = "inferna-sycl"/' {project}/pyproject.toml &&
-            grep -q '^name = "inferna-sycl"' {project}/pyproject.toml || { echo "ERROR: sed rename to inferna-sycl failed"; exit 1; } &&
+            cd {project} && python scripts/ci_rename_package.py inferna-sycl &&
             cd {project} && python scripts/manage.py write_build_config
           CIBW_ENVIRONMENT_LINUX: >
             GGML_NATIVE=OFF
@@ -427,7 +429,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-vulkan-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels.yml') }}
+          key: deps-vulkan-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -435,7 +437,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==3.4.0
+        run: pip install "cibuildwheel==${{ env.CIBW_VERSION }}"
 
       - name: Set CCACHE_DIR to workspace
         run: echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
@@ -476,8 +478,7 @@ jobs:
             ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }} &&
             touch /project/thirdparty/.deps-complete
           CIBW_BEFORE_BUILD_LINUX: >
-            sed -i 's/^name = "inferna"/name = "inferna-vulkan"/' {project}/pyproject.toml &&
-            grep -q '^name = "inferna-vulkan"' {project}/pyproject.toml || { echo "ERROR: sed rename to inferna-vulkan failed"; exit 1; } &&
+            cd {project} && python scripts/ci_rename_package.py inferna-vulkan &&
             cd {project} && python scripts/manage.py write_build_config
           CIBW_ENVIRONMENT_LINUX: >
             GGML_NATIVE=OFF
@@ -528,7 +529,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-cuda-windows-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels.yml') }}
+          key: deps-cuda-windows-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels.yml') }}
 
       - name: Install CUDA Toolkit 12.4
         uses: Jimver/cuda-toolkit@v0.2.21
@@ -551,7 +552,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==3.4.0
+        run: pip install "cibuildwheel==${{ env.CIBW_VERSION }}"
 
       - name: Build CUDA wheels
         run: python -m cibuildwheel --output-dir wheelhouse
@@ -614,7 +615,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-vulkan-windows-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels.yml') }}
+          key: deps-vulkan-windows-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels.yml') }}
 
       - name: Install Vulkan SDK
         shell: pwsh
@@ -638,7 +639,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==3.4.0
+        run: pip install "cibuildwheel==${{ env.CIBW_VERSION }}"
 
       - name: Build Vulkan wheels
         run: python -m cibuildwheel --output-dir wheelhouse
@@ -697,7 +698,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-vulkan-macos-intel-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', '.github/workflows/build-gpu-wheels.yml') }}
+          key: deps-vulkan-macos-intel-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/build-gpu-wheels.yml') }}
 
       - name: Install Vulkan SDK
         run: |
@@ -715,7 +716,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==3.4.0
+        run: pip install "cibuildwheel==${{ env.CIBW_VERSION }}"
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -729,8 +730,7 @@ jobs:
           CIBW_ARCHS_MACOS: x86_64
           CIBW_BEFORE_BUILD_MACOS: >
             pip install delocate wheel &&
-            sed -i '' 's/^name = "inferna"/name = "inferna-vulkan"/' {project}/pyproject.toml &&
-            grep -q '^name = "inferna-vulkan"' {project}/pyproject.toml || { echo "ERROR: sed rename to inferna-vulkan failed"; exit 1; } &&
+            cd {project} && python scripts/ci_rename_package.py inferna-vulkan &&
             cd {project} &&
             python scripts/manage.py build --all --deps-only --no-sd-examples
             ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }} &&
@@ -1014,6 +1014,55 @@ jobs:
           print('SYCL CPU inference smoke test passed')
           "
 
+      # -------------------------------------------------------------------
+      # CPU-fallback inference smoke for the remaining GPU backends. Even
+      # without a GPU on the runner, every ggml build registers the CPU
+      # backend, so `n_gpu_layers=0` should produce a real decode. Catches
+      # the regression "wheel imports but cannot construct an LLM" that
+      # the import-only smoke missed. continue-on-error: a backend that
+      # refuses to initialize without a GPU device is an acceptable miss
+      # here, but a hard crash during decode is not.
+      # -------------------------------------------------------------------
+      - name: Cache test model (CPU-fallback)
+        if: steps.check.outputs.skip != 'true' && matrix.backend != 'sycl'
+        id: cache-model-cpu
+        uses: actions/cache@v5
+        with:
+          path: models/Llama-3.2-1B-Instruct-Q8_0.gguf
+          key: test-model-llama-3.2-1b-q8
+
+      - name: Download test model (CPU-fallback)
+        if: steps.check.outputs.skip != 'true' && matrix.backend != 'sycl' && steps.cache-model-cpu.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p models
+          curl -sL https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf \
+            -o models/Llama-3.2-1B-Instruct-Q8_0.gguf
+
+      - name: Smoke test - CPU-fallback 1-token inference
+        if: steps.check.outputs.skip != 'true' && matrix.backend != 'sycl'
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source smoke-venv/Scripts/activate
+          else
+            source smoke-venv/bin/activate
+          fi
+          python -c "
+          from inferna import complete
+          response = complete(
+              'Hi',
+              model_path='models/Llama-3.2-1B-Instruct-Q8_0.gguf',
+              n_ctx=128,
+              max_tokens=1,
+              n_gpu_layers=0,
+          )
+          print(f'CPU-fallback decode response: {response!r}')
+          assert len(str(response).strip()) > 0, 'Empty response'
+          print('CPU-fallback inference smoke test passed')
+          "
+
   # ---------------------------------------------------------------------------
   # Collect and optionally publish to GitHub Pages wheel index
   # ---------------------------------------------------------------------------
@@ -1132,7 +1181,7 @@ jobs:
           find artifacts -name "*.whl" -exec cp {} dist/ \;
           echo "=== Wheels to upload ==="
           ls -lh dist/
-          gh release create "${TAG}" --prerelease --title "inferna ${TAG}" 2>/dev/null || true
+          (gh release view "${TAG}" >/dev/null 2>&1 && echo "Release ${TAG} already exists") || gh release create "${TAG}" --prerelease --title "inferna ${TAG}"
           gh release upload "${TAG}" dist/*.whl --clobber
 
   # ---------------------------------------------------------------------------
