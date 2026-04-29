@@ -110,6 +110,8 @@ jobs:
             runs-on: ubuntu-latest
           - os: macos-arm
             runs-on: macos-latest
+          - os: macos-intel
+            runs-on: macos-15-intel
           - os: windows-intel
             runs-on: windows-latest
 
@@ -167,6 +169,12 @@ jobs:
           fi
           pip install "${{ steps.find-wheel.outputs.wheel }}"
 
+      # Source checkout — needed both for the centralized smoke script
+      # (scripts/ci_smoke.py) and the pytest run further down.
+      - uses: actions/checkout@v6
+        with:
+          path: src-checkout
+
       - name: Smoke test - imports
         shell: bash
         run: |
@@ -175,43 +183,7 @@ jobs:
           else
             source smoke-venv/bin/activate
           fi
-          python -c "
-          import inferna
-          print(f'inferna {inferna.__version__} imported successfully')
-
-          # Core API imports
-          from inferna import LLM, complete, chat, AsyncLLM
-          from inferna import batch_generate, BatchGenerator
-          from inferna import estimate_gpu_layers, estimate_memory_usage
-          from inferna import GenerationConfig, Response
-
-          # nanobind extension imports
-          from inferna.llama import llama_cpp
-          print('llama_cpp extension loaded')
-
-          # Agent framework
-          from inferna.agents import ReActAgent, ConstrainedAgent, ContractAgent, tool
-          print('agents loaded')
-
-          # Integrations
-          from inferna.integrations.openai_compat import OpenAICompatibleClient
-          print('integrations loaded')
-
-          # Optional extensions (may not be built on all platforms)
-          try:
-              from inferna.whisper import whisper_cpp
-              print('whisper_cpp extension loaded')
-          except ImportError as e:
-              print(f'whisper_cpp not available: {e}')
-
-          try:
-              from inferna.sd import stable_diffusion
-              print('stable_diffusion extension loaded')
-          except ImportError as e:
-              print(f'stable_diffusion not available: {e}')
-
-          print('All imports passed')
-          "
+          python src-checkout/scripts/ci_smoke.py
 
       - name: Smoke test - inference
         shell: bash
@@ -234,13 +206,6 @@ jobs:
           assert len(str(response).strip()) > 0, 'Empty response from model'
           print('Inference smoke test passed')
           "
-
-      # Check out the source so we have access to the test suite. The
-      # installed wheel above is what gets exercised — pytest just provides
-      # the test definitions.
-      - uses: actions/checkout@v6
-        with:
-          path: src-checkout
 
       - name: Run pytest against installed wheel
         shell: bash

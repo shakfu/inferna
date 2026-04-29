@@ -8,11 +8,6 @@ name: build-gpu-wheels-abi3
 permissions:
   contents: read
 
-# Single source of truth for cibuildwheel — referenced as
-# ${{ env.CIBW_VERSION }} below so per-job pins cannot drift.
-env:
-  CIBW_VERSION: "3.4.1"
-
 on:
   workflow_dispatch:
     inputs:
@@ -76,6 +71,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Single source of truth for cibuildwheel — referenced as
+  # ${{ env.CIBW_VERSION }} below so per-job pins cannot drift.
+  CIBW_VERSION: "3.4.1"
   CIBW_BUILD_VERBOSITY: 1
   # abi3: a single build per platform produces a cp312-abi3 wheel
   # valid for CPython 3.12+.

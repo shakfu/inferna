@@ -348,19 +348,19 @@ cli:
 		--no-display-prompt 2> /dev/null
 
 test-cli:
-	@uv run python -m inferna.cli -m $(MODEL) \
-		--no-cnv -c 32 \
+	@uv run python -m inferna generate -m $(MODEL) \
+		-c 32 \
 		-p "When did the French Revolution start?"
 
 test-chat:
-	@uv run python -m inferna.chat -m $(MODEL) -c 32 -ngl 99
+	@uv run python -m inferna chat -m $(MODEL) -c 32 -ngl 99
 
 test-server:
-	@uv run python -m inferna.llama.server \
+	@uv run python -m inferna server \
 		-m $(MODEL)
 
 test-tts:
-	@uv run python -m inferna.tts \
+	@uv run python -m inferna tts \
 		-m models/tts.gguf \
 		-mv models/WavTokenizer-Large-75-F16.gguf \
 		-p "Hello World"
@@ -372,18 +372,6 @@ test-whisper:
 # macOS-only targets
 # =============================================================================
 ifeq ($(IS_MACOS),1)
-
-LLAMACPP_LIBS := \
-	$(LLAMACPP)/lib/libllama-common.a \
-	$(LLAMACPP)/lib/libllama.a \
-	$(LLAMACPP)/lib/libggml-base.a \
-	$(LLAMACPP)/lib/libggml.a \
-	$(LLAMACPP)/lib/libggml-blas.a \
-	$(LLAMACPP)/lib/libggml-cpu.a \
-	$(LLAMACPP)/lib/libggml-metal.a \
-	$(LLAMACPP)/lib/libmtmd.a
-
-MACOS_FRAMEWORKS := -framework Foundation -framework Accelerate -framework Metal -framework MetalKit
 
 .PHONY: test-llama-tts test-model test-llava test-lora
 

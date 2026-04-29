@@ -1,6 +1,6 @@
 # Patches
 
-Proposed upstream patches for vendored C++ dependencies. These are not currently applied locally — inferna handles the affected error cases in its Cython wrapper layer instead.
+Proposed upstream patches for vendored C++ dependencies. These are not currently applied locally — inferna handles the affected error cases in its nanobind wrapper layer instead.
 
 ## stable-diffusion.cpp
 
@@ -10,4 +10,4 @@ Proposed upstream patches for vendored C++ dependencies. These are not currently
 
 **Problem:** `alloc_params_buffer()` in `GGMLRunner` (ggml_extend.hpp) returns `bool`, but all wrapper classes in `DiffusionModel`, `Conditioner`, `T5Embedder`, and `LLM` declare their overrides as `void`, discarding the return value. The call sites in `stable-diffusion.cpp` also never check the result. When allocation fails (e.g. CUDA out of memory), execution silently continues with unallocated tensors, producing garbage output.
 
-**Current inferna workaround:** The Cython wrapper (`stable_diffusion.pyx`) validates each generated `SDImage.is_valid` and raises `RuntimeError` when all images have invalid data.
+**Current inferna workaround:** The nanobind wrapper (`src/inferna/sd/_sd_native.cpp` + `src/inferna/sd/stable_diffusion.py`) validates each generated `SDImage.is_valid` and raises `RuntimeError` when all images have invalid data.

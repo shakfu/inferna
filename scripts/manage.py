@@ -138,19 +138,15 @@ PLATFORM = platform.system()
 ARCH = platform.machine()
 PY_VER_MINOR = sys.version_info.minor
 
-STABLE_BUILD = getenv("STABLE_BUILD", True)
-if STABLE_BUILD:
-    # known to build and work without errors, 100% tests pass
-    LLAMACPP_VERSION = "b8931"
-    WHISPERCPP_VERSION = "v1.8.4"
-    SDCPP_VERSION = "master-587-b8bdffc"
-    SQLITEVECTOR_VERSION = "0.9.95"
-else:
-    # experimental bleeding-edge builds ` = ""` means get latest
-    LLAMACPP_VERSION = "b8931"
-    WHISPERCPP_VERSION = "v1.8.4"
-    SDCPP_VERSION = "master-587-b8bdffc"
-    SQLITEVECTOR_VERSION = "0.9.95"
+# Pinned upstream tags for the three vendored C++ projects + the
+# sqlite-vector helper. Override individually via env (e.g.
+# LLAMACPP_VERSION=master) if you need to test against a newer revision.
+# (Previously gated behind a STABLE_BUILD flag whose two branches carried
+# identical values — the flag was a no-op.)
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b8931")
+WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.8.4")
+SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-587-b8bdffc")
+SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "0.9.95")
 if PLATFORM == "Darwin":
     # Source of truth: matches pyproject.toml [tool.cibuildwheel.macos]
     # environment.MACOSX_DEPLOYMENT_TARGET and Makefile.
@@ -1124,7 +1120,10 @@ class LlamaCppBuilder(GgmlBuilder):
     # llama.cpp installs ggml as a split build: the unified `ggml` plus
     # the `ggml-base` / `ggml-cpu` partials.
     base_libs: list[str] = ["ggml", "ggml-base", "ggml-cpu"]
-    extra_libs: list[str] = ["llama", "llama-common", "mtmd"]
+    # `llama-common` was previously listed but CMake never linked the
+    # corresponding `LIB_LLAMA_COMMON` archive, and grep finds no
+    # `common_*` symbols referenced from the wrapper sources. Dropped.
+    extra_libs: list[str] = ["llama", "mtmd"]
 
     def get_backend_cmake_options(self) -> dict[str, Any]:
         """CMake options for llama.cpp (GGML_* flag names)."""
@@ -2832,11 +2831,6 @@ class Application(ShellCmd, metaclass=MetaCommander):
         # Glob patterns
         glob_pats = [".*_cache", "*.egg-info", "__pycache__", ".DS_Store"]
 
-        # No generated Cython .cpp files anymore — bindings are hand-written
-        # nanobind sources. List left empty for downstream code that still
-        # iterates it; safe to remove the loop below in a future cleanup.
-        cython_cpp_files: list = []
-
         # Clean directories
         for t in dir_targets:
             self.remove(cwd / t, silent=not verbose)
@@ -2858,11 +2852,6 @@ class Application(ShellCmd, metaclass=MetaCommander):
             self.remove(so, silent=not verbose)
         for so in src.glob("**/*.so"):
             self.remove(so, silent=not verbose)
-
-        # Clean generated Cython .cpp files
-        for cpp in cython_cpp_files:
-            if cpp.exists():
-                self.remove(cpp, silent=not verbose)
 
         # Clean dynamic/ from thirdparty deps
         thirdparty = cwd / "thirdparty"
