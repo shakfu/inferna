@@ -31,6 +31,7 @@ from inferna.llama import llama_cpp as _ll
 # Helpers
 # =============================================================================
 
+
 def _new_model(model_path: str) -> _ll.LlamaModel:
     params = _ll.LlamaModelParams()
     params.n_gpu_layers = 0
@@ -47,6 +48,7 @@ def _new_ctx(model: _ll.LlamaModel) -> _ll.LlamaContext:
 # =============================================================================
 # A2 / lifecycle: LlamaContext post-close
 # =============================================================================
+
 
 class TestLlamaContextPostClose:
     """Calls after close() must raise RuntimeError, not crash."""
@@ -112,6 +114,7 @@ class TestLlamaContextPostClose:
 # A2: WhisperContext post-close
 # =============================================================================
 
+
 class TestWhisperContextPostClose:
     @pytest.fixture(scope="class")
     def whisper_model_path(self) -> str:
@@ -122,6 +125,7 @@ class TestWhisperContextPostClose:
 
     def test_is_valid_flips(self, whisper_model_path):
         from inferna.whisper.whisper_cpp import WhisperContext
+
         ctx = WhisperContext(model_path=whisper_model_path)
         assert ctx.is_valid is True
         ctx.close()
@@ -129,6 +133,7 @@ class TestWhisperContextPostClose:
 
     def test_n_vocab_after_close_raises(self, whisper_model_path):
         from inferna.whisper.whisper_cpp import WhisperContext
+
         ctx = WhisperContext(model_path=whisper_model_path)
         ctx.close()
         with pytest.raises(RuntimeError, match="closed"):
@@ -137,6 +142,7 @@ class TestWhisperContextPostClose:
     def test_full_after_close_raises(self, whisper_model_path):
         import numpy as np
         from inferna.whisper.whisper_cpp import WhisperContext
+
         ctx = WhisperContext(model_path=whisper_model_path)
         ctx.close()
         samples = np.zeros(16000, dtype=np.float32)
@@ -147,6 +153,7 @@ class TestWhisperContextPostClose:
 # =============================================================================
 # A1: LlamaVocab.tokenize retries on undersized buffer
 # =============================================================================
+
 
 class TestVocabTokenizeRetry:
     """A long input would have been refused by the old `min(..., n_vocab)` cap."""
@@ -162,8 +169,10 @@ class TestVocabTokenizeRetry:
             assert len(tokens) > 0
             # Round-trip sanity: detokenizing the tokens should be non-empty.
             out = vocab.detokenize(
-                tokens, text_len_max=len(text) + 1024,
-                remove_special=False, unparse_special=False,
+                tokens,
+                text_len_max=len(text) + 1024,
+                remove_special=False,
+                unparse_special=False,
             )
             assert len(out) > 0
         finally:
@@ -174,6 +183,7 @@ class TestVocabTokenizeRetry:
 # =============================================================================
 # A12: LlamaSampler.add_grammar with invalid grammar
 # =============================================================================
+
 
 class TestSamplerNullCheck:
     """Inner llama_sampler_init_grammar returns NULL on parse failure;
@@ -195,6 +205,7 @@ class TestSamplerNullCheck:
 # =============================================================================
 # A13: KvOverride.key / val_str length validation
 # =============================================================================
+
 
 class TestKvOverrideLength:
     def test_oversized_key_raises(self):
@@ -221,6 +232,7 @@ class TestKvOverrideLength:
 # A4: Progress callback abort semantics
 # =============================================================================
 
+
 class TestProgressCallbackAbort:
     """Handler returning False or raising must abort llama_model_load_from_file."""
 
@@ -244,6 +256,7 @@ class TestProgressCallbackAbort:
 
         def bad(p):
             raise KeyboardInterrupt("simulated user cancel")
+
         params.progress_callback = bad
         with pytest.raises(Exception):
             _ll.LlamaModel(path_model=model_path, params=params, verbose=False)
@@ -265,22 +278,35 @@ _skip_no_gemma4 = pytest.mark.skipif(
 @_skip_no_gemma4
 class TestMtmdContextPostClose:
     """A7: scattered `if (!s.ptr) throw` checks were replaced with a real
-    `ensure_valid()` + `close()` + `is_valid` lifecycle. Pin that here."""
+    `ensure_valid()` + `close()` + `is_valid` lifecycle. Pin that here.
 
-    @pytest.fixture
-    def mtmd_ctx_pair(self):
+    The model fixture is class-scoped because gemma-4 weights load takes
+    ~10s and we'd otherwise pay that 4x. Each test creates its own
+    *MtmdContext* (cheap once the model is in memory) so the close() in
+    one test cannot affect the next.
+    """
+
+    @pytest.fixture(scope="class")
+    def shared_model(self):
         import gc
-        from inferna.llama.llama_cpp import (
-            LlamaModel, LlamaModelParams, MtmdContext, MtmdContextParams,
-        )
+        from inferna.llama.llama_cpp import LlamaModel, LlamaModelParams
+
         params = LlamaModelParams()
         params.n_gpu_layers = 0
         model = LlamaModel(str(_GEMMA4_MODEL), params, verbose=False)
-        ctx_params = MtmdContextParams(use_gpu=False, n_threads=2)
-        ctx = MtmdContext(str(_GEMMA4_MMPROJ), model, ctx_params)
-        yield ctx, model
-        del ctx
+        yield model
         del model
+        gc.collect()
+
+    @pytest.fixture
+    def mtmd_ctx_pair(self, shared_model):
+        import gc
+        from inferna.llama.llama_cpp import MtmdContext, MtmdContextParams
+
+        ctx_params = MtmdContextParams(use_gpu=False, n_threads=2)
+        ctx = MtmdContext(str(_GEMMA4_MMPROJ), shared_model, ctx_params)
+        yield ctx, shared_model
+        del ctx
         gc.collect()
 
     def test_is_valid_flips(self, mtmd_ctx_pair):
@@ -314,3 +340,41 @@ class TestMtmdContextPostClose:
         ctx.close()
         ctx.close()  # must not raise / crash
         assert ctx.is_valid is False
+
+
+# =============================================================================
+# EmbeddedServer signal-handler retention
+# =============================================================================
+
+
+class TestEmbeddedServerNoSignalRetention:
+    """`signal.signal(SIGINT, self._signal_handler)` retained the bound
+    method, which kept the EmbeddedServer (and its Manager / LlamaModel /
+    LlamaContext / LlamaSampler) alive until interpreter shutdown — at
+    which point Metal's GGML_ASSERT([rsets->data count] == 0) fired
+    because LlamaContext hadn't been freed before the Metal device.
+
+    `stop()` now restores the previous signal handlers; this test pins
+    that fix by checking the server is collectable after stop()."""
+
+    def test_server_released_after_stop(self, model_path):
+        import gc
+        import weakref
+        from inferna.llama.server.python import ServerConfig
+        from inferna.llama.server.embedded import EmbeddedServer
+
+        config = ServerConfig(
+            model_path=model_path,
+            host="127.0.0.1",
+            port=18099,
+            n_ctx=128,
+        )
+        server = EmbeddedServer(config)
+        wref = weakref.ref(server)
+        server.start()
+        server.stop()
+        del server
+        gc.collect()
+        assert wref() is None, (
+            "EmbeddedServer is still alive after stop() + del — signal handler is likely retaining it"
+        )

@@ -14,12 +14,18 @@ import os
 import re
 import struct
 import time
-from typing import Optional
+from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 # Imported lazily inside callers to avoid an import cycle through llama_cpp.py.
 # from . import _llama_native as _N
+#
+# nanobind-bound `LlamaBatch` has no static type stub, so mypy sees it
+# as `Any`. Public batch-pool helpers below are typed `Any` for that
+# reason — honest about the boundary, and downstream callers still get
+# correct runtime behavior. `# type: ignore[no-any-return]` would be
+# noisier without adding information.
 
 
 # =============================================================================
@@ -62,7 +68,7 @@ class TokenMemoryPool:
         if len(self._pools[size]) < self._max_pool_size:
             self._pools[size].append(token_list)
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, object]:
         return {
             "pool_sizes": {s: len(p) for s, p in self._pools.items()},
             "usage_count": dict(self._usage_count),
@@ -74,7 +80,7 @@ class TokenMemoryPool:
 _global_token_pool = TokenMemoryPool()
 
 
-def get_token_pool_stats() -> dict:
+def get_token_pool_stats() -> dict[str, object]:
     return _global_token_pool.get_stats()
 
 
@@ -83,19 +89,25 @@ def reset_token_pool() -> None:
     _global_token_pool = TokenMemoryPool()
 
 
+# Pool key shape: (n_tokens, embd, n_seq_max). LlamaBatch is a native
+# nanobind-bound class with no public type stub, so it stays Any here.
+_BatchKey = tuple[int, int, int]
+
+
 class BatchMemoryPool:
     """Memory pool for efficient LlamaBatch reuse."""
 
     def __init__(self, max_pool_size: int = 5, max_batch_size: int = 512) -> None:
-        self._pools: dict[tuple, list] = {}
-        self._usage_count: dict[tuple, int] = {}
+        self._pools: dict[_BatchKey, list[Any]] = {}
+        self._usage_count: dict[_BatchKey, int] = {}
         self._max_pool_size = max_pool_size
         self._max_batch_size = max_batch_size
 
-    def get_batch(self, n_tokens: int, embd: int, n_seq_max: int):
+    def get_batch(self, n_tokens: int, embd: int, n_seq_max: int) -> Any:
         # Imported lazily to avoid an import cycle.
         from . import _llama_native as _N
-        key = (n_tokens, embd, n_seq_max)
+
+        key: _BatchKey = (n_tokens, embd, n_seq_max)
         if n_tokens > self._max_batch_size:
             return _N.LlamaBatch(n_tokens=n_tokens, embd=embd, n_seq_max=n_seq_max)
         self._usage_count[key] = self._usage_count.get(key, 0) + 1
@@ -108,13 +120,13 @@ class BatchMemoryPool:
             return batch
         return _N.LlamaBatch(n_tokens=n_tokens, embd=embd, n_seq_max=n_seq_max)
 
-    def return_batch(self, batch) -> None:
+    def return_batch(self, batch: Any) -> None:
         # Pool key is the construction-time capacity, not the live token count.
         # LlamaBatch exposes both as `_n_tokens` and `n_tokens_capacity`.
-        n_tokens = batch._n_tokens
-        embd = batch.embd
-        n_seq_max = batch.n_seq_max
-        key = (n_tokens, embd, n_seq_max)
+        n_tokens: int = batch._n_tokens
+        embd: int = batch.embd
+        n_seq_max: int = batch.n_seq_max
+        key: _BatchKey = (n_tokens, embd, n_seq_max)
         if n_tokens > self._max_batch_size:
             return
         if key not in self._pools:
@@ -122,7 +134,7 @@ class BatchMemoryPool:
         if len(self._pools[key]) < self._max_pool_size:
             self._pools[key].append(batch)
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, object]:
         return {
             "pool_configs": {str(c): len(p) for c, p in self._pools.items()},
             "usage_count": {str(c): n for c, n in self._usage_count.items()},
@@ -134,7 +146,7 @@ class BatchMemoryPool:
 _global_batch_pool = BatchMemoryPool()
 
 
-def get_batch_pool_stats() -> dict:
+def get_batch_pool_stats() -> dict[str, object]:
     return _global_batch_pool.get_stats()
 
 
@@ -143,12 +155,12 @@ def reset_batch_pool() -> None:
     _global_batch_pool = BatchMemoryPool()
 
 
-def return_batch_to_pool(batch) -> None:
+def return_batch_to_pool(batch: Any) -> None:
     """Return a batch to the global memory pool for reuse."""
     _global_batch_pool.return_batch(batch)
 
 
-def get_pooled_batch(n_tokens: int, embd: int = 0, n_seq_max: int = 1):
+def get_pooled_batch(n_tokens: int, embd: int = 0, n_seq_max: int = 1) -> Any:
     """Get a batch from the global memory pool (or create a new one)."""
     return _global_batch_pool.get_batch(n_tokens, embd, n_seq_max)
 
@@ -167,7 +179,7 @@ def _get_cache_dir() -> str:
 def _split_repo_tag(hf_repo_with_tag: str) -> tuple[str, str]:
     if ":" in hf_repo_with_tag:
         idx = hf_repo_with_tag.rfind(":")
-        return hf_repo_with_tag[:idx], hf_repo_with_tag[idx + 1:]
+        return hf_repo_with_tag[:idx], hf_repo_with_tag[idx + 1 :]
     return hf_repo_with_tag, "latest"
 
 
@@ -175,7 +187,12 @@ def _get_model_endpoint() -> str:
     return os.environ.get("LLAMA_CACHE_MODEL_ENDPOINT", "https://huggingface.co")
 
 
-def _url_request(url, headers=None, method="GET", timeout=30):
+def _url_request(
+    url: str,
+    headers: Optional[dict[str, str]] = None,
+    method: str = "GET",
+    timeout: int = 30,
+) -> tuple[int, dict[str, str], bytes]:
     req = Request(url, method=method)
     if headers:
         for k, v in headers.items():
@@ -189,7 +206,7 @@ def _url_request(url, headers=None, method="GET", timeout=30):
         return -1, {}, b""
 
 
-def get_hf_file(hf_repo_with_tag: str, bearer_token: str = "", offline: bool = False) -> dict:
+def get_hf_file(hf_repo_with_tag: str, bearer_token: str = "", offline: bool = False) -> dict[str, str]:
     """Resolve a HuggingFace repo+tag to its GGUF / mmproj filenames."""
     repo, tag = _split_repo_tag(hf_repo_with_tag)
     endpoint = _get_model_endpoint()
@@ -225,7 +242,12 @@ def get_hf_file(hf_repo_with_tag: str, bearer_token: str = "", offline: bool = F
     return {"repo": repo, "gguf_file": gguf_file, "mmproj_file": mmproj_file}
 
 
-def _download_file(url, dest_path, headers=None, max_retries=3) -> bool:
+def _download_file(
+    url: str,
+    dest_path: str,
+    headers: Optional[dict[str, str]] = None,
+    max_retries: int = 3,
+) -> bool:
     """Download with ETag caching, resume support, and retry."""
     if headers is None:
         headers = {}
@@ -260,7 +282,7 @@ def _download_file(url, dest_path, headers=None, max_retries=3) -> bool:
             status = resp.status
             if status not in (200, 206):
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     continue
                 return False
 
@@ -280,7 +302,7 @@ def _download_file(url, dest_path, headers=None, max_retries=3) -> bool:
 
         except (HTTPError, URLError, OSError):
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
             else:
                 return False
 
@@ -337,20 +359,20 @@ def download_model(
     if not model_path:
         return False
 
-    headers = {}
+    headers: dict[str, str] = {}
     if bearer_token:
         headers["Authorization"] = f"Bearer {bearer_token}"
     os.makedirs(os.path.dirname(os.path.abspath(model_path)), exist_ok=True)
     return _download_file(url, model_path, headers=headers)
 
 
-def list_cached_models() -> list[dict]:
+def list_cached_models() -> list[dict[str, object]]:
     """List all models in the local llama.cpp cache."""
     cache_dir = _get_cache_dir()
     result = []
     for manifest_path in _glob.glob(os.path.join(cache_dir, "manifest=*.json")):
         basename = os.path.basename(manifest_path)
-        name = basename[len("manifest="):-len(".json")]
+        name = basename[len("manifest=") : -len(".json")]
         parts = name.split("=")
         if len(parts) >= 3:
             user, model, tag = parts[0], parts[1], parts[2]
@@ -358,13 +380,15 @@ def list_cached_models() -> list[dict]:
             user, model, tag = parts[0], parts[1], "latest"
         else:
             continue
-        result.append({
-            "manifest_path": manifest_path,
-            "user": user,
-            "model": model,
-            "tag": tag,
-            "size": 0,
-        })
+        result.append(
+            {
+                "manifest_path": manifest_path,
+                "user": user,
+                "model": model,
+                "tag": tag,
+                "size": 0,
+            }
+        )
     return result
 
 
@@ -372,16 +396,13 @@ def resolve_docker_model(docker_repo: str) -> str:
     """Resolve and download a model from Docker Hub."""
     if ":" in docker_repo:
         idx = docker_repo.rfind(":")
-        repo, tag = docker_repo[:idx], docker_repo[idx + 1:]
+        repo, tag = docker_repo[:idx], docker_repo[idx + 1 :]
     else:
         repo, tag = docker_repo, "latest"
     if "/" not in repo:
         repo = f"ai/{repo}"
 
-    auth_url = (
-        f"https://auth.docker.io/token?service=registry.docker.io"
-        f"&scope=repository:{repo}:pull"
-    )
+    auth_url = f"https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull"
     status, _, body = _url_request(auth_url)
     if status < 200 or status >= 400:
         raise RuntimeError(f"Docker auth failed for {repo}: HTTP {status}")
@@ -392,10 +413,7 @@ def resolve_docker_model(docker_repo: str) -> str:
 
     headers = {
         "Authorization": f"Bearer {docker_token}",
-        "Accept": (
-            "application/vnd.docker.distribution.manifest.v2+json,"
-            "application/vnd.oci.image.manifest.v1+json"
-        ),
+        "Accept": ("application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json"),
     }
     manifest_url = f"https://registry-1.docker.io/v2/{repo}/manifests/{tag}"
     status, _, body = _url_request(manifest_url, headers=headers)
@@ -440,7 +458,10 @@ _NGRAM_STATIC = 2
 _TOKEN_NULL = -1
 
 
-def _make_ngram(tokens, size: int) -> tuple:
+_Ngram = tuple[int, ...]
+
+
+def _make_ngram(tokens: list[int], size: int) -> _Ngram:
     result = list(tokens[:size])
     while len(result) < _NGRAM_MAX:
         result.append(_TOKEN_NULL)
@@ -451,10 +472,16 @@ class NgramCache:
     """N-gram cache for accelerating generation with repetitive patterns."""
 
     def __init__(self) -> None:
-        self._data: dict[tuple, dict[int, int]] = {}
+        self._data: dict[_Ngram, dict[int, int]] = {}
 
-    def update(self, tokens, ngram_min: int = 2, ngram_max: int = 4,
-               nnew: Optional[int] = None, print_progress: bool = False) -> None:
+    def update(
+        self,
+        tokens: list[int],
+        ngram_min: int = 2,
+        ngram_max: int = 4,
+        nnew: Optional[int] = None,
+        print_progress: bool = False,
+    ) -> None:
         if nnew is None:
             nnew = len(tokens)
         ngram_min = max(_NGRAM_MIN, min(ngram_min, _NGRAM_MAX))
@@ -464,7 +491,7 @@ class NgramCache:
         for ngram_size in range(ngram_min, ngram_max + 1):
             i_start = max(n - nnew, ngram_size)
             for i in range(i_start, n):
-                ngram = _make_ngram(tokens[i - ngram_size:i], ngram_size)
+                ngram = _make_ngram(tokens[i - ngram_size : i], ngram_size)
                 next_token = tokens[i]
                 part = data.get(ngram)
                 if part is None:
@@ -472,8 +499,16 @@ class NgramCache:
                 else:
                     part[next_token] = part.get(next_token, 0) + 1
 
-    def draft(self, inp, n_draft: int = 16, ngram_min: int = 2, ngram_max: int = 4,
-              context_cache=None, dynamic_cache=None, static_cache=None) -> list[int]:
+    def draft(
+        self,
+        inp: list[int],
+        n_draft: int = 16,
+        ngram_min: int = 2,
+        ngram_max: int = 4,
+        context_cache: Optional["NgramCache"] = None,
+        dynamic_cache: Optional["NgramCache"] = None,
+        static_cache: Optional["NgramCache"] = None,
+    ) -> list[int]:
         ngram_min = max(_NGRAM_MIN, min(ngram_min, _NGRAM_MAX))
         ngram_max = max(_NGRAM_MIN, min(ngram_max, _NGRAM_MAX))
         ctx_data = (context_cache if context_cache is not None else self)._data
@@ -481,9 +516,9 @@ class NgramCache:
         sta_data = (static_cache if static_cache is not None else NgramCache())._data
 
         draft_tokens: list[int] = [inp[-1]] if len(inp) > 0 else [0]
-        min_sample_lax    = [2, 2, 1, 1]
-        min_percent_lax   = [66, 50, 50, 50]
-        min_sample_strict  = [4, 3, 2, 2]
+        min_sample_lax = [2, 2, 1, 1]
+        min_percent_lax = [66, 50, 50, 50]
+        min_sample_strict = [4, 3, 2, 2]
         min_percent_strict = [75, 66, 66, 66]
 
         while len(draft_tokens) - 1 < n_draft:
@@ -506,7 +541,8 @@ class NgramCache:
                     sum_count += cnt
                     sta_part = (
                         sta_data.get(_make_ngram(combined_seq[-_NGRAM_STATIC:], _NGRAM_STATIC))
-                        if len(combined_seq) >= _NGRAM_STATIC else None
+                        if len(combined_seq) >= _NGRAM_STATIC
+                        else None
                     )
                     sta_cnt = sta_part.get(tok, 0) if sta_part else 0
                     score = cnt * max(1, sta_cnt)
@@ -516,8 +552,7 @@ class NgramCache:
                 if best_token == _TOKEN_NULL:
                     continue
                 max_count = part.get(best_token, 0)
-                if (sum_count >= min_sample_lax[idx]
-                        and 100 * max_count >= min_percent_lax[idx] * sum_count):
+                if sum_count >= min_sample_lax[idx] and 100 * max_count >= min_percent_lax[idx] * sum_count:
                     draft_tokens.append(best_token)
                     drafted = True
                     break
@@ -540,7 +575,8 @@ class NgramCache:
                     sum_count += cnt
                     sta_part = (
                         sta_data.get(_make_ngram(combined_seq[-_NGRAM_STATIC:], _NGRAM_STATIC))
-                        if len(combined_seq) >= _NGRAM_STATIC else None
+                        if len(combined_seq) >= _NGRAM_STATIC
+                        else None
                     )
                     sta_cnt = sta_part.get(tok, 0) if sta_part else 0
                     score = cnt * max(1, sta_cnt)
@@ -550,8 +586,7 @@ class NgramCache:
                 if best_token == _TOKEN_NULL:
                     continue
                 max_count = part.get(best_token, 0)
-                if (sum_count >= min_sample_strict[idx]
-                        and 100 * max_count >= min_percent_strict[idx] * sum_count):
+                if sum_count >= min_sample_strict[idx] and 100 * max_count >= min_percent_strict[idx] * sum_count:
                     draft_tokens.append(best_token)
                     drafted = True
                     break
@@ -571,9 +606,11 @@ class NgramCache:
                         if cnt > best_count:
                             best_count = cnt
                             best_token = tok
-                    if (best_token != _TOKEN_NULL
-                            and sum_count >= min_sample_lax[1]
-                            and 100 * best_count >= 50 * sum_count):
+                    if (
+                        best_token != _TOKEN_NULL
+                        and sum_count >= min_sample_lax[1]
+                        and 100 * best_count >= 50 * sum_count
+                    ):
                         draft_tokens.append(best_token)
                         continue
             break

@@ -124,10 +124,24 @@ publish-test: check
 # =============================================================================
 # Testing
 # =============================================================================
-.PHONY: test coverage memray leaks
+.PHONY: test test-fast test-slow coverage memray leaks
 
+# Full suite — every test, including slow leak/integration cycles. Use
+# `test-fast` for the fast-feedback variant and `test-slow` to run only
+# the deselected ones.
 test:
 	@uv run pytest -s --durations=50 --durations-min=1.0
+
+# Skip integration suites and tests marked @pytest.mark.slow (memory
+# leak loops, very-large generations, etc.). Targets the inner loop
+# during development; trades full coverage for ~2× faster turnaround.
+test-fast:
+	@uv run pytest -s -m "not slow and not integration" --durations=20 --durations-min=1.0
+
+# Inverse of test-fast — runs only the slow / integration tests so a
+# CI shard can split the workload across two parallel jobs.
+test-slow:
+	@uv run pytest -s -m "slow or integration" --durations=20 --durations-min=1.0
 
 coverage:
 	@uv run pytest --cov=inferna --cov-report html

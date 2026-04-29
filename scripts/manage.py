@@ -976,12 +976,16 @@ class Builder(AbstractBuilder):
             return
         try:
             actual = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=str(self.src_dir),
-                encoding="utf8", stderr=subprocess.DEVNULL,
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(self.src_dir),
+                encoding="utf8",
+                stderr=subprocess.DEVNULL,
             ).strip()
             expected = subprocess.check_output(
-                ["git", "rev-parse", self.version], cwd=str(self.src_dir),
-                encoding="utf8", stderr=subprocess.DEVNULL,
+                ["git", "rev-parse", self.version],
+                cwd=str(self.src_dir),
+                encoding="utf8",
+                stderr=subprocess.DEVNULL,
             ).strip()
         except subprocess.CalledProcessError:
             # Tag/branch not present locally (e.g. shallow clone of a

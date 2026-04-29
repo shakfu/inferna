@@ -82,12 +82,9 @@ class SqliteVectorStore(VectorStoreProtocol):
     # the rag package's __path__ to handle both layouts.
     @staticmethod
     def _resolve_extension_path() -> Path:
-        suffix = (
-            ".dylib" if sys.platform == "darwin"
-            else ".dll" if sys.platform == "win32"
-            else ".so"
-        )
+        suffix = ".dylib" if sys.platform == "darwin" else ".dll" if sys.platform == "win32" else ".so"
         from . import __path__ as _rag_path
+
         for candidate_dir in _rag_path:
             candidate = Path(candidate_dir) / f"vector{suffix}"
             if candidate.exists():

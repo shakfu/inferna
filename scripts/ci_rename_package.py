@@ -48,10 +48,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.new_name not in ALLOWED_VARIANTS:
-        sys.stderr.write(
-            f"ERROR: '{args.new_name}' is not in the allowed-variants set: "
-            f"{sorted(ALLOWED_VARIANTS)}\n"
-        )
+        sys.stderr.write(f"ERROR: '{args.new_name}' is not in the allowed-variants set: {sorted(ALLOWED_VARIANTS)}\n")
         return 2
 
     path = Path(args.pyproject)
@@ -66,7 +63,7 @@ def main() -> int:
     if not match:
         sys.stderr.write(
             f'ERROR: could not find canonical `name = "inferna"` line in {path}. '
-            'Was it already renamed, or has the file been reformatted?\n'
+            "Was it already renamed, or has the file been reformatted?\n"
         )
         return 1
 
@@ -78,12 +75,12 @@ def main() -> int:
     verify = re.compile(rf'^name\s*=\s*"{re.escape(args.new_name)}"\s*$', re.MULTILINE)
     if not verify.search(after):
         sys.stderr.write(
-            f"ERROR: post-write verification failed — `name = \"{args.new_name}\"` "
+            f'ERROR: post-write verification failed — `name = "{args.new_name}"` '
             f"not found in {path} after substitution.\n"
         )
         return 1
 
-    print(f'Renamed package: inferna -> {args.new_name} in {path}')
+    print(f"Renamed package: inferna -> {args.new_name} in {path}")
     return 0
 
 

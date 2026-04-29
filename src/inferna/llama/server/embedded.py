@@ -21,9 +21,15 @@ import json
 import logging
 import signal
 import time
-from typing import List, Optional
+from types import FrameType
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 
-from . import _mongoose as _mg
+from . import _mongoose as _mg  # type: ignore[attr-defined]
+
+if TYPE_CHECKING:
+    from ...rag.embedder import Embedder
+    from ..llama_cpp import LlamaModel
+
 from .python import (
     ServerConfig,
     ServerSlot,
@@ -32,6 +38,11 @@ from .python import (
     ChatResponse,
     ChatChoice,
 )
+
+# Signal handler return type — accept any of the three forms Python's
+# signal module returns from `signal.signal(...)`: None, an int (e.g.
+# SIG_DFL), or a callable.
+_SignalHandler = Union[Callable[[int, Optional[FrameType]], Any], int, None]
 
 
 # Module-level shutdown flag (matches pymongoose pattern from the old .pyx)
@@ -43,7 +54,7 @@ class MongooseConnection:
 
     __slots__ = ("_conn_id", "_mgr")
 
-    def __init__(self, mgr=None, conn_id: int = 0):
+    def __init__(self, mgr: Optional[Any] = None, conn_id: int = 0) -> None:
         self._mgr = mgr
         self._conn_id = conn_id
 
@@ -51,12 +62,11 @@ class MongooseConnection:
     def is_valid(self) -> bool:
         return self._conn_id != 0 and self._mgr is not None
 
-    def send_json(self, data: dict, status_code: int = 200) -> bool:
-        if not self.is_valid:
+    def send_json(self, data: dict[str, Any], status_code: int = 200) -> bool:
+        if not self.is_valid or self._mgr is None:
             return False
         body = json.dumps(data)
-        return self._mgr.send_reply(self._conn_id, status_code,
-                                     "Content-Type: application/json\r\n", body)
+        return self._mgr.send_reply(self._conn_id, status_code, "Content-Type: application/json\r\n", body)
 
     def send_error(self, status_code: int, message: str) -> bool:
         return self.send_json(
@@ -68,15 +78,23 @@ class MongooseConnection:
 class EmbeddedServer:
     """High-performance embedded HTTP server for LLM inference using Mongoose."""
 
-    def __init__(self, config: ServerConfig):
+    def __init__(self, config: ServerConfig) -> None:
         self._config = config
-        self._model = None
-        self._embedder = None
+        self._model: Optional["LlamaModel"] = None
+        self._embedder: Optional["Embedder"] = None
         self._slots: List[ServerSlot] = []
         self._logger = logging.getLogger(__name__)
         self._mgr = _mg.Manager()
         self._running = False
         self._signal_received = 0
+        # Saved by _setup_signal_handlers, restored by stop(). Without
+        # this, the bound `self._signal_handler` method registered with
+        # signal.signal() retains a strong reference to `self`, which in
+        # turn pins _model / _mgr / _slots[*].sampler past stop() —
+        # leaking those native objects all the way to interpreter
+        # shutdown and tripping a Metal GGML_ASSERT (rsets not empty).
+        self._prev_sigint: _SignalHandler = None
+        self._prev_sigterm: _SignalHandler = None
 
     # ------------------------------------------------------------------ props
 
@@ -91,12 +109,17 @@ class EmbeddedServer:
 
     # ------------------------------------------------------------- lifecycle
 
-    def __enter__(self):
+    def __enter__(self) -> "EmbeddedServer":
         if self.start():
             return self
         raise RuntimeError("Failed to start embedded server")
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[Any],
+    ) -> None:
         self._logger.info("Context manager __exit__ called - starting graceful shutdown")
         self.stop()
         self._logger.info("Context manager __exit__ completed")
@@ -109,10 +132,7 @@ class EmbeddedServer:
             from ..llama_cpp import LlamaModel
 
             self._model = LlamaModel(path_model=self._config.model_path)
-            self._slots = [
-                ServerSlot(i, self._model, self._config)
-                for i in range(self._config.n_parallel)
-            ]
+            self._slots = [ServerSlot(i, self._model, self._config) for i in range(self._config.n_parallel)]
             self._logger.info(f"Model loaded successfully with {len(self._slots)} slots")
 
             if self._config.embedding:
@@ -127,10 +147,7 @@ class EmbeddedServer:
                     pooling=self._config.embedding_pooling,
                     normalize=self._config.embedding_normalize,
                 )
-                self._logger.info(
-                    f"Embedder loaded: dim={self._embedder.dimension}, "
-                    f"pooling={self._embedder.pooling}"
-                )
+                self._logger.info(f"Embedder loaded: dim={self._embedder.dimension}, pooling={self._embedder.pooling}")
             self._logger.info("About to return True from load_model()")
             return True
         except Exception as e:
@@ -145,16 +162,41 @@ class EmbeddedServer:
 
     # ----------------------------------------------------------- signal API
 
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, signum: int, frame: Optional[FrameType]) -> None:
         global _shutdown_requested
         self._logger.info(f"Received signal {signum}, requesting graceful shutdown...")
         _shutdown_requested = True
         self._signal_received = signum
 
-    def _setup_signal_handlers(self):
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+    def _setup_signal_handlers(self) -> None:
+        # Save the previous handlers so stop() can restore them. If we
+        # didn't restore, the signal module would keep our bound
+        # `self._signal_handler` alive — and through it, the entire
+        # EmbeddedServer instance + Manager + LlamaModel + every slot's
+        # LlamaContext + LlamaSampler — until interpreter shutdown.
+        self._prev_sigint = signal.signal(signal.SIGINT, self._signal_handler)
+        self._prev_sigterm = signal.signal(signal.SIGTERM, self._signal_handler)
         self._logger.debug("Signal handlers registered for SIGINT and SIGTERM")
+
+    def _restore_signal_handlers(self) -> None:
+        # Only restore if we actually installed our handler. Calling
+        # stop() without a prior start() should be a no-op.
+        if self._prev_sigint is not None:
+            try:
+                signal.signal(signal.SIGINT, self._prev_sigint)
+            except (ValueError, TypeError):
+                # signal.signal raises ValueError when called from a
+                # non-main thread, and TypeError on some prev-handler
+                # sentinel values. Both are fatal-only at process exit,
+                # which is exactly when we don't care.
+                pass
+            self._prev_sigint = None
+        if self._prev_sigterm is not None:
+            try:
+                signal.signal(signal.SIGTERM, self._prev_sigterm)
+            except (ValueError, TypeError):
+                pass
+            self._prev_sigterm = None
 
     # ------------------------------------------------------------- start/stop
 
@@ -190,7 +232,7 @@ class EmbeddedServer:
             self._logger.error(f"Failed to start server: {e}")
             return False
 
-    def stop(self):
+    def stop(self) -> None:
         self._logger.info("Stop method called")
         if self._running:
             self._logger.info("Stopping embedded server...")
@@ -200,8 +242,13 @@ class EmbeddedServer:
             self._close_all_connections_from_main_thread()
             self._mgr.set_handler(None)
             self._logger.info("Embedded server stopped")
+        # Always restore signal handlers, even if stop() is called twice
+        # or before a successful start. The bound-method handler is the
+        # main retention path keeping the server (and its native
+        # children) alive past test scope.
+        self._restore_signal_handlers()
 
-    def wait_for_shutdown(self):
+    def wait_for_shutdown(self) -> None:
         """Pump the event loop until SIGINT/SIGTERM is delivered."""
         global _shutdown_requested
         self._logger.info("Starting embedded server event loop...")
@@ -210,7 +257,7 @@ class EmbeddedServer:
         self._logger.info(f"Exiting on signal {self._signal_received}")
         self._close_all_connections_from_main_thread()
 
-    def _close_all_connections_from_main_thread(self):
+    def _close_all_connections_from_main_thread(self) -> None:
         self._logger.info("Closing all Mongoose connections from main thread...")
         n = self._mgr.close_all_connections()
         self._logger.info(f"Set closing flag on {n} connections")
@@ -224,11 +271,11 @@ class EmbeddedServer:
             self.handle_http_request(conn, method, uri, headers={}, body=body)
         except Exception as e:
             self._logger.error(f"Event handler error: {e}")
-            self._mgr.send_reply(conn_id, 500, "Content-Type: text/plain\r\n",
-                                  "Internal Server Error")
+            self._mgr.send_reply(conn_id, 500, "Content-Type: text/plain\r\n", "Internal Server Error")
 
-    def handle_http_request(self, conn: MongooseConnection, method: str, uri: str,
-                            headers: dict, body: str) -> None:
+    def handle_http_request(
+        self, conn: MongooseConnection, method: str, uri: str, headers: dict[str, str], body: str
+    ) -> None:
         try:
             if method == "GET":
                 if uri == "/health":
@@ -250,27 +297,28 @@ class EmbeddedServer:
             self._logger.error(f"Request handling error: {e}")
             conn.send_error(500, "Internal Server Error")
 
-    def _handle_models(self, conn: MongooseConnection):
+    def _handle_models(self, conn: MongooseConnection) -> None:
         models_data = {
             "object": "list",
-            "data": [{
-                "id": self._config.model_alias,
-                "object": "model",
-                "created": int(time.time()),
-                "owned_by": "inferna",
-            }],
+            "data": [
+                {
+                    "id": self._config.model_alias,
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "inferna",
+                }
+            ],
         }
         conn.send_json(models_data)
 
-    def _handle_chat_completions(self, conn: MongooseConnection, body: str):
+    def _handle_chat_completions(self, conn: MongooseConnection, body: str) -> None:
         try:
             if not body.strip():
                 conn.send_error(400, "Empty request body")
                 return
             data = json.loads(body)
             messages_data = data.get("messages", [])
-            messages = [ChatMessage(role=m["role"], content=m["content"])
-                        for m in messages_data]
+            messages = [ChatMessage(role=m["role"], content=m["content"]) for m in messages_data]
             request = ChatRequest(
                 messages=messages,
                 model=data.get("model", self._config.model_alias),
@@ -291,7 +339,8 @@ class EmbeddedServer:
                         "index": c.index,
                         "message": {"role": c.message.role, "content": c.message.content},
                         "finish_reason": c.finish_reason,
-                    } for c in response.choices
+                    }
+                    for c in response.choices
                 ],
                 "usage": response.usage,
             }
@@ -302,7 +351,7 @@ class EmbeddedServer:
             self._logger.error(f"Chat completion error: {e}")
             conn.send_error(500, str(e))
 
-    def _handle_embeddings(self, conn: MongooseConnection, body: str):
+    def _handle_embeddings(self, conn: MongooseConnection, body: str) -> None:
         if not self._config.embedding or self._embedder is None:
             conn.send_error(400, "Embeddings not enabled")
             return
@@ -329,12 +378,14 @@ class EmbeddedServer:
                 result = self._embedder.embed_with_info(text)
                 results.append({"object": "embedding", "embedding": result.embedding, "index": i})
                 total_tokens += result.token_count
-            conn.send_json({
-                "object": "list",
-                "data": results,
-                "model": model_name,
-                "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
-            })
+            conn.send_json(
+                {
+                    "object": "list",
+                    "data": results,
+                    "model": model_name,
+                    "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
+                }
+            )
         except json.JSONDecodeError:
             conn.send_error(400, "Invalid JSON")
         except Exception as e:
@@ -362,6 +413,7 @@ class EmbeddedServer:
                         generated_text = generated_text.split(stop_word)[0]
                         break
 
+            assert self._model is not None  # _generate_chat_response is only entered after load_model succeeded
             vocab = self._model.get_vocab()
             prompt_tokens = len(vocab.tokenize(prompt, add_special=True, parse_special=True))
             completion_tokens = len(vocab.tokenize(generated_text, add_special=False, parse_special=False))
@@ -397,7 +449,7 @@ class EmbeddedServer:
         return "\n".join(parts)
 
 
-def start_embedded_server(model_path: str, **kwargs) -> EmbeddedServer:
+def start_embedded_server(model_path: str, **kwargs: Any) -> EmbeddedServer:
     """Convenience: build a config + EmbeddedServer and start it."""
     config = ServerConfig(model_path=model_path, **kwargs)
     server = EmbeddedServer(config)

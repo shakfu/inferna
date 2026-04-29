@@ -118,6 +118,23 @@ follow_imports = "skip"
 module = ["inferna.agents.constrained", "inferna.integrations.langchain"]
 disallow_subclassing_any = false
 
+# Modules that subclass nanobind-bound classes (e.g. SDImage extends
+# _sd_native.SDImage, EmbeddedServer constructs _mongoose.Manager).
+# nanobind extensions don't ship .pyi stubs, so mypy sees them as Any
+# and the subclasses + every method call against them lights up under
+# strict mode. Relax the four strict-mode checks that fire purely
+# because of the nanobind boundary; leave everything else strict so
+# real type errors in pure-Python helpers still get caught.
+[[tool.mypy.overrides]]
+module = [
+    "inferna.sd.stable_diffusion",
+    "inferna.sd.__main__",
+    "inferna.llama.server.embedded",
+]
+disallow_subclassing_any = false
+disallow_untyped_calls = false
+warn_return_any = false
+
 [tool.pytest.ini_options]
 # "tests" is on pythonpath so that test modules can do
 # `from conftest import DEFAULT_MODEL` without relying on pytest's

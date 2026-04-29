@@ -103,10 +103,12 @@ def assert_rss_bounded(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestLLMLeaks:
     """Loop create/destroy LLM, including a tiny generation per cycle so
     the sampler/context allocators are exercised in addition to the
-    bare model load."""
+    bare model load. Slow by design (5+ model load cycles); skipped from
+    `make test-fast`."""
 
     WARMUP_CYCLES = 2
     MEASURE_CYCLES = 5
@@ -147,6 +149,7 @@ class TestLLMLeaks:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not SD_MODEL.exists(),
     reason=f"Stable Diffusion model not found at {SD_MODEL}",
@@ -197,6 +200,7 @@ class TestSDContextLeaks:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     not WHISPER_MODEL.exists(),
     reason=f"Whisper model not found at {WHISPER_MODEL}",

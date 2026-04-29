@@ -21,20 +21,22 @@ import os
 import struct
 import logging
 from enum import IntEnum
-from typing import Callable, List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
-from . import _sd_native as _n
+from . import _sd_native as _n  # type: ignore[attr-defined]
 
 _logger = logging.getLogger(__name__)
 
 try:
     import numpy as np
+
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False
 
 try:
     from PIL import Image as PILImage
+
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -155,37 +157,49 @@ class HiresUpscaler(IntEnum):
 # (Python subclasses get a different tp_dealloc, blocking __class__ reassign).
 # =============================================================================
 
+
 class SDImage:
     """Pillow/numpy-friendly wrapper around the stb-backed native SDImage."""
 
     __slots__ = ("_native",)
 
-    def __init__(self, _native=None):
+    def __init__(self, _native: Optional[Any] = None) -> None:
         self._native = _native if _native is not None else _n.SDImage()
 
     # ---- core attribute proxies ----------------------------------------------
 
     @property
-    def width(self) -> int: return self._native.width
+    def width(self) -> int:
+        return self._native.width
+
     @property
-    def height(self) -> int: return self._native.height
+    def height(self) -> int:
+        return self._native.height
+
     @property
-    def channels(self) -> int: return self._native.channels
+    def channels(self) -> int:
+        return self._native.channels
+
     @property
-    def is_valid(self) -> bool: return self._native.is_valid
+    def is_valid(self) -> bool:
+        return self._native.is_valid
+
     @property
-    def shape(self) -> tuple: return (self.height, self.width, self.channels)
+    def shape(self) -> tuple[int, int, int]:
+        return (self.height, self.width, self.channels)
+
     @property
-    def size(self) -> int: return self.width * self.height * self.channels
+    def size(self) -> int:
+        return self.width * self.height * self.channels
 
     # ---- numpy / PIL ----------------------------------------------------------
 
-    def to_numpy(self):
+    def to_numpy(self) -> Any:
         if not HAS_NUMPY:
             raise ImportError("numpy is required for to_numpy()")
         return self._native.to_numpy()
 
-    def to_pil(self):
+    def to_pil(self) -> Any:
         if not HAS_PIL:
             raise ImportError("PIL/Pillow is required for to_pil()")
         arr = self.to_numpy()
@@ -199,13 +213,13 @@ class SDImage:
         return PILImage.fromarray(arr)
 
     @classmethod
-    def from_numpy(cls, arr) -> "SDImage":
+    def from_numpy(cls, arr: Any) -> "SDImage":
         if not HAS_NUMPY:
             raise ImportError("numpy is required for from_numpy()")
         return cls(_n.SDImage.from_numpy(arr))
 
     @classmethod
-    def from_pil(cls, pil_image) -> "SDImage":
+    def from_pil(cls, pil_image: Any) -> "SDImage":
         if not HAS_PIL:
             raise ImportError("PIL/Pillow is required for from_pil()")
         if not HAS_NUMPY:
@@ -285,9 +299,7 @@ class SDImage:
         with open(path, "rb") as f:
             magic = f.readline().strip()
             if magic != b"P6":
-                raise ValueError(
-                    f"Unsupported PPM format: {magic}. Only P6 (binary RGB) supported."
-                )
+                raise ValueError(f"Unsupported PPM format: {magic!r}. Only P6 (binary RGB) supported.")
             line = f.readline()
             while line.startswith(b"#"):
                 line = f.readline()
@@ -352,13 +364,17 @@ class SDImage:
     def save(self, path: str, quality: int = 90) -> None:
         ext = path.lower().rsplit(".", 1)[-1] if "." in path else ""
         if ext == "png":
-            self.save_png(path); return
+            self.save_png(path)
+            return
         if ext in ("jpg", "jpeg"):
-            self.save_jpg(path, quality); return
+            self.save_jpg(path, quality)
+            return
         if ext == "bmp":
-            self.save_bmp(path); return
+            self.save_bmp(path)
+            return
         if ext == "ppm":
-            self.save_ppm(path); return
+            self.save_ppm(path)
+            return
         if HAS_PIL:
             self.to_pil().save(path)
             return
@@ -366,16 +382,14 @@ class SDImage:
         if ext in ("gif", "tiff", "webp"):
             png_path = path.rsplit(".", 1)[0] + ".png"
             self.save_png(png_path)
-            raise ImportError(
-                f"PIL/Pillow required for {ext.upper()} format. "
-                f"Image saved as PNG instead: {png_path}"
-            )
+            raise ImportError(f"PIL/Pillow required for {ext.upper()} format. Image saved as PNG instead: {png_path}")
         self.save_png(path)
 
 
 # =============================================================================
 # SDContextParams — re-export with kwargs constructor sugar
 # =============================================================================
+
 
 class SDContextParams(_n.SDContextParams):
     """Constructor kwargs are a convenience over the native default-init + setters."""
@@ -393,12 +407,18 @@ class SDContextParams(_n.SDContextParams):
         vae_decode_only: bool = True,
     ):
         super().__init__()
-        if model_path: self.model_path = model_path
-        if vae_path: self.vae_path = vae_path
-        if clip_l_path: self.clip_l_path = clip_l_path
-        if clip_g_path: self.clip_g_path = clip_g_path
-        if t5xxl_path: self.t5xxl_path = t5xxl_path
-        if diffusion_model_path: self.diffusion_model_path = diffusion_model_path
+        if model_path:
+            self.model_path = model_path
+        if vae_path:
+            self.vae_path = vae_path
+        if clip_l_path:
+            self.clip_l_path = clip_l_path
+        if clip_g_path:
+            self.clip_g_path = clip_g_path
+        if t5xxl_path:
+            self.t5xxl_path = t5xxl_path
+        if diffusion_model_path:
+            self.diffusion_model_path = diffusion_model_path
         if n_threads > 0:
             self.n_threads = n_threads
         self.wtype = int(wtype)
@@ -408,6 +428,7 @@ class SDContextParams(_n.SDContextParams):
 # =============================================================================
 # SDSampleParams — kwargs sugar + ctor wiring (eta default = +inf)
 # =============================================================================
+
 
 class SDSampleParams(_n.SDSampleParams):
     def __init__(
@@ -430,6 +451,7 @@ class SDSampleParams(_n.SDSampleParams):
 # SDImageGenParams — kwargs sugar + Python-side image-set helpers that retain
 # refs to SDImage instances on the wrapper (so their data buffers persist).
 # =============================================================================
+
 
 class SDImageGenParams(_n.SDImageGenParams):
     def __init__(
@@ -480,48 +502,48 @@ class SDImageGenParams(_n.SDImageGenParams):
         super().set_control_image(image._native, image)
         self.control_strength = strength
 
-    def set_ref_images(self, images: list) -> None:
+    def set_ref_images(self, images: list[SDImage]) -> None:
         self._ref_images_pyref = list(images)
         super().set_ref_images([img._native for img in images])
 
-    def set_pm_id_images(self, images: list) -> None:
+    def set_pm_id_images(self, images: list[SDImage]) -> None:
         self._pm_id_images_pyref = list(images)
         super().set_pm_id_images([img._native for img in images])
 
     # ---- VAE tiling tuple shims (kept for API compatibility) ------------------
 
     @property
-    def vae_tile_size(self) -> tuple:
+    def vae_tile_size(self) -> tuple[int, int]:
         return (self.vae_tile_size_x, self.vae_tile_size_y)
 
     @vae_tile_size.setter
-    def vae_tile_size(self, value: tuple) -> None:
+    def vae_tile_size(self, value: tuple[int, int]) -> None:
         self.vae_tile_size_x, self.vae_tile_size_y = value
 
     @property
-    def vae_tile_rel_size(self) -> tuple:
+    def vae_tile_rel_size(self) -> tuple[float, float]:
         return (self.vae_tile_rel_size_x, self.vae_tile_rel_size_y)
 
     @vae_tile_rel_size.setter
-    def vae_tile_rel_size(self, value: tuple) -> None:
+    def vae_tile_rel_size(self, value: tuple[float, float]) -> None:
         self.vae_tile_rel_size_x, self.vae_tile_rel_size_y = value
 
     @property
-    def hires_target_size(self) -> tuple:
+    def hires_target_size(self) -> tuple[int, int]:
         return (self.hires_target_width, self.hires_target_height)
 
     @hires_target_size.setter
-    def hires_target_size(self, value: tuple) -> None:
+    def hires_target_size(self, value: tuple[int, int]) -> None:
         self.hires_target_width, self.hires_target_height = value
 
     # ---- cache_range / easycache_* aliases ------------------------------------
 
     @property
-    def cache_range(self) -> tuple:
+    def cache_range(self) -> tuple[float, float]:
         return (self.cache_start_percent, self.cache_end_percent)
 
     @cache_range.setter
-    def cache_range(self, value: tuple) -> None:
+    def cache_range(self, value: tuple[float, float]) -> None:
         self.cache_start_percent, self.cache_end_percent = value
 
     @property
@@ -541,11 +563,11 @@ class SDImageGenParams(_n.SDImageGenParams):
         self.cache_threshold = value
 
     @property
-    def easycache_range(self) -> tuple:
+    def easycache_range(self) -> tuple[float, float]:
         return self.cache_range
 
     @easycache_range.setter
-    def easycache_range(self, value: tuple) -> None:
+    def easycache_range(self, value: tuple[float, float]) -> None:
         self.cache_range = value
 
     # ---- hires-fix one-shot setter -------------------------------------------
@@ -576,17 +598,22 @@ class SDImageGenParams(_n.SDImageGenParams):
 # SDContext — adds the kwargs-style generate() that builds an SDImageGenParams
 # =============================================================================
 
+
 class SDContext(_n.SDContext):
-    def __enter__(self):
+    def __enter__(self) -> "SDContext":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[Any],
+    ) -> None:
         # Deterministic teardown — release the native context as soon as
         # the with-block exits. Without this, the ctx (and its GPU buffers)
         # would linger until GC ran, which on macOS Metal accumulates
         # working-set pressure across consecutive contexts.
         self.close()
-        return None
 
     def get_default_sample_method(self) -> SampleMethod:
         return SampleMethod(super().get_default_sample_method())
@@ -680,9 +707,21 @@ class SDContext(_n.SDContext):
         sm = int(sample_method) if sample_method is not None else int(SampleMethod.COUNT)
         sc = int(scheduler) if scheduler is not None else int(Scheduler.COUNT)
         out = self.generate_video_raw(
-            prompt, negative_prompt, width, height, video_frames, sm, sc,
-            sample_steps, cfg_scale, seed, clip_skip, strength,
-            eta, moe_boundary, vace_strength,
+            prompt,
+            negative_prompt,
+            width,
+            height,
+            video_frames,
+            sm,
+            sc,
+            sample_steps,
+            cfg_scale,
+            seed,
+            clip_skip,
+            strength,
+            eta,
+            moe_boundary,
+            vace_strength,
             init_image._native if init_image is not None else None,
             end_image._native if end_image is not None else None,
         )
@@ -693,11 +732,13 @@ class SDContext(_n.SDContext):
 # Re-exports / convenience wrappers
 # =============================================================================
 
+
 class Upscaler:
     """Upscaler wrapper that hands back SDImage instances (not raw native)."""
 
     def __init__(
-        self, model_path: str,
+        self,
+        model_path: str,
         n_threads: int = -1,
         offload_to_cpu: bool = False,
         direct: bool = False,
@@ -708,17 +749,26 @@ class Upscaler:
         self._native = _n.Upscaler(model_path, offload_to_cpu, direct, n_threads, tile_size)
 
     @property
-    def is_valid(self) -> bool: return self._native.is_valid
+    def is_valid(self) -> bool:
+        return self._native.is_valid
 
     @property
-    def upscale_factor(self) -> int: return self._native.upscale_factor
+    def upscale_factor(self) -> int:
+        return self._native.upscale_factor
 
     def upscale(self, image: SDImage, factor: int = 0) -> SDImage:
         return SDImage(self._native.upscale(image._native, factor))
 
-    def __enter__(self): return self
+    def __enter__(self) -> "Upscaler":
+        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb): return None
+    def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[Any],
+    ) -> None:
+        return None
 
 
 def get_num_cores() -> int:
@@ -753,8 +803,7 @@ def canny_preprocess(
     strong: float = 1.0,
     inverse: bool = False,
 ) -> bool:
-    return _n.preprocess_canny(image._native, high_threshold, low_threshold,
-                                weak, strong, inverse)
+    return _n.preprocess_canny(image._native, high_threshold, low_threshold, weak, strong, inverse)
 
 
 def convert_model(
@@ -768,8 +817,12 @@ def convert_model(
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input model not found: {input_path}")
     success = _n.convert_native(
-        input_path, output_path, int(output_type),
-        vae_path, tensor_type_rules, convert_name,
+        input_path,
+        output_path,
+        int(output_type),
+        vae_path,
+        tensor_type_rules,
+        convert_name,
     )
     if not success:
         raise RuntimeError(f"Model conversion failed: {input_path} -> {output_path}")
@@ -778,15 +831,18 @@ def convert_model(
 
 # ---- callbacks --------------------------------------------------------------
 
+
 def set_log_callback(callback: Optional[Callable[[LogLevel, str], None]]) -> None:
     if callback is None:
         _n.set_log_callback(None)
         return
+
     def _wrap(level_int: int, text: str) -> None:
         try:
             callback(LogLevel(level_int), text)
         except Exception as e:
             _logger.warning("Exception in sd log callback: %s", e)
+
     _n.set_log_callback(_wrap)
 
 
@@ -794,11 +850,13 @@ def set_progress_callback(callback: Optional[Callable[[int, int, float], None]])
     if callback is None:
         _n.set_progress_callback(None)
         return
+
     def _wrap(step: int, steps: int, time: float) -> None:
         try:
             callback(step, steps, time)
         except Exception as e:
             _logger.warning("Exception in sd progress callback: %s", e)
+
     _n.set_progress_callback(_wrap)
 
 
@@ -812,18 +870,21 @@ def set_preview_callback(
     if callback is None:
         _n.set_preview_callback(None, int(PreviewMode.NONE), 1, False, False)
         return
-    def _wrap(step: int, frames: list, is_noisy: bool) -> None:
+
+    def _wrap(step: int, frames: list[Any], is_noisy: bool) -> None:
         try:
             wrapped = [SDImage(native) for native in frames]
             callback(step, wrapped, is_noisy)
         except Exception as e:
             _logger.warning("Exception in sd preview callback: %s", e)
+
     _n.set_preview_callback(_wrap, int(mode), interval, denoised, noisy)
 
 
 # =============================================================================
 # Convenience top-level functions
 # =============================================================================
+
 
 def text_to_images(
     model_path: str,
@@ -923,17 +984,34 @@ def text_to_image(
     diffusion_flash_attn: bool = False,
 ) -> SDImage:
     return text_to_images(
-        model_path=model_path, prompt=prompt, negative_prompt=negative_prompt,
-        width=width, height=height, seed=seed, batch_count=1,
-        sample_steps=sample_steps, cfg_scale=cfg_scale,
-        sample_method=sample_method, scheduler=scheduler,
-        n_threads=n_threads, vae_path=vae_path, taesd_path=taesd_path,
-        clip_l_path=clip_l_path, clip_g_path=clip_g_path, t5xxl_path=t5xxl_path,
-        control_net_path=control_net_path, clip_skip=clip_skip,
-        eta=eta, slg_scale=slg_scale, vae_tiling=vae_tiling,
-        hires_fix=hires_fix, hires_scale=hires_scale,
-        offload_to_cpu=offload_to_cpu, keep_clip_on_cpu=keep_clip_on_cpu,
-        keep_vae_on_cpu=keep_vae_on_cpu, diffusion_flash_attn=diffusion_flash_attn,
+        model_path=model_path,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        width=width,
+        height=height,
+        seed=seed,
+        batch_count=1,
+        sample_steps=sample_steps,
+        cfg_scale=cfg_scale,
+        sample_method=sample_method,
+        scheduler=scheduler,
+        n_threads=n_threads,
+        vae_path=vae_path,
+        taesd_path=taesd_path,
+        clip_l_path=clip_l_path,
+        clip_g_path=clip_g_path,
+        t5xxl_path=t5xxl_path,
+        control_net_path=control_net_path,
+        clip_skip=clip_skip,
+        eta=eta,
+        slg_scale=slg_scale,
+        vae_tiling=vae_tiling,
+        hires_fix=hires_fix,
+        hires_scale=hires_scale,
+        offload_to_cpu=offload_to_cpu,
+        keep_clip_on_cpu=keep_clip_on_cpu,
+        keep_vae_on_cpu=keep_vae_on_cpu,
+        diffusion_flash_attn=diffusion_flash_attn,
     )[0]
 
 

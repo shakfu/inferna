@@ -31,10 +31,7 @@ class SpeculativeParams:
         self.p_min = p_min
 
     def __repr__(self) -> str:
-        return (
-            f"SpeculativeParams(n_max={self.n_max}, n_min={self.n_min}, "
-            f"p_split={self.p_split}, p_min={self.p_min})"
-        )
+        return f"SpeculativeParams(n_max={self.n_max}, n_min={self.n_min}, p_split={self.p_split}, p_min={self.p_min})"
 
 
 class Speculative:
@@ -53,9 +50,7 @@ class Speculative:
         if not self.is_compat(ctx_target):
             raise ValueError("Target context is not compatible for speculative decoding")
         if ctx_draft is None:
-            raise RuntimeError(
-                "Failed to initialize speculative decoding: no draft context provided"
-            )
+            raise RuntimeError("Failed to initialize speculative decoding: no draft context provided")
 
         self.ctx_tgt = ctx_target
         self.ctx_dft = ctx_draft
@@ -164,11 +159,7 @@ class Speculative:
             self._n_acc_tokens += n_accepted
 
     def print_stats(self) -> None:
-        acc_rate = (
-            100.0 * self._n_acc_tokens / self._n_gen_tokens
-            if self._n_gen_tokens > 0
-            else 0.0
-        )
+        acc_rate = 100.0 * self._n_acc_tokens / self._n_gen_tokens if self._n_gen_tokens > 0 else 0.0
         print(
             f"speculative: gen_drafts={self._n_gen_drafts}, "
             f"acc_drafts={self._n_acc_drafts}, "
