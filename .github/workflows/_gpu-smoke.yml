@@ -1,0 +1,287 @@
+name: _gpu-smoke
+
+# Reusable smoke-test job for GPU wheels. Called by build-gpu-wheels.yml
+# (stable) and build-gpu-wheels-abi3.yml (abi3) after the per-backend
+# build jobs complete. Each entry of the matrix is gated on whether the
+# corresponding backend was actually requested by the caller.
+
+on:
+  workflow_call:
+    inputs:
+      wheel_kind:
+        description: '"stable" | "abi3" — controls which artifact name to download'
+        type: string
+        required: true
+      cuda_linux:
+        type: boolean
+        required: true
+      rocm_linux:
+        type: boolean
+        required: true
+      sycl_linux:
+        type: boolean
+        required: true
+      vulkan_linux:
+        type: boolean
+        required: true
+      cuda_windows:
+        type: boolean
+        required: true
+      vulkan_windows:
+        type: boolean
+        required: true
+      vulkan_macos_intel:
+        type: boolean
+        required: true
+
+jobs:
+  smoke:
+    name: Smoke test - ${{ matrix.backend }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cuda
+            runs-on: ubuntu-latest
+            slug: cuda-linux-x86_64
+            condition: cuda_linux
+          - backend: rocm
+            runs-on: ubuntu-latest
+            slug: rocm-linux-x86_64
+            condition: rocm_linux
+          - backend: sycl
+            runs-on: ubuntu-latest
+            slug: sycl-linux-x86_64
+            condition: sycl_linux
+          - backend: vulkan
+            runs-on: ubuntu-latest
+            slug: vulkan-linux-x86_64
+            condition: vulkan_linux
+          - backend: cuda-windows
+            runs-on: windows-latest
+            slug: cuda-windows-x86_64
+            condition: cuda_windows
+          - backend: vulkan-windows
+            runs-on: windows-latest
+            slug: vulkan-windows-x86_64
+            condition: vulkan_windows
+          - backend: vulkan-macos-intel
+            runs-on: macos-15-intel
+            slug: vulkan-macos-intel-x86_64
+            condition: vulkan_macos_intel
+
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          case "${{ inputs.wheel_kind }}" in
+            stable|abi3) ;;
+            *) echo "::error::wheel_kind must be 'stable' or 'abi3', got '${{ inputs.wheel_kind }}'"; exit 1 ;;
+          esac
+
+      - name: Check if backend was built
+        id: check
+        shell: bash
+        env:
+          # Indirect through env so we can index by matrix.condition string.
+          CUDA_LINUX: ${{ inputs.cuda_linux }}
+          ROCM_LINUX: ${{ inputs.rocm_linux }}
+          SYCL_LINUX: ${{ inputs.sycl_linux }}
+          VULKAN_LINUX: ${{ inputs.vulkan_linux }}
+          CUDA_WINDOWS: ${{ inputs.cuda_windows }}
+          VULKAN_WINDOWS: ${{ inputs.vulkan_windows }}
+          VULKAN_MACOS_INTEL: ${{ inputs.vulkan_macos_intel }}
+        run: |
+          # Map matrix.condition (e.g. cuda_linux) to the corresponding env var.
+          case "${{ matrix.condition }}" in
+            cuda_linux)         val="$CUDA_LINUX" ;;
+            rocm_linux)         val="$ROCM_LINUX" ;;
+            sycl_linux)         val="$SYCL_LINUX" ;;
+            vulkan_linux)       val="$VULKAN_LINUX" ;;
+            cuda_windows)       val="$CUDA_WINDOWS" ;;
+            vulkan_windows)     val="$VULKAN_WINDOWS" ;;
+            vulkan_macos_intel) val="$VULKAN_MACOS_INTEL" ;;
+            *)                  val="false" ;;
+          esac
+          if [ "$val" != "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v6
+        if: steps.check.outputs.skip != 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Compute artifact name
+        if: steps.check.outputs.skip != 'true'
+        id: artifact
+        shell: bash
+        run: |
+          PREFIX=""
+          if [ "${{ inputs.wheel_kind }}" = "abi3" ]; then PREFIX="abi3-"; fi
+          echo "name=wheels-${PREFIX}${{ matrix.slug }}" >> "$GITHUB_OUTPUT"
+
+      - name: Download wheel artifacts
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: wheels
+
+      - name: Find matching wheel
+        if: steps.check.outputs.skip != 'true'
+        id: find-wheel
+        shell: bash
+        run: |
+          WHEEL=$(find wheels -name "*cp312*" | head -1)
+          if [ -z "$WHEEL" ]; then
+            WHEEL=$(find wheels -name "*.whl" | head -1)
+          fi
+          echo "wheel=$WHEEL" >> "$GITHUB_OUTPUT"
+          echo "Found wheel: $WHEEL"
+
+      - name: Install wheel in clean venv
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          python -m venv smoke-venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source smoke-venv/Scripts/activate
+          else
+            source smoke-venv/bin/activate
+          fi
+          pip install "${{ steps.find-wheel.outputs.wheel }}"
+
+      # Windows-only: link-test every bundled ggml-*.dll. Catches the bug
+      # class where delvewheel-bundled siblings are unreachable because
+      # the libs dir is not on PATH.
+      - name: Smoke test - DLL link (Windows)
+        if: steps.check.outputs.skip != 'true' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          source smoke-venv/Scripts/activate
+          python -c "
+          import ctypes, glob, os, site, sys
+          failed = []
+          for sp in site.getsitepackages():
+              for libs in glob.glob(os.path.join(sp, 'inferna*.libs')):
+                  for dll in sorted(glob.glob(os.path.join(libs, 'ggml-*.dll'))):
+                      try:
+                          ctypes.WinDLL(dll)
+                      except OSError as e:
+                          failed.append((dll, str(e)))
+                      else:
+                          print(f'OK   {dll}')
+          if failed:
+              for d, e in failed:
+                  print(f'FAIL {d}: {e}', file=sys.stderr)
+              sys.exit(1)
+          "
+
+      # Source checkout — the centralized smoke script lives in
+      # scripts/ci_smoke.py and the test model fixture path resolution
+      # below uses the checkout for clarity.
+      - uses: actions/checkout@v6
+        if: steps.check.outputs.skip != 'true'
+        with:
+          path: src-checkout
+
+      - name: Smoke test - imports
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source smoke-venv/Scripts/activate
+          else
+            source smoke-venv/bin/activate
+          fi
+          python src-checkout/scripts/ci_smoke.py --label "${{ matrix.backend }}"
+
+      - name: Smoke test - inferna info
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source smoke-venv/Scripts/activate
+          else
+            source smoke-venv/bin/activate
+          fi
+          python -m inferna info
+
+      # SYCL-specific: install Intel OpenCL CPU runtime so the SYCL
+      # dispatch stack has a compliant device on a GPU-less runner.
+      - name: Install Intel OpenCL CPU runtime
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'sycl'
+        continue-on-error: true
+        run: |
+          wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+            | sudo gpg --dearmor -o /usr/share/keyrings/oneapi-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
+            | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            intel-oneapi-runtime-opencl \
+            intel-oneapi-runtime-dpcpp-cpp
+
+      - name: Cache test model
+        if: steps.check.outputs.skip != 'true'
+        id: cache-model
+        uses: actions/cache@v5
+        with:
+          path: models/Llama-3.2-1B-Instruct-Q8_0.gguf
+          key: test-model-llama-3.2-1b-q8
+
+      - name: Download test model
+        if: steps.check.outputs.skip != 'true' && steps.cache-model.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p models
+          curl -sL https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf \
+            -o models/Llama-3.2-1B-Instruct-Q8_0.gguf
+
+      - name: Smoke test - SYCL 1-token CPU inference
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'sycl'
+        continue-on-error: true
+        env:
+          ONEAPI_DEVICE_SELECTOR: opencl:cpu
+        run: |
+          source smoke-venv/bin/activate
+          python -c "
+          from inferna import complete
+          response = complete(
+              'Hi',
+              model_path='models/Llama-3.2-1B-Instruct-Q8_0.gguf',
+              n_ctx=128,
+              max_tokens=1,
+          )
+          print(f'SYCL CPU decode response: {response!r}')
+          assert len(str(response).strip()) > 0, 'Empty response'
+          print('SYCL CPU inference smoke test passed')
+          "
+
+      - name: Smoke test - CPU-fallback 1-token inference
+        if: steps.check.outputs.skip != 'true' && matrix.backend != 'sycl'
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            source smoke-venv/Scripts/activate
+          else
+            source smoke-venv/bin/activate
+          fi
+          python -c "
+          from inferna import complete
+          response = complete(
+              'Hi',
+              model_path='models/Llama-3.2-1B-Instruct-Q8_0.gguf',
+              n_ctx=128,
+              max_tokens=1,
+              n_gpu_layers=0,
+          )
+          print(f'CPU-fallback decode response: {response!r}')
+          assert len(str(response).strip()) > 0, 'Empty response'
+          print('CPU-fallback inference smoke test passed')
+          "

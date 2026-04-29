@@ -1,0 +1,210 @@
+name: build-gpu-wheels-abi3-v2
+
+# Refactored caller for GPU wheel builds (abi3 variant, cp312 only).
+# Dispatches to the same per-backend reusable workflows as the stable
+# caller (`build-gpu-wheels-v2.yml`); the only differences are:
+#   - cibw_build narrowed to "cp312-*"
+#   - cibw_version pinned to "3.4.1"
+#   - wheel_kind set to "abi3" (controls artifact + cache key prefix)
+#   - extra_cibw_env injects SKBUILD_CMAKE_DEFINE / SKBUILD_WHEEL_PY_API
+#
+# Runs in parallel to the legacy `build-gpu-wheels-abi3.yml` for one
+# release cycle while we verify outputs match.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      link_mode:
+        description: 'Linking mode'
+        required: true
+        default: 'dynamic'
+        type: choice
+        options:
+          - dynamic
+          - static
+      cuda_linux:
+        description: 'Build CUDA wheels'
+        required: false
+        default: false
+        type: boolean
+      rocm_linux:
+        description: 'Build ROCm wheels'
+        required: false
+        default: false
+        type: boolean
+      sycl_linux:
+        description: 'Build SYCL wheels'
+        required: false
+        default: false
+        type: boolean
+      vulkan_linux:
+        description: 'Build Vulkan wheels (Linux x86_64)'
+        required: false
+        default: false
+        type: boolean
+      cuda_windows:
+        description: 'Build CUDA 12.4 Windows (x86_64)'
+        required: false
+        default: false
+        type: boolean
+      vulkan_windows:
+        description: 'Build Vulkan Windows (x86_64)'
+        required: false
+        default: false
+        type: boolean
+      vulkan_macos_intel:
+        description: 'Build Vulkan macOS Intel (x86_64)'
+        required: false
+        default: false
+        type: boolean
+      upload_release:
+        description: 'Upload wheels to GitHub Release'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.link_mode }}
+  cancel-in-progress: true
+
+jobs:
+  cuda:
+    uses: ./.github/workflows/_gpu-build-cuda.yml
+    with:
+      wheel_kind: abi3
+      cibw_version: "3.4.1"
+      cibw_build: "cp312-*"
+      link_mode: ${{ inputs.link_mode }}
+      enabled: ${{ inputs.cuda_linux }}
+      extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
+
+  rocm:
+    uses: ./.github/workflows/_gpu-build-rocm.yml
+    with:
+      wheel_kind: abi3
+      cibw_version: "3.4.1"
+      cibw_build: "cp312-*"
+      link_mode: ${{ inputs.link_mode }}
+      enabled: ${{ inputs.rocm_linux }}
+      extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
+
+  sycl:
+    uses: ./.github/workflows/_gpu-build-sycl.yml
+    with:
+      wheel_kind: abi3
+      cibw_version: "3.4.1"
+      cibw_build: "cp312-*"
+      link_mode: ${{ inputs.link_mode }}
+      enabled: ${{ inputs.sycl_linux }}
+      extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
+
+  vulkan_linux:
+    uses: ./.github/workflows/_gpu-build-vulkan-linux.yml
+    with:
+      wheel_kind: abi3
+      cibw_version: "3.4.1"
+      cibw_build: "cp312-*"
+      link_mode: ${{ inputs.link_mode }}
+      enabled: ${{ inputs.vulkan_linux }}
+      extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
+
+  cuda_windows:
+    uses: ./.github/workflows/_gpu-build-cuda-windows.yml
+    with:
+      wheel_kind: abi3
+      cibw_version: "3.4.1"
+      cibw_build: "cp312-*"
+      link_mode: ${{ inputs.link_mode }}
+      enabled: ${{ inputs.cuda_windows }}
+      extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
+
+  vulkan_windows:
+    uses: ./.github/workflows/_gpu-build-vulkan-windows.yml
+    with:
+      wheel_kind: abi3
+      cibw_version: "3.4.1"
+      cibw_build: "cp312-*"
+      link_mode: ${{ inputs.link_mode }}
+      enabled: ${{ inputs.vulkan_windows }}
+      extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
+
+  vulkan_macos_intel:
+    uses: ./.github/workflows/_gpu-build-vulkan-macos-intel.yml
+    with:
+      wheel_kind: abi3
+      cibw_version: "3.4.1"
+      cibw_build: "cp312-*"
+      link_mode: ${{ inputs.link_mode }}
+      enabled: ${{ inputs.vulkan_macos_intel }}
+      extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
+
+  smoke:
+    needs: [cuda, rocm, sycl, vulkan_linux, cuda_windows, vulkan_windows, vulkan_macos_intel]
+    if: always() && !cancelled()
+    uses: ./.github/workflows/_gpu-smoke.yml
+    with:
+      wheel_kind: abi3
+      cuda_linux: ${{ inputs.cuda_linux }}
+      rocm_linux: ${{ inputs.rocm_linux }}
+      sycl_linux: ${{ inputs.sycl_linux }}
+      vulkan_linux: ${{ inputs.vulkan_linux }}
+      cuda_windows: ${{ inputs.cuda_windows }}
+      vulkan_windows: ${{ inputs.vulkan_windows }}
+      vulkan_macos_intel: ${{ inputs.vulkan_macos_intel }}
+
+  collect:
+    needs: [cuda, rocm, sycl, vulkan_linux, cuda_windows, vulkan_windows, vulkan_macos_intel]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          pattern: wheels-abi3-*
+
+      - name: Collect into single directory
+        run: |
+          mkdir -p dist
+          find artifacts -name "*.whl" -exec cp {} dist/ \;
+          echo "=== Collected abi3 wheels ==="
+          ls -lh dist/ || true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: inferna-gpu-abi3-wheels-all
+          path: dist/*.whl
+          if-no-files-found: ignore
+
+  upload_release:
+    name: Upload wheels to GitHub Release
+    needs: [collect, smoke]
+    if: always() && !cancelled() && inputs.upload_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download collected wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: inferna-gpu-abi3-wheels-all
+          path: dist
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(python3 -c "
+          import re
+          text = open('pyproject.toml').read()
+          print(re.search(r'^version\s*=\s*\"([^\"]+)\"', text, re.M).group(1))
+          ")
+          TAG="${VERSION}"
+          echo "Version: ${VERSION}, Tag: ${TAG}"
+          (gh release view "${TAG}" >/dev/null 2>&1 && echo "Release ${TAG} already exists") || gh release create "${TAG}" --prerelease --title "inferna ${TAG}"
+          gh release upload "${TAG}" dist/*.whl --clobber

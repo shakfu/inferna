@@ -69,29 +69,26 @@ jobs:
         env:
           CIBW_PLATFORM: ${{ matrix.platform || 'auto' }}
           CIBW_ARCHS: ${{ matrix.archs || 'auto' }}
-          # Workflow-level CIBW_ENVIRONMENT_<PLAT> replaces (not merges
-          # with) pyproject.toml's [tool.cibuildwheel.<plat>].environment,
-          # so the pyproject defaults (GGML_*, MACOSX_DEPLOYMENT_TARGET)
-          # must be re-declared here alongside the ccache launcher vars.
-          # On Linux the workspace is bind-mounted to /project inside the
-          # manylinux container, so CCACHE_DIR=/project/.ccache sees the
-          # host ccache-action's cache. ccache itself is installed in
-          # the container via pyproject.toml's before-all (yum install).
-          CIBW_ENVIRONMENT_LINUX: >-
-            GGML_METAL=0
-            GGML_NATIVE=0
-            CCACHE_DIR=/project/.ccache
-            CCACHE_DEPEND=1
-            CMAKE_C_COMPILER_LAUNCHER=ccache
-            CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          CIBW_ENVIRONMENT_MACOS: >-
-            MACOSX_DEPLOYMENT_TARGET=11.0
-            GGML_METAL=1
-            GGML_NATIVE=0
-            CCACHE_DIR=${{ github.workspace }}/.ccache
-            CCACHE_DEPEND=1
-            CMAKE_C_COMPILER_LAUNCHER=ccache
-            CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          # ccache vars are set as runner-level env (below) and forwarded
+          # into the manylinux container via CIBW_ENVIRONMENT_PASS_LINUX.
+          # On macOS/Windows there's no container, so the runner env is
+          # already visible to the build process. Pyproject's
+          # [tool.cibuildwheel.<plat>].environment table remains the
+          # canonical source for GGML_*, MACOSX_DEPLOYMENT_TARGET, etc.
+          CIBW_ENVIRONMENT_PASS_LINUX: >-
+            CCACHE_DIR
+            CCACHE_DEPEND
+            CMAKE_C_COMPILER_LAUNCHER
+            CMAKE_CXX_COMPILER_LAUNCHER
+          # Linux runs inside the manylinux container; the workspace is
+          # bind-mounted to /project, so /project/.ccache resolves to the
+          # ccache-action cache on the host. macOS uses the workspace
+          # path directly. Both are set unconditionally — the unused one
+          # is harmless on the other platform.
+          CCACHE_DIR: ${{ runner.os == 'Linux' && '/project/.ccache' || format('{0}/.ccache', github.workspace) }}
+          CCACHE_DEPEND: 1
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
 
       - uses: actions/upload-artifact@v7
         with:

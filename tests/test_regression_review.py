@@ -247,3 +247,70 @@ class TestProgressCallbackAbort:
         params.progress_callback = bad
         with pytest.raises(Exception):
             _ll.LlamaModel(path_model=model_path, params=params, verbose=False)
+
+
+# =============================================================================
+# A7: MtmdContext post-close
+# =============================================================================
+
+# Reuse the gemma-4 mmproj fixture pair already adopted by tests/test_mtmd.py.
+_GEMMA4_MODEL = Path("models/gemma-4-E4B-it-Q4_K_M.gguf")
+_GEMMA4_MMPROJ = Path("models/mmproj-gemma-4-E4B-it-BF16.gguf")
+_skip_no_gemma4 = pytest.mark.skipif(
+    not (_GEMMA4_MODEL.exists() and _GEMMA4_MMPROJ.exists()),
+    reason="gemma-4 model or mmproj not found in models/",
+)
+
+
+@_skip_no_gemma4
+class TestMtmdContextPostClose:
+    """A7: scattered `if (!s.ptr) throw` checks were replaced with a real
+    `ensure_valid()` + `close()` + `is_valid` lifecycle. Pin that here."""
+
+    @pytest.fixture
+    def mtmd_ctx_pair(self):
+        import gc
+        from inferna.llama.llama_cpp import (
+            LlamaModel, LlamaModelParams, MtmdContext, MtmdContextParams,
+        )
+        params = LlamaModelParams()
+        params.n_gpu_layers = 0
+        model = LlamaModel(str(_GEMMA4_MODEL), params, verbose=False)
+        ctx_params = MtmdContextParams(use_gpu=False, n_threads=2)
+        ctx = MtmdContext(str(_GEMMA4_MMPROJ), model, ctx_params)
+        yield ctx, model
+        del ctx
+        del model
+        gc.collect()
+
+    def test_is_valid_flips(self, mtmd_ctx_pair):
+        ctx, _model = mtmd_ctx_pair
+        assert ctx.is_valid is True
+        ctx.close()
+        assert ctx.is_valid is False
+
+    def test_supports_vision_after_close_raises(self, mtmd_ctx_pair):
+        ctx, _model = mtmd_ctx_pair
+        ctx.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            _ = ctx.supports_vision
+
+    def test_tokenize_after_close_raises(self, mtmd_ctx_pair):
+        from inferna.llama.mtmd import get_default_media_marker
+        from inferna.llama.llama_cpp import MtmdBitmap
+
+        ctx, _model = mtmd_ctx_pair
+        marker = get_default_media_marker()
+        # 4x4 red pixel bitmap; details don't matter — the call must
+        # not get past the post-close guard.
+        rgb = bytes([255, 0, 0]) * 16
+        bm = MtmdBitmap.create_image(4, 4, rgb)
+        ctx.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            ctx.tokenize(f"caption: {marker}", [bm], add_special=False, parse_special=True)
+
+    def test_double_close_is_idempotent(self, mtmd_ctx_pair):
+        ctx, _model = mtmd_ctx_pair
+        ctx.close()
+        ctx.close()  # must not raise / crash
+        assert ctx.is_valid is False

@@ -77,39 +77,25 @@ jobs:
           # CPython 3.12+; earlier versions lack the limited-API
           # surface nanobind relies on.
           CIBW_BUILD: "cp312-*"
-          # Per-platform environment. cibuildwheel resolves
-          # CIBW_ENVIRONMENT_<PLAT> independently of pyproject.toml's
-          # [tool.cibuildwheel.<plat>] environment table, so each
-          # platform must carry its own copy of the relevant defaults
-          # from pyproject.toml AND the two abi3 opt-in vars. The
-          # macOS entry is critical: without MACOSX_DEPLOYMENT_TARGET
-          # the deployment target defaults to 10.9 and llama.cpp's
-          # std::filesystem::path usage fails to compile (introduced
-          # in macOS 10.15).
-          CIBW_ENVIRONMENT_LINUX: >-
+          # Pyproject's [tool.cibuildwheel.<plat>].environment is canonical
+          # for GGML_*, MACOSX_DEPLOYMENT_TARGET. The abi3 opt-in vars
+          # below are the only platform-independent additions, so a single
+          # CIBW_ENVIRONMENT (no _<PLAT> suffix) extends each platform's
+          # environment table cleanly. ccache vars are forwarded via
+          # CIBW_ENVIRONMENT_PASS_LINUX (Linux container) and live as
+          # runner-level env on macOS/Windows.
+          CIBW_ENVIRONMENT: >-
             SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
             SKBUILD_WHEEL_PY_API=cp312
-            GGML_METAL=0
-            GGML_NATIVE=0
-            CCACHE_DIR=/project/.ccache
-            CCACHE_DEPEND=1
-            CMAKE_C_COMPILER_LAUNCHER=ccache
-            CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          CIBW_ENVIRONMENT_MACOS: >-
-            SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
-            SKBUILD_WHEEL_PY_API=cp312
-            MACOSX_DEPLOYMENT_TARGET=11.0
-            GGML_METAL=1
-            GGML_NATIVE=0
-            CCACHE_DIR=${{ github.workspace }}/.ccache
-            CCACHE_DEPEND=1
-            CMAKE_C_COMPILER_LAUNCHER=ccache
-            CMAKE_CXX_COMPILER_LAUNCHER=ccache
-          CIBW_ENVIRONMENT_WINDOWS: >-
-            SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
-            SKBUILD_WHEEL_PY_API=cp312
-            GGML_METAL=0
-            GGML_NATIVE=0
+          CIBW_ENVIRONMENT_PASS_LINUX: >-
+            CCACHE_DIR
+            CCACHE_DEPEND
+            CMAKE_C_COMPILER_LAUNCHER
+            CMAKE_CXX_COMPILER_LAUNCHER
+          CCACHE_DIR: ${{ runner.os == 'Linux' && '/project/.ccache' || format('{0}/.ccache', github.workspace) }}
+          CCACHE_DEPEND: 1
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
 
       - uses: actions/upload-artifact@v7
         with:

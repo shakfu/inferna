@@ -1,0 +1,166 @@
+name: _gpu-build-cuda
+
+# Reusable workflow: builds CUDA 12.4 wheels for Linux x86_64.
+# Called by build-gpu-wheels.yml (stable) and build-gpu-wheels-abi3.yml (abi3).
+# Do not invoke directly — `workflow_call` only.
+
+on:
+  workflow_call:
+    inputs:
+      wheel_kind:
+        description: '"stable" | "abi3" — controls artifact + cache key prefix'
+        type: string
+        required: true
+      cibw_version:
+        description: 'cibuildwheel pin (e.g. 3.4.0 or 3.4.1)'
+        type: string
+        required: true
+      cibw_build:
+        description: 'CIBW_BUILD selector (e.g. "cp310-* ... cp314-*" or "cp312-*")'
+        type: string
+        required: true
+      link_mode:
+        description: '"dynamic" | "static"'
+        type: string
+        required: true
+      enabled:
+        description: 'Whether this backend should run'
+        type: boolean
+        required: true
+      extra_cibw_env:
+        description: 'Extra newline-separated KEY=VALUE pairs appended to CIBW_ENVIRONMENT_LINUX (use "" for none)'
+        type: string
+        default: ""
+
+jobs:
+  build:
+    if: inputs.enabled
+    name: ${{ inputs.wheel_kind == 'abi3' && 'CUDA 12.4 abi3' || 'CUDA 12.4' }} - Linux x86_64 (${{ inputs.link_mode }})
+    runs-on: ubuntu-22.04
+    env:
+      CIBW_BUILD: ${{ inputs.cibw_build }}
+
+    steps:
+      # Fail fast on bad input values. workflow_call doesn't support
+      # `choice` inputs, so we validate at run time. A typo in a caller
+      # would otherwise silently fall through the
+      # `${{ x == 'stable' && ... || ... }}` ternaries below.
+      - name: Validate inputs
+        shell: bash
+        run: |
+          case "${{ inputs.wheel_kind }}" in
+            stable|abi3) ;;
+            *) echo "::error::wheel_kind must be 'stable' or 'abi3', got '${{ inputs.wheel_kind }}'"; exit 1 ;;
+          esac
+          case "${{ inputs.link_mode }}" in
+            dynamic|static) ;;
+            *) echo "::error::link_mode must be 'dynamic' or 'static', got '${{ inputs.link_mode }}'"; exit 1 ;;
+          esac
+          if [[ ! "${{ inputs.cibw_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::cibw_version must be X.Y.Z, got '${{ inputs.cibw_version }}'"; exit 1
+          fi
+          if [[ -z "${{ inputs.cibw_build }}" ]]; then
+            echo "::error::cibw_build must not be empty"; exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h
+
+      - name: Cache thirdparty deps
+        id: cache-deps
+        uses: actions/cache@v5
+        with:
+          path: thirdparty/
+          key: deps-${{ inputs.wheel_kind == 'abi3' && 'abi3-' || '' }}cuda-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/_gpu-build-cuda.yml') }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install cibuildwheel
+        run: pip install "cibuildwheel==${{ inputs.cibw_version }}"
+
+      - name: Set CCACHE_DIR to workspace
+        run: echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ccache-${{ inputs.wheel_kind == 'abi3' && 'abi3-' || '' }}cuda-${{ inputs.link_mode }}
+          evict-old-files: 1d
+
+      - name: Build CUDA wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_ARCHS_LINUX: x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          CIBW_BEFORE_ALL_LINUX: >
+            yum install -y git yum-utils epel-release &&
+            yum install -y ccache &&
+            yum-config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo &&
+            yum install -y cuda-nvcc-12-4 cuda-cudart-devel-12-4 cuda-driver-devel-12-4 libcublas-devel-12-4 &&
+            ln -s /usr/local/cuda-12.4 /usr/local/cuda &&
+            if [ -f /project/thirdparty/.deps-complete ]; then echo "=== Deps cached, skipping build ==="; exit 0; fi &&
+            CI_PYTHON=$(ls -d /opt/python/cp3*/bin | head -1) &&
+            $CI_PYTHON/pip install cmake ninja &&
+            PATH=/usr/local/cuda/bin:$CI_PYTHON:$PATH
+            CCACHE_DIR=/project/.ccache
+            CCACHE_DEPEND=1
+            CMAKE_C_COMPILER_LAUNCHER=ccache
+            CMAKE_CXX_COMPILER_LAUNCHER=ccache
+            CMAKE_CUDA_COMPILER_LAUNCHER=ccache
+            CMAKE_CUDA_ARCHITECTURES="75"
+            GGML_NATIVE=OFF GGML_CUDA=1 GGML_METAL=0
+            SD_USE_VENDORED_GGML=${{ inputs.link_mode == 'dynamic' && '0' || '1' }}
+            $CI_PYTHON/python scripts/manage.py build --all --deps-only --no-sd-examples
+            ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }} &&
+            touch /project/thirdparty/.deps-complete
+          CIBW_BEFORE_BUILD_LINUX: >
+            cd {project} && python scripts/ci_rename_package.py inferna-cuda12 &&
+            cd {project} && python scripts/manage.py write_build_config
+          CIBW_ENVIRONMENT_LINUX: >
+            GGML_CUDA=1
+            GGML_METAL=0
+            CUDA_PATH=/usr/local/cuda
+            CMAKE_CUDA_ARCHITECTURES="75"
+            GGML_NATIVE=OFF
+            PATH=/usr/local/cuda/bin:$PATH
+            LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+            CFLAGS=-s
+            CXXFLAGS=-s
+            CCACHE_DIR=/project/.ccache
+            CCACHE_DEPEND=1
+            CMAKE_C_COMPILER_LAUNCHER=ccache
+            CMAKE_CXX_COMPILER_LAUNCHER=ccache
+            CMAKE_CUDA_COMPILER_LAUNCHER=ccache
+            WITH_DYLIB=${{ inputs.link_mode == 'dynamic' && '1' || '0' }}
+            SD_USE_VENDORED_GGML=${{ inputs.link_mode == 'dynamic' && '0' || '1' }}
+            ${{ inputs.extra_cibw_env }}
+          CIBW_TEST_COMMAND: ""
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            test -d {project}/thirdparty/llama.cpp/dynamic || { echo "ERROR: dynamic lib dir missing: {project}/thirdparty/llama.cpp/dynamic"; exit 1; } &&
+            LD_LIBRARY_PATH={project}/thirdparty/llama.cpp/dynamic:$LD_LIBRARY_PATH
+            auditwheel repair -w {dest_dir} {wheel}
+            --plat manylinux_2_35_x86_64
+            --exclude libcuda.so.1
+            --exclude libcudart.so.12
+            --exclude libcublas.so.12
+            --exclude libcublasLt.so.12
+            --exclude libgomp.so.1
+
+      - name: List built wheels
+        run: ls -lah wheelhouse/
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ inputs.wheel_kind == 'abi3' && 'abi3-' || '' }}cuda-linux-x86_64
+          path: ./wheelhouse/*.whl

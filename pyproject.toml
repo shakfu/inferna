@@ -164,68 +164,78 @@ qdrant = [
 
 # -----------------------------------------------------------------------------
 # cibuildwheel configuration for cross-platform wheel building
+#
+# Source-of-truth policy (C2):
+# This section is canonical for cross-backend defaults — Python matrix,
+# skip list, manylinux image, repair-wheel commands, build verbosity,
+# baseline environment vars (GGML_NATIVE=0 etc.), and dependency build
+# (`before-all`). Workflows MUST NOT duplicate values defined here unless
+# they are intentionally overriding for a specific reason (e.g. GPU
+# backends override `manylinux-x86_64-image` for CUDA/ROCm/SYCL because
+# their toolchains require manylinux_2_28 and beyond).
+#
+# Two cibuildwheel semantics matter when reading this file:
+#   1. CIBW_<KEY>_<PLAT> env vars *replace* the pyproject `environment`
+#      table for that platform (no merge). Workflows that need to add
+#      build-specific env vars should prefer CIBW_ENVIRONMENT_PASS_<PLAT>
+#      when the runner already has the var set, so pyproject defaults are
+#      preserved.
+#   2. `before-all` runs once per JOB. `before-build` runs once per
+#      *Python version*. Anything that builds third-party deps belongs in
+#      `before-all` to avoid rebuilding them 5x for cp310-cp314.
 # -----------------------------------------------------------------------------
 
 [tool.cibuildwheel]
-# Build for Python 3.10+
+# Default Python matrix. Variants (e.g. abi3 cp312-only) override via
+# CIBW_BUILD on the dispatching workflow.
 build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
-
-# Skip musllinux (Alpine) - not commonly needed
 skip = "*-musllinux_* *-win32 *-manylinux_i686"
+build-verbosity = 1
 
-# Build thirdparty deps before building the wheel
-before-build = "python scripts/manage.py build --all --deps-only --no-sd-examples && python -c \"from pathlib import Path; libs=list(Path('thirdparty/llama.cpp/lib').glob('*llama*')); assert libs, 'manage.py produced no libraries'\""
+# Per-Python `before-build` is intentionally empty — every platform has
+# its own `before-all` (see the per-platform sections below) that builds
+# third-party deps once for the whole job. A non-empty global
+# `before-build` would re-trigger the deps build on every Python build.
+before-build = ""
 
-# Test the built wheels
+# Test wheels with the project's pytest suite. GPU workflows override
+# this to "" because their hosted runners lack the GPU hardware required
+# to exercise the backend.
 test-groups = ["dev"]
 test-command = "pytest {project}/tests -x -q --ignore={project}/tests/examples -o pythonpath="
 
-# Build verbosity
-build-verbosity = 1
-
 [tool.cibuildwheel.linux]
-# Use manylinux2014 for broader compatibility
 manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"
 
-# Install build dependencies and build thirdparty libs (once for all Python versions)
-# Use /opt/python/cp310 since system python3 is 3.6 on manylinux2014 (too old for manage.py)
-# cp310 is hard-coded because manylinux2014's bundled system Python
-# (3.6) is too old for manage.py. Revisit when this image is bumped to
-# manylinux_2_28, which ships modern Python out of the box.
+# Build thirdparty deps once at job start (NOT per-Python).
+# cp310 hard-coding: manylinux2014's bundled system Python is 3.6, too
+# old for manage.py. Revisit when this image is bumped to manylinux_2_28
+# (which ships modern Python).
 before-all = "yum install -y git ccache && /opt/python/cp310-cp310/bin/pip install cmake ninja && PATH=/opt/python/cp310-cp310/bin:$PATH /opt/python/cp310-cp310/bin/python scripts/manage.py build --all --deps-only --no-sd-examples && test -d thirdparty/llama.cpp/lib && ls thirdparty/llama.cpp/lib/*llama* >/dev/null 2>&1 || { echo 'ERROR: manage.py produced no libraries'; exit 1; }"
 
-# Disable global before-build on Linux (deps already built by before-all)
-before-build = ""
-
-# Environment variables for Linux builds
+# Baseline build env. Workflows that need additional vars (ccache paths,
+# launcher overrides, etc.) should set runner-level env and forward via
+# CIBW_ENVIRONMENT_PASS_LINUX rather than overriding this table — that
+# preserves these defaults.
 environment = { GGML_METAL = "0", GGML_NATIVE = "0" }
 
-# Repair wheels with auditwheel
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
 
 [tool.cibuildwheel.macos]
-# Environment variables for macOS builds
-environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", GGML_METAL = "1", GGML_NATIVE = "0" }
-
-# Build thirdparty deps once (before-all) instead of once-per-Python (the
-# global before-build), mirroring the Linux strategy. Without this, macOS
-# rebuilt llama.cpp/whisper.cpp/sd.cpp 5x for cp310-cp314 and re-cloned
-# the upstream repos each time.
+# Build thirdparty deps once at job start (NOT per-Python).
 before-all = "python scripts/manage.py build --all --deps-only --no-sd-examples && test -d thirdparty/llama.cpp/lib && ls thirdparty/llama.cpp/lib/*llama* >/dev/null 2>&1 || { echo 'ERROR: manage.py produced no libraries'; exit 1; }"
 
-# Disable global before-build on macOS (deps already built by before-all).
-before-build = ""
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", GGML_METAL = "1", GGML_NATIVE = "0" }
 
-# Repair wheels with delocate
 repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} --exclude libssl --exclude libcrypto"
 
 [tool.cibuildwheel.windows]
-# Environment variables for Windows builds
+# Build thirdparty deps once at job start (NOT per-Python). The
+# `pip install delvewheel` step here is a no-op when delvewheel is
+# already installed, so it's cheap to keep idempotent.
+before-all = "pip install delvewheel && python scripts/manage.py build --all --deps-only --no-sd-examples && python -c \"from pathlib import Path; libs=list(Path('thirdparty/llama.cpp/lib').glob('*llama*')); assert libs, 'manage.py produced no libraries'\""
+
 environment = { GGML_METAL = "0", GGML_NATIVE = "0" }
 
-# Install delvewheel before repair
-before-build = "pip install delvewheel && python scripts/manage.py build --all --deps-only --no-sd-examples && python -c \"from pathlib import Path; libs=list(Path('thirdparty/llama.cpp/lib').glob('*llama*')); assert libs, 'manage.py produced no libraries'\""
-
-# Repair wheels with delvewheel
 repair-wheel-command = "delvewheel repair -w {dest_dir} {wheel}"
