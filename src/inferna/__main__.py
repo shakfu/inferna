@@ -1,9 +1,27 @@
 """inferna CLI: inferna [command] (or python -m inferna [command])"""
 
 import argparse
+import contextlib
+import os
 import platform
 import sys
 from typing import Any, Dict, Iterator, cast
+
+
+@contextlib.contextmanager
+def _silence_stderr():
+    """Redirect fd 2 to /dev/null for native libs that bypass log callbacks."""
+    sys.stderr.flush()
+    saved = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved, 2)
+        os.close(saved)
 
 from .api import Response
 
@@ -136,8 +154,10 @@ def cmd_info() -> int:
     try:
         from .llama import llama_cpp as cy
 
-        cy.llama_backend_init()
-        cy.ggml_backend_load_all()
+        cy.disable_logging()
+        with _silence_stderr():
+            cy.llama_backend_init()
+            cy.ggml_backend_load_all()
         llama_ver = build_info.get("llama_cpp_version", "unknown")
         print(f"  version:       {llama_ver}")
         print(f"  ggml version:  {cy.ggml_version()}")
@@ -168,9 +188,11 @@ def cmd_info() -> int:
 
         whisper_cpp = importlib.import_module(".whisper.whisper_cpp", package="inferna")
 
+        whisper_cpp.disable_logging()
         # Load backends so whisper sees GPU registries (mirrors what
         # every upstream whisper.cpp example does in main())
-        whisper_cpp.ggml_backend_load_all()
+        with _silence_stderr():
+            whisper_cpp.ggml_backend_load_all()
 
         info_str = whisper_cpp.print_system_info()
         whisper_ver = build_info.get("whisper_cpp_version", "unknown")
@@ -192,10 +214,12 @@ def cmd_info() -> int:
     # stable-diffusion.cpp
     print("stable-diffusion.cpp:")
     try:
-        from .sd import get_system_info, ggml_backend_load_all as sd_load_backends
+        from .sd import get_system_info, ggml_backend_load_all as sd_load_backends, set_log_callback as sd_set_log_callback
 
+        sd_set_log_callback(lambda level, text: None)
         # Load backends so sd sees GPU registries
-        sd_load_backends()
+        with _silence_stderr():
+            sd_load_backends()
 
         sd_ver = build_info.get("stable_diffusion_cpp_version", "unknown")
         print(f"  version:       {sd_ver}")

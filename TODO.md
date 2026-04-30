@@ -50,13 +50,57 @@ Gap analysis vs. llama.cpp b8893 release assets. Ordered by effort/payoff.
 
 - [ ] **Monotonic `b<commit-count>` build-tag scheme** -- llama.cpp's `get-tag-name/action.yml` uses `fetch-depth: 0` + `git rev-list --count HEAD` to produce `b${BUILD_NUMBER}` on `master`, `${branch}-b${count}-${sha7}` on branches. Lets every CI-built wheel be distinguishable without bumping `pyproject.toml` version on every pre-release. Apply in `build-cibw.yml` / `build-gpu-wheels.yml` upload steps
 
-## Nanobind Wrappers (low priority, from review)
+## Wrapper Layer (from REVIEW)
+
+Items distilled from a 2026-04 wrapper-code review. Two HIGH correctness bugs (`Speculative.is_compat` KV clobber, SD preview-callback UAF) and one latent `EmbeddedServer.start()` cleanup leak were fixed in-session; this list is what remained after independent re-verification (some original findings were dropped as either reversed or benign).
+
+### Hardening — small bugs & ergonomic gaps
+
+- [ ] **Add `BusyGuard` on `SDContext.close`** (or document "do not close while generating"). Currently `_sd_native.cpp:789-791` calls `free_sd_ctx` with no `busy_lock` — concurrent `generate_image` (GIL released) races against the free. `WhisperContextW::close` has the same shape; check both.
+
+- [ ] **Make `WhisperContext.close` idempotent.** `_whisper_native.cpp:432-435` calls `s.ensure_valid()` before the null check, so a second close raises `RuntimeError` instead of being a no-op. Drop the `ensure_valid()` and gate cleanup on `s.ctx != nullptr`.
+
+- [ ] **`PyErr_WriteUnraisable` in `_mongoose.cpp` HTTP handler.** `server/_mongoose.cpp:73-78` catches all Python handler exceptions and replies 500 with no logging. Surface them via `PyErr_WriteUnraisable` (or `PyErr_Print`) before the reply so handler bugs are visible instead of silently re-coded.
+
+- [ ] **Document `Manager::send_reply` thread-affinity.** `server/_mongoose.cpp:114-131` walks `mgr.conns` while another thread may be inside GIL-released `poll`. `embedded.py` is single-threaded today but the constraint is undocumented. Add a docstring asserting "must be called from the same thread as `poll`", or guard with mongoose's wakeup primitive.
+
+- [ ] **Replace per-token `LlamaBatch` alloc in `Speculative.draft`.** `_speculative.py:125, :144` constructs a fresh native batch each loop iteration; the project ships `BatchMemoryPool` in `_python_helpers.py` for exactly this. Pure perf, not correctness.
+
+- [ ] **Better `from_numpy` error for non-2D/3D inputs.** `_sd_native.cpp:447-479` falls through to a bare nanobind cast error on 4D+ arrays. Add an explicit `if ndim not in (2, 3): raise ValueError(...)`.
+
+- [ ] **Return `None` for failed slots in `generate_with_params`.** `_sd_native.cpp:825-844` wraps null-data results as stub `SDImage` objects mixed in with valid ones; only signal is a `warnings.warn`. Returning `None` for invalid slots makes `len(images) != batch` mean what it should.
+
+- [ ] **Tidy `chat_apply_template` second-call buffer size.** `_llama_native.cpp:1000-1002` passes `required` (not `(int) buf.size()`) as the buffer size. Cosmetic — current behaviour is fine because the result is constructed with explicit length — but worth fixing.
+
+### Coverage — bindings worth filling in
+
+- [ ] **Bind `llama_set_adapters_lora` + `llama_set_adapter_cvec`.** Without these, `LlamaAdapterLora` is read-only — `lora_adapter_init` works but the loaded adapter cannot actually be applied to a context. (`_llama_native.cpp` near line 915.) Verified against `thirdparty/llama.cpp/include/llama.h`.
+
+- [ ] **Bind the `whisper_*_with_state` family.** `_whisper_native.cpp:592-598` exposes `WhisperState` as a constructor-only stub. The whole point of `whisper_state` is concurrent decoding from one context; without methods (`whisper_full_with_state`, `whisper_encode_with_state`, etc.) the class is useless.
+
+- [ ] **Bind `llama_state_*` save/load.** Only `llama_state_get_size` is bound (`_llama_native.cpp` near line 1188); `llama_state_get_data` / `_set_data` / `_load_file` / `_save_file` and the `_seq_*` and `_ext` variants are all unbound. Required for context checkpointing/resumption.
+
+- [ ] **Bind whisper callbacks.** `whisper_full_params` exposes `new_segment_callback`, `progress_callback`, `encoder_begin_callback`, `abort_callback` — none are bound. SD module already has the analogous pattern; mirror it.
+
+### Refactor — convention drift
+
+- [ ] **Decide composition-vs-subclass for SD wrappers.** `SDImage` uses composition citing nanobind dealloc constraints (`stable_diffusion.py:156-158`); `SDContext`, `SDContextParams`, `SDSampleParams`, `SDImageGenParams` subclass the native types. Either the SDImage rationale applies to all of them or none. Pick one and apply uniformly.
+
+- [ ] **Migrate enum exports to `nb::enum_` (or document why flat ints are required).** Currently every llama enum lives in three places — `llama.h`, `_llama_native_enums.cpp` flat exports, and `llama_cpp.py` re-aliases — so each new upstream enum needs three coordinated edits. The MTMD TU's `nb::enum_<MtmdInputChunkType>().value(...).export_values()` is the cleaner reference.
+
+- [ ] **Add `tests/test_llama_native.py`.** Direct-surface coverage for symbols the integration tests skip: `LlamaModelKvOverride`/`TensorBuftOverride`, `GgmlBackend*` info, threadpool `attach`/`detach`, `chat_builtin_templates`, TTS helpers, `set_log_callback`.
+
+### Pre-existing TU consolidation
 
 - [ ] **Deduplicate `ggml_backend_load_all` initialization** across `_llama_native.cpp`, `_whisper_native.cpp`, and `_sd_native.cpp`. Extract a shared helper so the three modules cannot drift on backend setup.
 
 - [ ] **Consolidate `LlamaBatch.set_batch` / `add_sequence` fill loops** in `src/inferna/llama/_llama_native.cpp`. Both methods duplicate the per-token `pos` / `seq_id` / `n_seq_id` / `logits` / `token` assignment; factor the inner loop into a single helper parameterized by starting offset and `seq_id`.
 
 - [ ] **Validate ggml header consistency across translation units.** `_whisper_native.cpp` and `_sd_native.cpp` forward-declare ggml backend APIs while `_llama_native.cpp` includes the full ggml headers. Currently consistent, but check for cross-TU ABI drift on each upstream ggml header bump.
+
+### Open observation (not yet a verified bug)
+
+- [ ] **Investigate flaky `test_embedded_server_context_manager`.** One failure observed in a 1389-test run (`mg_listen` returned null on port 8097), passes cleanly on rerun. Root cause unverified — candidates include macOS TIME_WAIT residue, transient external interference, or an internal race across rapid `mg_mgr_init`/`mg_listen` cycles. Highest-value next move: log `errno`/`strerror(errno)` from the `_mongoose.cpp` listen path so the next flake produces a real signal instead of three guesses.
 
 ## RAG Scaling (see docs/dev/scaling_rag.md)
 

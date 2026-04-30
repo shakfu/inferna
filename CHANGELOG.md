@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Changed
+
+- `inferna info` now silences native-library log chatter on stdout/stderr. The command previously dumped `ggml_metal_device_init:` / `ggml_metal_library_init:` lines (and similar from whisper/sd) above its own output, mixing native backend init logs with the structured info table. `cmd_info()` in `src/inferna/__main__.py` now installs no-op log callbacks via `llama_cpp.disable_logging()`, `whisper_cpp.disable_logging()`, and `sd.set_log_callback(lambda level, text: None)` (note: passing `None` to the sd callback restores the default stderr logger, so a no-op lambda is required), and additionally wraps each `ggml_backend_load_all()` call in a new `_silence_stderr()` fd-2 redirect helper to catch the early Metal device-init prints that fire during backend registration before the log callback takes effect.
+
 ### Fixed
 
 - `EmbeddedServer.start()` now releases all native state when bring-up fails. Previously, if `_mgr.listen()` returned False (or any later step raised), the server retained `_model` / `_slots` / `_embedder`, the manager's `_dispatch` closure, and the `signal.signal()` handlers — pinning the entire instance (and its `LlamaModel` + `LlamaContext` + `LlamaSampler` chain) to interpreter shutdown. That late teardown ran after Metal cleanup, tripping `GGML_ASSERT([rsets->data count] == 0)` and aborting the process. The cleanup is now a single `try`/`finally` keyed on a `success` flag: any non-success path drops the dispatcher handler, restores signal handlers, and clears refs to the loaded model/slots/embedder. Regression test: `tests/test_mserver_embedded.py::TestEmbeddedServerLifecycle::test_failed_start_releases_native_state`.
