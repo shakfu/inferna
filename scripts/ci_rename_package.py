@@ -57,6 +57,14 @@ def main() -> int:
         return 2
 
     text = path.read_text()
+    # Idempotent: cibuildwheel runs CIBW_BEFORE_BUILD once per Python version,
+    # so this script is invoked N times against the same pyproject. After the
+    # first pass the canonical line is already gone — succeed silently if the
+    # file is already at the requested target name.
+    already = re.compile(rf'^name\s*=\s*"{re.escape(args.new_name)}"\s*$', re.MULTILINE)
+    if already.search(text):
+        print(f"Package already renamed to {args.new_name} in {path}; nothing to do")
+        return 0
     # Match the canonical form; allow either single or double quotes.
     pattern = re.compile(r'^name\s*=\s*"inferna"\s*$', re.MULTILINE)
     match = pattern.search(text)

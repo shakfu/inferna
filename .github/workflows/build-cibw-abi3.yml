@@ -77,16 +77,32 @@ jobs:
           # CPython 3.12+; earlier versions lack the limited-API
           # surface nanobind relies on.
           CIBW_BUILD: "cp312-*"
-          # Pyproject's [tool.cibuildwheel.<plat>].environment is canonical
-          # for GGML_*, MACOSX_DEPLOYMENT_TARGET. The abi3 opt-in vars
-          # below are the only platform-independent additions, so a single
-          # CIBW_ENVIRONMENT (no _<PLAT> suffix) extends each platform's
-          # environment table cleanly. ccache vars are forwarded via
-          # CIBW_ENVIRONMENT_PASS_LINUX (Linux container) and live as
-          # runner-level env on macOS/Windows.
-          CIBW_ENVIRONMENT: >-
+          # cibuildwheel's CIBW_ENVIRONMENT (and CIBW_ENVIRONMENT_<PLAT>)
+          # *replace* — not merge with — pyproject's
+          # [tool.cibuildwheel.<plat>].environment table. So the
+          # per-platform values below must re-supply everything pyproject
+          # sets (MACOSX_DEPLOYMENT_TARGET, GGML_*) in addition to the
+          # abi3 opt-in vars. Dropping MACOSX_DEPLOYMENT_TARGET=11.0 makes
+          # the macOS deployment target fall back to 10.9, which predates
+          # std::filesystem and breaks the llama.cpp build. ccache vars
+          # are forwarded via CIBW_ENVIRONMENT_PASS_LINUX (Linux
+          # container) and live as runner-level env on macOS/Windows.
+          CIBW_ENVIRONMENT_MACOS: >-
             SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
             SKBUILD_WHEEL_PY_API=cp312
+            MACOSX_DEPLOYMENT_TARGET=11.0
+            GGML_METAL=1
+            GGML_NATIVE=0
+          CIBW_ENVIRONMENT_LINUX: >-
+            SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
+            SKBUILD_WHEEL_PY_API=cp312
+            GGML_METAL=0
+            GGML_NATIVE=0
+          CIBW_ENVIRONMENT_WINDOWS: >-
+            SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON"
+            SKBUILD_WHEEL_PY_API=cp312
+            GGML_METAL=0
+            GGML_NATIVE=0
           CIBW_ENVIRONMENT_PASS_LINUX: >-
             CCACHE_DIR
             CCACHE_DEPEND
