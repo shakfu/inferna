@@ -25,37 +25,22 @@ on:
       cuda_linux:
         description: 'Build CUDA 12 wheels (Linux x86_64)'
         required: false
-        default: false
+        default: true
         type: boolean
       rocm_linux:
         description: 'Build ROCm wheels (Linux x86_64)'
         required: false
-        default: false
+        default: true
         type: boolean
       sycl_linux:
         description: 'Build SYCL wheels (Linux x86_64)'
         required: false
-        default: false
+        default: true
         type: boolean
       vulkan_linux:
         description: 'Build Vulkan wheels (Linux x86_64)'
         required: false
-        default: false
-        type: boolean
-      cuda_windows:
-        description: 'Build CUDA 12 wheels (Windows x86_64)'
-        required: false
-        default: false
-        type: boolean
-      vulkan_windows:
-        description: 'Build Vulkan wheels (Windows x86_64)'
-        required: false
-        default: false
-        type: boolean
-      vulkan_macos_intel:
-        description: 'Build Vulkan wheels (MacOS Intel)'
-        required: false
-        default: false
+        default: true
         type: boolean
       upload_release:
         description: 'Upload wheels to GitHub Release'
@@ -106,52 +91,11 @@ jobs:
       link_mode: ${{ inputs.link_mode }}
       enabled: ${{ inputs.vulkan_linux }}
 
-  cuda_windows:
-    uses: ./.github/workflows/_gpu-build-cuda-windows.yml
-    with:
-      wheel_kind: stable
-      cibw_version: "3.4.0"
-      cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.cuda_windows }}
-
-  vulkan_windows:
-    uses: ./.github/workflows/_gpu-build-vulkan-windows.yml
-    with:
-      wheel_kind: stable
-      cibw_version: "3.4.0"
-      cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.vulkan_windows }}
-
-  vulkan_macos_intel:
-    uses: ./.github/workflows/_gpu-build-vulkan-macos-intel.yml
-    with:
-      wheel_kind: stable
-      cibw_version: "3.4.0"
-      cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.vulkan_macos_intel }}
-
-  smoke:
-    needs: [cuda, rocm, sycl, vulkan_linux, cuda_windows, vulkan_windows, vulkan_macos_intel]
-    if: always() && !cancelled()
-    uses: ./.github/workflows/_gpu-smoke.yml
-    with:
-      wheel_kind: stable
-      cuda_linux: ${{ inputs.cuda_linux }}
-      rocm_linux: ${{ inputs.rocm_linux }}
-      sycl_linux: ${{ inputs.sycl_linux }}
-      vulkan_linux: ${{ inputs.vulkan_linux }}
-      cuda_windows: ${{ inputs.cuda_windows }}
-      vulkan_windows: ${{ inputs.vulkan_windows }}
-      vulkan_macos_intel: ${{ inputs.vulkan_macos_intel }}
-
   # Collect + upload-release stay in the caller (not the reusables) so
   # the GITHUB_TOKEN forwarding stays explicit and local. Same logic as
   # the legacy build-gpu-wheels.yml.
   collect:
-    needs: [cuda, rocm, sycl, vulkan_linux, cuda_windows, vulkan_windows, vulkan_macos_intel]
+    needs: [cuda, rocm, sycl, vulkan_linux]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
@@ -176,7 +120,7 @@ jobs:
 
   upload_release:
     name: Upload wheels to GitHub Release
-    needs: [collect, smoke]
+    needs: [collect]
     if: always() && !cancelled() && inputs.upload_release
     runs-on: ubuntu-latest
     permissions:
