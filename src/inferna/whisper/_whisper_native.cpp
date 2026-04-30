@@ -217,7 +217,9 @@ NB_MODULE(_whisper_native, m) {
     // -------------------------------------------------------------------------
     // WhisperContextParams
     // -------------------------------------------------------------------------
-    nb::class_<WhisperContextParamsW>(m, "WhisperContextParams")
+    nb::class_<WhisperContextParamsW>(m, "WhisperContextParams",
+        "Parameters for loading a WhisperContext: GPU use, flash attention, "
+        "GPU device index, optional DTW token-timestamp alignment.")
         .def(nb::init<>())
         .def_prop_rw("use_gpu",
             [](WhisperContextParamsW& s){ return (bool)s.c.use_gpu; },
@@ -235,7 +237,9 @@ NB_MODULE(_whisper_native, m) {
     // -------------------------------------------------------------------------
     // WhisperVadParams
     // -------------------------------------------------------------------------
-    nb::class_<WhisperVadParamsW>(m, "WhisperVadParams")
+    nb::class_<WhisperVadParamsW>(m, "WhisperVadParams",
+        "Voice-activity detection parameters: speech/silence thresholds and "
+        "min/max durations applied to chunk audio before transcription.")
         .def(nb::init<>())
         .def_prop_rw("threshold",
             [](WhisperVadParamsW& s){ return s.c.threshold; },
@@ -264,7 +268,9 @@ NB_MODULE(_whisper_native, m) {
         return nb::cast(std::string(p));
     };
 
-    nb::class_<WhisperFullParamsW>(m, "WhisperFullParams")
+    nb::class_<WhisperFullParamsW>(m, "WhisperFullParams",
+        "Parameters for whisper_full: sampling strategy, language, thread/segment "
+        "controls, prompt tokens, timestamp options, VAD config.")
         .def(nb::init<int>(), "strategy"_a = (int)WHISPER_SAMPLING_GREEDY)
         .def_prop_rw("strategy",
             [](WhisperFullParamsW& s){ return (int)s.c.strategy; },
@@ -408,7 +414,9 @@ NB_MODULE(_whisper_native, m) {
     // -------------------------------------------------------------------------
     // WhisperTokenData
     // -------------------------------------------------------------------------
-    nb::class_<WhisperTokenDataW>(m, "WhisperTokenData")
+    nb::class_<WhisperTokenDataW>(m, "WhisperTokenData",
+        "Per-token result from whisper inference: id, text-token id, log-probabilities, "
+        "voice-print, and start/end timestamps.")
         .def(nb::init<>())
         .def_prop_ro("id",    [](WhisperTokenDataW& s){ return s.c.id; })
         .def_prop_ro("tid",   [](WhisperTokenDataW& s){ return s.c.tid; })
@@ -424,7 +432,9 @@ NB_MODULE(_whisper_native, m) {
     // -------------------------------------------------------------------------
     // WhisperContext
     // -------------------------------------------------------------------------
-    nb::class_<WhisperContextW>(m, "WhisperContext")
+    nb::class_<WhisperContextW>(m, "WhisperContext",
+        "A loaded whisper.cpp model + inference state. Run transcription via "
+        "full(samples, params); read results via the n_segments / segment_text APIs.")
         .def(nb::init<const std::string&, std::optional<WhisperContextParamsW*>>(),
              "model_path"_a, "params"_a = nb::none())
         .def_prop_ro("_busy_lock", [](WhisperContextW& s){ return s.busy_lock; })
@@ -589,7 +599,9 @@ NB_MODULE(_whisper_native, m) {
     // -------------------------------------------------------------------------
     // WhisperState — keeps a reference to its parent context.
     // -------------------------------------------------------------------------
-    nb::class_<WhisperStateW>(m, "WhisperState")
+    nb::class_<WhisperStateW>(m, "WhisperState",
+        "An additional whisper inference state, allowing concurrent transcriptions "
+        "off a single shared WhisperContext.")
         .def("__init__",
              [](WhisperStateW* self, nb::object ctx_obj) {
                  WhisperContextW* ctx = nb::cast<WhisperContextW*>(ctx_obj);
@@ -608,10 +620,14 @@ NB_MODULE(_whisper_native, m) {
         whisper_log_set(_whisper_no_log_cb, nullptr);
     }, "Suppress all C-level log output from whisper.cpp and ggml.");
 
-    m.def("version",           [](){ return std::string(whisper_version()); });
-    m.def("print_system_info", [](){ return std::string(whisper_print_system_info()); });
-    m.def("lang_max_id",       [](){ return whisper_lang_max_id(); });
-    m.def("lang_id",  [](const std::string& s){ return whisper_lang_id(s.c_str()); }, "lang"_a);
+    m.def("version",           [](){ return std::string(whisper_version()); },
+          "whisper.cpp version string of the linked library.");
+    m.def("print_system_info", [](){ return std::string(whisper_print_system_info()); },
+          "Multi-line system / build / SIMD capability summary string.");
+    m.def("lang_max_id",       [](){ return whisper_lang_max_id(); },
+          "Largest valid integer language id known to whisper.");
+    m.def("lang_id",  [](const std::string& s){ return whisper_lang_id(s.c_str()); }, "lang"_a,
+          "Map an ISO-639 short language code (e.g. 'en') to its integer language id, or -1 if unknown.");
     m.def("lang_str", [](int id) -> std::optional<std::string> {
         const char* r = whisper_lang_str(id);
         if (!r) return std::nullopt;

@@ -298,9 +298,25 @@ extern "C" void _c_preview_cb(int step, int frame_count, sd_image_t* frames,
     try {
         nb::list py_frames;
         for (int i = 0; i < frame_count; ++i) {
+            // Deep-copy each frame's pixel data into a wrapper-owned buffer.
+            // sd.cpp owns `frames[i].data` and reuses/frees it on the next
+            // sampling step, so the wrapper cannot borrow it across the
+            // callback's return — Python may stash these frames for later.
             auto* img = new SDImageW{};
-            img->img = frames[i];
-            img->owns = false;  // preview only — caller owns the buffer
+            img->img.width   = frames[i].width;
+            img->img.height  = frames[i].height;
+            img->img.channel = frames[i].channel;
+            size_t sz = (size_t)frames[i].width * frames[i].height
+                      * frames[i].channel;
+            if (sz > 0 && frames[i].data) {
+                img->img.data = (uint8_t*) std::malloc(sz);
+                if (!img->img.data) { delete img; throw std::bad_alloc(); }
+                std::memcpy(img->img.data, frames[i].data, sz);
+                img->owns = true;
+            } else {
+                img->img.data = nullptr;
+                img->owns = false;
+            }
             py_frames.append(nb::cast(img, nb::rv_policy::take_ownership));
         }
         g_preview_cb(step, py_frames, is_noisy);
@@ -999,4 +1015,31 @@ NB_MODULE(_sd_native, m) {
     m.def("ggml_backend_load_all", [](){
         inferna::load_all_backends("inferna.sd._sd_native");
     });
+
+    // Test hook: invokes the registered preview callback with a single
+    // synthetic frame whose pixel buffer is overwritten and freed *before*
+    // this function returns. Lets the test suite assert that frames retained
+    // by the Python callback past its return contain the original pixel data
+    // (i.e. were copied on the C++ side rather than borrowing the sd.cpp-
+    // owned buffer that gets reused on the next sampling step). Not part of
+    // the public API; test-only.
+    m.def("_test_invoke_preview_cb", [](uint32_t width, uint32_t height,
+                                         uint32_t channels, uint8_t fill_byte){
+        size_t sz = (size_t)width * height * channels;
+        uint8_t* buf = (uint8_t*) std::malloc(sz);
+        if (!buf) throw std::bad_alloc();
+        std::memset(buf, fill_byte, sz);
+        sd_image_t img{};
+        img.width = width;
+        img.height = height;
+        img.channel = channels;
+        img.data = buf;
+        _c_preview_cb(/*step=*/999, /*frame_count=*/1, &img,
+                      /*is_noisy=*/false, /*data=*/nullptr);
+        // Simulate sd.cpp reusing the buffer on the next sampling step:
+        // overwrite, then free. A wrapper that borrowed `buf` will now read
+        // poisoned/freed memory; a wrapper that deep-copied will be fine.
+        std::memset(buf, (uint8_t)~fill_byte, sz);
+        std::free(buf);
+    }, "width"_a, "height"_a, "channels"_a, "fill_byte"_a);
 }

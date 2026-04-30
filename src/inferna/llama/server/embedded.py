@@ -204,12 +204,13 @@ class EmbeddedServer:
         global _shutdown_requested
         _shutdown_requested = False
 
-        if not self.load_model():
-            return False
-
-        self._setup_signal_handlers()
-
+        success = False
         try:
+            if not self.load_model():
+                return False
+
+            self._setup_signal_handlers()
+
             host = self._config.host
             if host in ("127.0.0.1", "localhost"):
                 listen_addr = f"http://0.0.0.0:{self._config.port}"
@@ -226,11 +227,23 @@ class EmbeddedServer:
                 self._logger.error("Failed to create HTTP listener")
                 return False
             self._running = True
+            success = True
             self._logger.info(f"Embedded server started on {listen_addr}")
             return True
         except Exception as e:
             self._logger.error(f"Failed to start server: {e}")
             return False
+        finally:
+            if not success:
+                # Undo every retention path installed during start() so a
+                # failed bring-up does not pin native state to interpreter
+                # shutdown — leaked LlamaContext + Metal teardown order
+                # trips a [rsets count]==0 assertion.
+                self._mgr.set_handler(None)
+                self._restore_signal_handlers()
+                self._model = None
+                self._slots = []
+                self._embedder = None
 
     def stop(self) -> None:
         self._logger.info("Stop method called")

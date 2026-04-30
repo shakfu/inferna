@@ -1170,6 +1170,44 @@ class TestPreviewCallback:
         # No SD operations ran, so no preview events should have fired.
         assert previews == []
 
+    def test_preview_callback_frame_data_survives_callback_return(self):
+        """Frames retained by a preview callback must keep their original pixel
+        data after the native callback returns.
+
+        Regression: the C trampoline previously wrapped each sd_image_t with
+        owns=false, retaining a raw pointer into the sd.cpp-owned buffer that
+        gets reused on the next sampling step. Any frame the Python callback
+        stashed past the callback's return read freed/poisoned memory.
+        """
+        from inferna.sd import _sd_native as _n
+
+        FILL = 0x5A
+        W, H, C = 4, 4, 3
+        stashed: list = []
+
+        def cb(step, frames, is_noisy):
+            # Stash the wrappers — the bug surfaces when these are accessed
+            # *after* the callback returns and the underlying buffer has been
+            # reused or freed.
+            stashed.extend(frames)
+
+        try:
+            set_preview_callback(cb)
+            _n._test_invoke_preview_cb(W, H, C, FILL)
+        finally:
+            set_preview_callback(None)
+
+        assert len(stashed) == 1
+        arr = stashed[0].to_numpy()
+        assert arr.shape == (H, W, C)
+        # Every pixel should equal FILL. On the buggy code the underlying
+        # buffer has been overwritten with ~FILL and freed, so this read is
+        # UB — typically yielding ~FILL or arbitrary garbage.
+        assert (arr == FILL).all(), (
+            f"preview frame data was clobbered after callback return: "
+            f"expected all bytes == {FILL:#x}, got {arr.flatten()[:8]!r}"
+        )
+
     def test_clear_preview_callback(self):
         """Test clearing the preview callback."""
         # Clearing with None is valid even without a prior set.

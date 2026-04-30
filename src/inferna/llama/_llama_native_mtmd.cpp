@@ -110,7 +110,9 @@ void register_mtmd(nb::module_& m) {
     // -------------------------------------------------------------------------
     // MtmdContextParams
     // -------------------------------------------------------------------------
-    nb::class_<MtmdContextParamsW>(m, "MtmdContextParams")
+    nb::class_<MtmdContextParamsW>(m, "MtmdContextParams",
+        "Parameters for an MtmdContext: GPU use, thread count, media marker, "
+        "flash-attn type, image token budgets, warmup.")
         .def("__init__",
              [](MtmdContextParamsW* self, bool use_gpu, bool print_timings,
                 int n_threads, std::optional<std::string> media_marker,
@@ -158,7 +160,9 @@ void register_mtmd(nb::module_& m) {
     // -------------------------------------------------------------------------
     // MtmdBitmap
     // -------------------------------------------------------------------------
-    nb::class_<MtmdBitmapW> bitmap_cls(m, "MtmdBitmap");
+    nb::class_<MtmdBitmapW> bitmap_cls(m, "MtmdBitmap",
+        "Decoded image (HxWxRGB) or audio (1D float samples) buffer fed to MtmdContext.tokenize. "
+        "Construct via create_image / create_audio / from_file / from_buffer.");
     bitmap_cls
         .def(nb::init<>())
         .def_static("create_image",
@@ -263,7 +267,9 @@ void register_mtmd(nb::module_& m) {
     // -------------------------------------------------------------------------
     // MtmdInputChunk — non-owning; tied to MtmdInputChunks lifetime.
     // -------------------------------------------------------------------------
-    nb::class_<MtmdInputChunkW>(m, "MtmdInputChunk")
+    nb::class_<MtmdInputChunkW>(m, "MtmdInputChunk",
+        "Single chunk produced by MtmdContext.tokenize: text, image, or audio segment "
+        "with token/position counts. Non-owning view tied to its parent MtmdInputChunks.")
         .def(nb::init<>())
         .def_prop_ro("type", [](MtmdInputChunkW& s){
             if (!s.ptr) throw std::runtime_error("Chunk not initialized");
@@ -297,7 +303,9 @@ void register_mtmd(nb::module_& m) {
     // -------------------------------------------------------------------------
     // MtmdInputChunks — owning container, indexable.
     // -------------------------------------------------------------------------
-    nb::class_<MtmdInputChunksW>(m, "MtmdInputChunks")
+    nb::class_<MtmdInputChunksW>(m, "MtmdInputChunks",
+        "Owning, indexable container of MtmdInputChunk produced by MtmdContext.tokenize. "
+        "Pass to MtmdContext.eval_chunks for evaluation against a LlamaContext.")
         .def(nb::init<>())
         .def("__len__", [](MtmdInputChunksW& s){
             return s.ptr ? mtmd_input_chunks_size(s.ptr) : (size_t) 0;
@@ -327,7 +335,9 @@ void register_mtmd(nb::module_& m) {
     // -------------------------------------------------------------------------
     // MtmdContext
     // -------------------------------------------------------------------------
-    nb::class_<MtmdContextW>(m, "MtmdContext")
+    nb::class_<MtmdContextW>(m, "MtmdContext",
+        "Multimodal projector context: tokenizes text + bitmaps into chunks and "
+        "evaluates them into a LlamaContext. Construct from a .mmproj file plus a LlamaModel.")
         .def("__init__",
              [](MtmdContextW* self, const std::string& mmproj_path,
                 nb::object llama_model, std::optional<MtmdContextParamsW*> params) {
@@ -445,5 +455,5 @@ void register_mtmd(nb::module_& m) {
     // -------------------------------------------------------------------------
     m.def("get_default_media_marker", [](){
         return std::string(mtmd_default_marker());
-    });
+    }, "The default placeholder string (e.g. '<__media__>') marking media positions in input text.");
 }

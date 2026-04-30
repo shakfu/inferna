@@ -6,6 +6,7 @@ This module tests the Cython wrappers for llama.cpp's speculative decoding API.
 
 import pytest
 from inferna.llama.llama_cpp import (
+    LlamaBatch,
     LlamaModel,
     LlamaContext,
     LlamaContextParams,
@@ -109,6 +110,71 @@ class TestSpeculativeCompatibility:
         # Skip this test as it can cause segfaults
         # The C API doesn't handle NULL pointers gracefully
         pytest.skip("Skipping None test to avoid segfaults in C API")
+
+    @pytest.mark.slow
+    def test_is_compat_preserves_kv_cache(self, model_path):
+        """is_compat must not clobber a pre-existing KV cache when an empty
+        sequence is available to probe with.
+
+        Regression: the prior implementation called kv_cache_clear(True) after
+        its probe decode, silently destroying any prefill the caller had built
+        up on the target context.
+        """
+        model_params = LlamaModelParams()
+        model_params.n_gpu_layers = 0
+        model = LlamaModel(model_path, model_params)
+
+        ctx_params = LlamaContextParams()
+        ctx_params.n_ctx = 512
+        ctx_params.n_seq_max = 2  # leave seq 1 free for the probe
+        ctx = LlamaContext(model, ctx_params)
+
+        prompt_tokens = [1, 2, 3, 4, 5]
+        batch = LlamaBatch(
+            n_tokens=len(prompt_tokens), embd=0, n_seq_max=1, verbose=False
+        )
+        for i, tok in enumerate(prompt_tokens):
+            batch.add(tok, i, [0], i == len(prompt_tokens) - 1)
+        ctx.decode(batch)
+
+        pos_max_before = ctx.memory_seq_pos_max(0)
+        assert pos_max_before == len(prompt_tokens) - 1
+
+        Speculative.is_compat(ctx)
+
+        pos_max_after = ctx.memory_seq_pos_max(0)
+        assert pos_max_after == pos_max_before, (
+            f"is_compat clobbered seq 0: pos_max went "
+            f"{pos_max_before} -> {pos_max_after}"
+        )
+        # The probe seq itself must be left empty after is_compat returns.
+        assert ctx.memory_seq_pos_max(1) < 0
+
+    @pytest.mark.slow
+    def test_is_compat_raises_when_no_free_seq(self, model_path):
+        """When every sequence is prefilled, is_compat cannot probe without
+        clobbering caller data — it must raise rather than silently corrupt."""
+        model_params = LlamaModelParams()
+        model_params.n_gpu_layers = 0
+        model = LlamaModel(model_path, model_params)
+
+        ctx_params = LlamaContextParams()
+        ctx_params.n_ctx = 512  # default n_seq_max=1
+        ctx = LlamaContext(model, ctx_params)
+
+        prompt_tokens = [1, 2, 3, 4, 5]
+        batch = LlamaBatch(
+            n_tokens=len(prompt_tokens), embd=0, n_seq_max=1, verbose=False
+        )
+        for i, tok in enumerate(prompt_tokens):
+            batch.add(tok, i, [0], i == len(prompt_tokens) - 1)
+        ctx.decode(batch)
+
+        pos_max_before = ctx.memory_seq_pos_max(0)
+        with pytest.raises(RuntimeError, match="no empty sequence"):
+            Speculative.is_compat(ctx)
+        # KV must be intact even on the raise path.
+        assert ctx.memory_seq_pos_max(0) == pos_max_before
 
 
 class TestSpeculativeInitialization:

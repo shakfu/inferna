@@ -546,7 +546,9 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaModelParams
     // -------------------------------------------------------------------------
-    nb::class_<LlamaModelParamsW>(m, "LlamaModelParams")
+    nb::class_<LlamaModelParamsW>(m, "LlamaModelParams",
+        "Parameters that control llama_model loading: GPU offloading, mmap/mlock, "
+        "tensor splits across devices, optional progress callback.")
         .def(nb::init<>())
         PARAM_VAL(LlamaModelParamsW, int,  n_gpu_layers, "n_gpu_layers")
         PARAM_VAL(LlamaModelParamsW, int,  split_mode,   "split_mode")
@@ -608,7 +610,10 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaContextParams
     // -------------------------------------------------------------------------
-    nb::class_<LlamaContextParamsW>(m, "LlamaContextParams")
+    nb::class_<LlamaContextParamsW>(m, "LlamaContextParams",
+        "Parameters for creating a llama_context: context length, batch sizes, "
+        "thread counts, RoPE/YARN scaling, attention/pooling/flash-attn modes, "
+        "KV cache dtypes.")
         .def(nb::init<>())
         // n_ctx setter rejects negative values up-front (they would silently
         // become a huge unsigned via the C cast otherwise).
@@ -654,7 +659,9 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaModelQuantizeParams
     // -------------------------------------------------------------------------
-    nb::class_<LlamaModelQuantizeParamsW>(m, "LlamaModelQuantizeParams")
+    nb::class_<LlamaModelQuantizeParamsW>(m, "LlamaModelQuantizeParams",
+        "Parameters controlling model quantization (target ftype, output tensor "
+        "type, requantize/copy/pure flags, dry-run).")
         .def(nb::init<>())
         PARAM_VAL(LlamaModelQuantizeParamsW, int,  nthread, "nthread")
         PARAM_VAL(LlamaModelQuantizeParamsW, int,  ftype,   "ftype")
@@ -670,14 +677,16 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaSamplerChainParams
     // -------------------------------------------------------------------------
-    nb::class_<LlamaSamplerChainParamsW>(m, "LlamaSamplerChainParams")
+    nb::class_<LlamaSamplerChainParamsW>(m, "LlamaSamplerChainParams",
+        "Parameters for a LlamaSampler chain (currently: no_perf timing flag).")
         .def(nb::init<>())
         PARAM_VAL(LlamaSamplerChainParamsW, bool, no_perf, "no_perf");
 
     // -------------------------------------------------------------------------
     // LlamaChatMessage
     // -------------------------------------------------------------------------
-    nb::class_<LlamaChatMessageW>(m, "LlamaChatMessage")
+    nb::class_<LlamaChatMessageW>(m, "LlamaChatMessage",
+        "A single chat message: a (role, content) string pair fed to chat templates.")
         .def(nb::init<const std::string&, const std::string&>(),
              "role"_a, "content"_a)
         .def_prop_ro("role",    [](LlamaChatMessageW& s){ return s.role_s; })
@@ -686,7 +695,8 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaTokenData
     // -------------------------------------------------------------------------
-    nb::class_<LlamaTokenDataW>(m, "LlamaTokenData")
+    nb::class_<LlamaTokenDataW>(m, "LlamaTokenData",
+        "Per-token data used by samplers: token id, raw logit, post-softmax probability.")
         .def(nb::init<>())
         PARAM_VAL(LlamaTokenDataW, int,   id,    "id")
         PARAM_VAL(LlamaTokenDataW, float, logit, "logit")
@@ -695,7 +705,8 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaLogitBias
     // -------------------------------------------------------------------------
-    nb::class_<LlamaLogitBiasW>(m, "LlamaLogitBias")
+    nb::class_<LlamaLogitBiasW>(m, "LlamaLogitBias",
+        "A (token, bias) pair added to a token's logit before sampling.")
         .def(nb::init<>())
         PARAM_VAL(LlamaLogitBiasW, int,   token, "token")
         PARAM_VAL(LlamaLogitBiasW, float, bias,  "bias");
@@ -703,7 +714,9 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaModelKvOverride — fields exposed as a flat tag+value surface.
     // -------------------------------------------------------------------------
-    nb::class_<LlamaModelKvOverrideW>(m, "LlamaModelKvOverride")
+    nb::class_<LlamaModelKvOverrideW>(m, "LlamaModelKvOverride",
+        "Override for a single model metadata key/value pair, applied at load time. "
+        "Use the val_* field that matches the tag (int/float/bool/str).")
         .def(nb::init<>())
         PARAM_VAL(LlamaModelKvOverrideW, int,    tag,      "tag")
         PARAM_VAL(LlamaModelKvOverrideW, int64_t, val_i64, "val_i64")
@@ -737,14 +750,18 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaModelTensorBuftOverride
     // -------------------------------------------------------------------------
-    nb::class_<LlamaModelTensorBuftOverrideW>(m, "LlamaModelTensorBuftOverride")
+    nb::class_<LlamaModelTensorBuftOverrideW>(m, "LlamaModelTensorBuftOverride",
+        "Override that pins tensors matching a regex pattern to a specific buffer type.")
         .def(nb::init<>())
         PARAM_PATH(LlamaModelTensorBuftOverrideW, pattern, pattern_s, "pattern");
 
     // -------------------------------------------------------------------------
     // LlamaVocab — non-owning view; constructor not exposed (use LlamaModel.get_vocab).
     // -------------------------------------------------------------------------
-    nb::class_<LlamaVocabW>(m, "LlamaVocab")
+    nb::class_<LlamaVocabW>(m, "LlamaVocab",
+        "Read-only view of the model's vocabulary: tokenization, detokenization, "
+        "special-token ids (BOS/EOS/PAD/SEP/EOT, FIM markers), token attributes. "
+        "Obtain via LlamaModel.get_vocab().")
         .def_prop_ro("vocab_type", [](LlamaVocabW& s){
             return (int) llama_vocab_type(s.ptr);
         })
@@ -831,7 +848,8 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaAdapterLora — meta_* lookups; constructed via LlamaModel.lora_adapter_init
     // -------------------------------------------------------------------------
-    nb::class_<LlamaAdapterLoraW>(m, "LlamaAdapterLora")
+    nb::class_<LlamaAdapterLoraW>(m, "LlamaAdapterLora",
+        "A loaded LoRA adapter handle. Construct via LlamaModel.lora_adapter_init.")
         .def("meta_val_str", [](LlamaAdapterLoraW& s, const std::string& key){
             if (key.empty()) throw std::invalid_argument("key must not be an empty string");
             std::vector<char> buf(512);
@@ -873,7 +891,10 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaModel
     // -------------------------------------------------------------------------
-    nb::class_<LlamaModelW>(m, "LlamaModel")
+    nb::class_<LlamaModelW>(m, "LlamaModel",
+        "A loaded llama.cpp model. Owns the underlying llama_model* and exposes "
+        "architecture metadata (n_embd, n_layer, n_head, n_ctx_train, ...), the "
+        "vocabulary, chat-template helpers, and LoRA adapter loading.")
         .def("__init__",
              [](LlamaModelW* self, const std::string& path,
                 std::optional<LlamaModelParamsW*> params, bool verbose) {
@@ -1029,7 +1050,10 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaBatch
     // -------------------------------------------------------------------------
-    nb::class_<LlamaBatchW>(m, "LlamaBatch")
+    nb::class_<LlamaBatchW>(m, "LlamaBatch",
+        "A pre-allocated batch of tokens (or embeddings) staged for encode/decode. "
+        "Capacity is fixed at construction; use add() / set_batch() / add_sequence() "
+        "to fill, then pass to LlamaContext.decode().")
         .def("__init__",
              [](LlamaBatchW* self, int n_tokens, int embd, int n_seq_max, bool /*verbose*/) {
                  new (self) LlamaBatchW(n_tokens, embd, n_seq_max);
@@ -1113,7 +1137,10 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaContext
     // -------------------------------------------------------------------------
-    nb::class_<LlamaContextW>(m, "LlamaContext")
+    nb::class_<LlamaContextW>(m, "LlamaContext",
+        "Inference context bound to a LlamaModel. Holds the KV cache and runs "
+        "encode/decode; exposes logits, embeddings, KV-cache memory operations, "
+        "and per-context perf counters. Single-threaded per instance.")
         .def("__init__",
              [](LlamaContextW* self, nb::object model,
                 std::optional<LlamaContextParamsW*> params, bool verbose) {
@@ -1272,7 +1299,9 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // LlamaSampler
     // -------------------------------------------------------------------------
-    nb::class_<LlamaSamplerW>(m, "LlamaSampler")
+    nb::class_<LlamaSamplerW>(m, "LlamaSampler",
+        "A chained sampler: build with add_top_k / add_top_p / add_temp / add_dist "
+        "/ etc., then sample(ctx, idx) to draw a token from a context's logits.")
         .def("__init__",
              [](LlamaSamplerW* self, std::optional<LlamaSamplerChainParamsW*> params) {
                  new (self) LlamaSamplerW(params);
@@ -1370,12 +1399,14 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     m.def("disable_logging", [](){
         llama_log_set(_llama_no_log_cb, nullptr);
-    });
+    }, "Silence all llama.cpp / ggml log output by installing a no-op callback.");
     m.def("set_log_callback", [](nb::object cb){
         g_log_cb = cb;
         if (cb.is_none()) llama_log_set(nullptr, nullptr);
         else              llama_log_set(_llama_log_cb, nullptr);
-    }, "cb"_a.none());
+    }, "cb"_a.none(),
+       "Install a Python log callback (level: int, text: str) -> None. "
+       "Pass None to restore the default stderr logger.");
 
     m.def("chat_builtin_templates", [](){
         int32_t n = llama_chat_builtin_templates(nullptr, 0);
@@ -1385,15 +1416,18 @@ NB_MODULE(_llama_native, m) {
         out.reserve(n);
         for (const char* t : tmpls) out.emplace_back(t);
         return out;
-    });
+    }, "Return the list of built-in chat-template names recognized by llama.cpp.");
 
-    m.def("ggml_version", [](){ return std::string(ggml_version()); });
-    m.def("ggml_commit",  [](){ return std::string(ggml_commit()); });
-    m.def("ggml_time_us", [](){ return ggml_time_us(); });
+    m.def("ggml_version", [](){ return std::string(ggml_version()); },
+          "ggml version string of the linked library.");
+    m.def("ggml_commit",  [](){ return std::string(ggml_commit()); },
+          "ggml git commit hash of the linked library.");
+    m.def("ggml_time_us", [](){ return ggml_time_us(); },
+          "Monotonic time in microseconds (ggml's clock).");
 
     m.def("ggml_backend_load_all", [](){
         inferna::load_all_backends("inferna.llama._llama_native");
-    });
+    }, "Load all available ggml backends (Metal, CUDA, Vulkan, BLAS, ...) into the registry.");
 
     m.def("ggml_backend_unload", [](const std::string& name){
         size_t n = ggml_backend_reg_count();
@@ -1405,17 +1439,19 @@ NB_MODULE(_llama_native, m) {
             }
         }
         throw std::invalid_argument("backend '" + name + "' not found in registry");
-    });
+    }, "Unload a registered ggml backend by name. Raises if the name is unknown.");
 
-    m.def("ggml_backend_reg_count", [](){ return ggml_backend_reg_count(); });
+    m.def("ggml_backend_reg_count", [](){ return ggml_backend_reg_count(); },
+          "Number of ggml backends currently registered.");
     m.def("ggml_backend_reg_names", [](){
         size_t n = ggml_backend_reg_count();
         std::vector<std::string> out;
         for (size_t i = 0; i < n; ++i)
             out.emplace_back(ggml_backend_reg_name(ggml_backend_reg_get(i)));
         return out;
-    });
-    m.def("ggml_backend_dev_count", [](){ return ggml_backend_dev_count(); });
+    }, "List the names of all registered ggml backends.");
+    m.def("ggml_backend_dev_count", [](){ return ggml_backend_dev_count(); },
+          "Number of ggml compute devices (across all loaded backends).");
     m.def("ggml_backend_dev_info", [](){
         size_t n = ggml_backend_dev_count();
         nb::list out;
@@ -1439,19 +1475,27 @@ NB_MODULE(_llama_native, m) {
             out.append(info);
         }
         return out;
-    });
+    }, "List per-device dicts {name, description, type} for every registered ggml device.");
 
-    m.def("llama_backend_init", [](){ llama_backend_init(); });
-    m.def("llama_backend_free", [](){ llama_backend_free(); });
+    m.def("llama_backend_init", [](){ llama_backend_init(); },
+          "Initialize the llama.cpp global backend state. Idempotent.");
+    m.def("llama_backend_free", [](){ llama_backend_free(); },
+          "Release llama.cpp global backend state. Call at process shutdown.");
     m.def("llama_numa_init", [](int strategy){
         llama_numa_init((ggml_numa_strategy) strategy);
-    });
-    m.def("llama_time_us", [](){ return llama_time_us(); });
-    m.def("llama_max_devices", [](){ return llama_max_devices(); });
-    m.def("llama_supports_mmap",        [](){ return (bool) llama_supports_mmap(); });
-    m.def("llama_supports_mlock",       [](){ return (bool) llama_supports_mlock(); });
-    m.def("llama_supports_gpu_offload", [](){ return (bool) llama_supports_gpu_offload(); });
-    m.def("llama_supports_rpc",         [](){ return (bool) llama_supports_rpc(); });
+    }, "Initialize NUMA support with the given GGML_NUMA_STRATEGY_* value.");
+    m.def("llama_time_us", [](){ return llama_time_us(); },
+          "Monotonic time in microseconds (llama.cpp's clock).");
+    m.def("llama_max_devices", [](){ return llama_max_devices(); },
+          "Maximum number of compute devices supported by this build.");
+    m.def("llama_supports_mmap",        [](){ return (bool) llama_supports_mmap(); },
+          "True if model files can be loaded via mmap on this build/platform.");
+    m.def("llama_supports_mlock",       [](){ return (bool) llama_supports_mlock(); },
+          "True if mlock-pinning model memory is supported.");
+    m.def("llama_supports_gpu_offload", [](){ return (bool) llama_supports_gpu_offload(); },
+          "True if any GPU backend is available for layer offloading.");
+    m.def("llama_supports_rpc",         [](){ return (bool) llama_supports_rpc(); },
+          "True if the RPC backend is compiled in.");
 
     m.def("llama_batch_get_one", [](std::vector<int> tokens, int n_past){
         // Build a batch with n_tokens tokens, fill pos / seq_id / logits,
@@ -1468,25 +1512,29 @@ NB_MODULE(_llama_native, m) {
         }
         if (n > 0) w->p.logits[n - 1] = true;
         return nb::cast(w, nb::rv_policy::take_ownership);
-    }, "tokens"_a, "n_past"_a = 0);
+    }, "tokens"_a, "n_past"_a = 0,
+       "Build a single-sequence LlamaBatch from a token list, with positions "
+       "starting at n_past and only the last token's logits enabled.");
 
     m.def("llama_attach_threadpool", [](LlamaContextW& ctx,
                                           GgmlThreadPoolW& tp,
                                           GgmlThreadPoolW& tp_batch){
         llama_attach_threadpool(ctx.ptr, tp.ptr, tp_batch.ptr);
-    });
+    }, "Attach two threadpools (single-token and batched) to a LlamaContext.");
     m.def("llama_detach_threadpool", [](LlamaContextW& ctx){
         llama_detach_threadpool(ctx.ptr);
-    });
+    }, "Detach any attached threadpools from a LlamaContext.");
 
     m.def("llama_flash_attn_type_name", [](int t){
         return std::string(llama_flash_attn_type_name((llama_flash_attn_type) t));
-    });
+    }, "Human-readable name for a LLAMA_FLASH_ATTN_TYPE_* integer.");
 
     // -------------------------------------------------------------------------
     // GgmlBackendDevice — non-owning view into the global registry.
     // -------------------------------------------------------------------------
-    nb::class_<GgmlBackendDeviceW>(m, "GgmlBackendDevice")
+    nb::class_<GgmlBackendDeviceW>(m, "GgmlBackendDevice",
+        "Non-owning view of a ggml backend device (CPU/GPU/iGPU/accelerator) "
+        "from the global registry.")
         .def_prop_ro("name", [](GgmlBackendDeviceW& s){
             return std::string(ggml_backend_dev_name(s.ptr));
         })
@@ -1500,7 +1548,9 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // GgmlBackend — created from a device + params string.
     // -------------------------------------------------------------------------
-    nb::class_<GgmlBackendW>(m, "GgmlBackend")
+    nb::class_<GgmlBackendW>(m, "GgmlBackend",
+        "An initialized ggml backend instance constructed from a GgmlBackendDevice "
+        "and a backend-specific params string.")
         .def("__init__",
              [](GgmlBackendW* self, GgmlBackendDeviceW& dev, const std::string& params){
                  new (self) GgmlBackendW();
@@ -1516,12 +1566,15 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // GgmlTensor — non-owning view; constructor not exposed.
     // -------------------------------------------------------------------------
-    nb::class_<GgmlTensorW>(m, "GgmlTensor");
+    nb::class_<GgmlTensorW>(m, "GgmlTensor",
+        "Opaque non-owning handle to a ggml_tensor. Constructor not exposed.");
 
     // -------------------------------------------------------------------------
     // GgmlThreadPoolParams
     // -------------------------------------------------------------------------
-    nb::class_<GgmlThreadPoolParamsW>(m, "GgmlThreadPoolParams")
+    nb::class_<GgmlThreadPoolParamsW>(m, "GgmlThreadPoolParams",
+        "Parameters for a GgmlThreadPool: thread count, scheduling priority, "
+        "polling interval, CPU affinity mask, paused flag.")
         .def(nb::init<int>(), "n_threads"_a)
         .def("match", [](GgmlThreadPoolParamsW& s, GgmlThreadPoolParamsW& other){
             return (bool) ggml_threadpool_params_match(&s.p, &other.p);
@@ -1561,7 +1614,9 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     // GgmlThreadPool
     // -------------------------------------------------------------------------
-    nb::class_<GgmlThreadPoolW>(m, "GgmlThreadPool")
+    nb::class_<GgmlThreadPoolW>(m, "GgmlThreadPool",
+        "An owned ggml threadpool. Attach to a LlamaContext via "
+        "llama_attach_threadpool to drive its CPU compute.")
         .def(nb::init<GgmlThreadPoolParamsW&>(), "params"_a)
         .def("pause",  [](GgmlThreadPoolW& s){ ggml_threadpool_pause(s.ptr); })
         .def("resume", [](GgmlThreadPoolW& s){ ggml_threadpool_resume(s.ptr); });
@@ -1588,7 +1643,9 @@ NB_MODULE(_llama_native, m) {
         }
     };
 
-    nb::class_<GGUFContextW> gguf_cls(m, "GGUFContext");
+    nb::class_<GGUFContextW> gguf_cls(m, "GGUFContext",
+        "Read/write access to a GGUF file's metadata KV pairs and tensor table. "
+        "Construct via GGUFContext.empty() or GGUFContext.from_file(path).");
     gguf_cls
         .def_static("empty", [](){
             auto* w = new GGUFContextW();

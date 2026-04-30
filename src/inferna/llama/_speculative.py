@@ -68,19 +68,43 @@ class Speculative:
 
     @staticmethod
     def is_compat(ctx_target: "LlamaContext") -> bool:
-        """Check if the target context supports partial KV cache removal."""
-        # Decode 2 dummy tokens, then attempt partial removal of position 1+.
+        """Check if the target context supports partial KV cache removal.
+
+        Probes by decoding two dummy tokens into a sequence id that is currently
+        empty in the target context, then attempting partial removal. Using an
+        empty seq id means a caller-prefilled seq 0 (the typical case) is left
+        untouched.
+        """
+        # Find an empty sequence to probe with so we don't disturb caller data.
+        # n_seq_max defaults to 1 in many configs; in that case the only seq
+        # available is 0, and we can only probe non-destructively when it's
+        # already empty.
+        probe_seq = -1
+        for sid in range(ctx_target.n_seq_max):
+            if ctx_target.memory_seq_pos_max(sid) < 0:
+                probe_seq = sid
+                break
+        if probe_seq < 0:
+            raise RuntimeError(
+                "Speculative.is_compat: target context has no empty sequence "
+                f"to probe (n_seq_max={ctx_target.n_seq_max}, all in use). "
+                "Call is_compat on a fresh context, or free a sequence with "
+                "memory_seq_rm before constructing Speculative."
+            )
+
         batch = _N.LlamaBatch(n_tokens=2, embd=0, n_seq_max=1, verbose=False)
-        batch.add(0, 0, [0], False)
-        batch.add(0, 1, [0], False)
+        batch.add(0, 0, [probe_seq], False)
+        batch.add(0, 1, [probe_seq], False)
         try:
             ctx_target.decode(batch)
         except Exception:
-            ctx_target.kv_cache_clear(True)
+            ctx_target.memory_seq_rm(probe_seq, -1, -1)
             return False
 
-        can_rm = ctx_target.memory_seq_rm(0, 1, -1)
-        ctx_target.kv_cache_clear(True)
+        can_rm = ctx_target.memory_seq_rm(probe_seq, 1, -1)
+        # Drop any remaining probe tokens; full removal of the probe seq is
+        # always supported even when partial is not.
+        ctx_target.memory_seq_rm(probe_seq, -1, -1)
         ctx_target.synchronize()
         return bool(can_rm)
 

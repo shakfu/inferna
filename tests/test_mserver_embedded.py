@@ -919,6 +919,50 @@ class TestEmbeddedServerLifecycle:
             # Stop server directly
             server.stop()
 
+    def test_failed_start_releases_native_state(self, model_path, monkeypatch):
+        """When start() fails after load_model() succeeds, all retained
+        native state (model, slots, embedder, manager dispatcher, signal
+        handlers) must be released. Otherwise the EmbeddedServer instance
+        is pinned by pytest's frame to interpreter shutdown, and Metal's
+        [rsets count]==0 assertion fires when the late LlamaContext
+        destructor runs after Metal cleanup.
+        """
+        from inferna.llama.server.embedded import EmbeddedServer
+
+        config = ServerConfig(
+            model_path=model_path, host="127.0.0.1", port=8099, n_ctx=256
+        )
+        server = EmbeddedServer(config)
+
+        # Replace the native Manager with a fake whose listen() returns
+        # False — exercises the post-load_model cleanup path without
+        # relying on a real port conflict (and avoids native-class
+        # attribute-override restrictions).
+        class _FakeMgr:
+            def __init__(self):
+                self.handler = None
+
+            def set_handler(self, h):
+                self.handler = h
+
+            def listen(self, _addr):
+                return False
+
+            def close_all_connections(self):
+                return 0
+
+        server._mgr = _FakeMgr()
+
+        assert server.start() is False
+        # The cleanup path must drop refs to every loaded native object.
+        assert server._model is None, "LlamaModel retained after failed start"
+        assert server._slots == [], "ServerSlots retained after failed start"
+        assert server._embedder is None, "Embedder retained after failed start"
+        # Signal handlers must be restored so signal.signal() does not pin
+        # `self._signal_handler` (and through it, the entire instance).
+        assert server._prev_sigint is None
+        assert server._prev_sigterm is None
+
     def test_embedded_server_context_manager(self, model_path):
         """Test that embedded server context manager properly starts and stops the server."""
         from inferna.llama.server.embedded import EmbeddedServer
