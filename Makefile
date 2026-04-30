@@ -124,24 +124,32 @@ publish-test: check
 # =============================================================================
 # Testing
 # =============================================================================
-.PHONY: test test-fast test-slow coverage memray leaks
+.PHONY: test test-fast test-slow test-verbose coverage memray leaks
 
 # Full suite — every test, including slow leak/integration cycles. Use
 # `test-fast` for the fast-feedback variant and `test-slow` to run only
-# the deselected ones.
+# the deselected ones. Default capture is on so C-level stdout/stderr
+# from llama.cpp/whisper.cpp/stable-diffusion.cpp stays out of the log
+# unless a test fails. Use `test-verbose` to stream native output live.
 test:
-	@uv run pytest -s --durations=50 --durations-min=1.0
+	@uv run pytest --durations=50 --durations-min=1.0
 
 # Skip integration suites and tests marked @pytest.mark.slow (memory
 # leak loops, very-large generations, etc.). Targets the inner loop
 # during development; trades full coverage for ~2× faster turnaround.
 test-fast:
-	@uv run pytest -s -m "not slow and not integration" --durations=20 --durations-min=1.0
+	@uv run pytest -m "not slow and not integration" --durations=20 --durations-min=1.0
 
 # Inverse of test-fast — runs only the slow / integration tests so a
 # CI shard can split the workload across two parallel jobs.
 test-slow:
-	@uv run pytest -s -m "slow or integration" --durations=20 --durations-min=1.0
+	@uv run pytest -m "slow or integration" --durations=20 --durations-min=1.0
+
+# Same as `test` but with `-s` so native library logs and `print()`s
+# stream live. Use when debugging a hang or watching progress on a
+# long run; otherwise prefer `test`.
+test-verbose:
+	@uv run pytest -s --durations=50 --durations-min=1.0
 
 coverage:
 	@uv run pytest --cov=inferna --cov-report html
