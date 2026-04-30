@@ -406,7 +406,7 @@ class ShellCmd:
         if path.is_dir():
             if not silent:
                 self.log.info("remove folder: %s", path)
-            if PY_VER_MINOR < 11:
+            if PY_VER_MINOR < 12:
                 shutil.rmtree(path, ignore_errors=not DEBUG, onerror=remove_readonly)
             else:
                 shutil.rmtree(path, ignore_errors=not DEBUG, onexc=remove_readonly)  # type: ignore[call-arg]
