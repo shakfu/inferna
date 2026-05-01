@@ -55,3 +55,51 @@ struct mg_str inferna_mg_str(const char *s) {
 struct mg_str inferna_mg_str_n(const char *s, size_t n) {
     return mg_str_n(s, n);
 }
+
+/* Send a binary response with explicit length (NUL-safe; needed for gzipped
+ * static assets). Mirrors mg_http_reply but without the printf path that would
+ * truncate at the first embedded zero byte. */
+void inferna_mg_http_reply_bytes(struct mg_connection *c, int status_code,
+                                 const char *headers, const char *body,
+                                 size_t body_len) {
+    /* Mongoose's mg_printf has its own format-specifier subset and does
+     * NOT support %zu — using it produces an empty Content-Length value,
+     * which curl rejects ("Invalid Content-Length") and browsers treat
+     * as a 0-length body. Cast to unsigned long long and use %llu, which
+     * mongoose does support. */
+    mg_printf(c, "HTTP/1.1 %d %s\r\n%sContent-Length: %llu\r\n\r\n",
+              status_code,
+              status_code == 200 ? "OK" : "Error",
+              headers ? headers : "",
+              (unsigned long long) body_len);
+    if (body_len > 0) {
+        mg_send(c, body, body_len);
+    }
+    c->is_resp = 0;
+}
+
+/* Begin a chunked (Transfer-Encoding: chunked) response. Caller follows with
+ * one or more inferna_mg_http_write_chunk() calls and finally
+ * inferna_mg_http_end_chunk(). Used by the SSE streaming path. */
+void inferna_mg_begin_chunked(struct mg_connection *c, int status_code,
+                              const char *headers) {
+    mg_printf(c, "HTTP/1.1 %d %s\r\n%sTransfer-Encoding: chunked\r\n\r\n",
+              status_code,
+              status_code == 200 ? "OK" : "Error",
+              headers ? headers : "");
+}
+
+void inferna_mg_http_write_chunk(struct mg_connection *c, const char *buf,
+                                 size_t len) {
+    mg_http_write_chunk(c, buf, len);
+}
+
+void inferna_mg_http_end_chunk(struct mg_connection *c) {
+    /* Empty chunk terminates a chunked body per RFC 9112. */
+    mg_http_printf_chunk(c, "");
+    c->is_resp = 0;
+}
+
+int inferna_mg_is_closing(struct mg_connection *c) {
+    return (c->is_closing || c->is_draining) ? 1 : 0;
+}

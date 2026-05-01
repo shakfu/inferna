@@ -24,6 +24,15 @@ extern "C" {
                                                  mg_event_handler_t fn, void* fn_data);
     void inferna_mg_http_reply(struct mg_connection* c, int status_code,
                                 const char* headers, const char* body_fmt, ...);
+    void inferna_mg_http_reply_bytes(struct mg_connection* c, int status_code,
+                                      const char* headers, const char* body,
+                                      size_t body_len);
+    void inferna_mg_begin_chunked(struct mg_connection* c, int status_code,
+                                   const char* headers);
+    void inferna_mg_http_write_chunk(struct mg_connection* c, const char* buf,
+                                      size_t len);
+    void inferna_mg_http_end_chunk(struct mg_connection* c);
+    int inferna_mg_is_closing(struct mg_connection* c);
 }
 
 namespace nb = nanobind;
@@ -79,6 +88,21 @@ extern "C" void _http_event_handler(mg_connection* c, int ev, void* ev_data) {
     }
 }
 
+// Validate that conn_id still refers to a live connection on this manager.
+// Mongoose may have closed/freed the connection on its own poll cycle, so a
+// stale or fabricated pointer would otherwise dereference freed memory.
+static mg_connection* _resolve_conn(Manager& s, uintptr_t conn_id) {
+    mg_connection* target = reinterpret_cast<mg_connection*>(conn_id);
+    if (!target) return nullptr;
+    for (mg_connection* c = s.mgr.conns; c; c = c->next) {
+        if (c == target) {
+            if (c->is_closing) return nullptr;
+            return c;
+        }
+    }
+    return nullptr;
+}
+
 // =============================================================================
 // Module
 // =============================================================================
@@ -113,21 +137,54 @@ NB_MODULE(_mongoose, m) {
         })
         .def("send_reply", [](Manager& s, uintptr_t conn_id, int status_code,
                                const std::string& headers, const std::string& body){
-            // Validate the opaque conn_id by walking the manager's live
-            // connection list. Mongoose closes/frees connections on its own
-            // poll cycle, so a stale or fabricated pointer would otherwise
-            // dereference into freed (or arbitrary) memory.
+            mg_connection* c = _resolve_conn(s, conn_id);
+            if (!c) return false;
+            inferna_mg_http_reply(c, status_code, headers.c_str(),
+                                   "%s", body.c_str());
+            return true;
+        }, "conn_id"_a, "status_code"_a, "headers"_a, "body"_a)
+        .def("send_bytes", [](Manager& s, uintptr_t conn_id, int status_code,
+                               const std::string& headers, nb::bytes body){
+            // NUL-safe variant for binary payloads (e.g. gzipped UI assets).
+            mg_connection* c = _resolve_conn(s, conn_id);
+            if (!c) return false;
+            inferna_mg_http_reply_bytes(c, status_code, headers.c_str(),
+                                         static_cast<const char*>(body.data()),
+                                         body.size());
+            return true;
+        }, "conn_id"_a, "status_code"_a, "headers"_a, "body"_a)
+        .def("begin_chunked", [](Manager& s, uintptr_t conn_id, int status_code,
+                                  const std::string& headers){
+            mg_connection* c = _resolve_conn(s, conn_id);
+            if (!c) return false;
+            inferna_mg_begin_chunked(c, status_code, headers.c_str());
+            return true;
+        }, "conn_id"_a, "status_code"_a, "headers"_a)
+        .def("send_chunk", [](Manager& s, uintptr_t conn_id, nb::bytes data){
+            mg_connection* c = _resolve_conn(s, conn_id);
+            if (!c) return false;
+            inferna_mg_http_write_chunk(c, static_cast<const char*>(data.data()),
+                                         data.size());
+            return true;
+        }, "conn_id"_a, "data"_a)
+        .def("end_chunked", [](Manager& s, uintptr_t conn_id){
+            mg_connection* c = _resolve_conn(s, conn_id);
+            if (!c) return false;
+            inferna_mg_http_end_chunk(c);
+            return true;
+        }, "conn_id"_a)
+        .def("is_connection_alive", [](Manager& s, uintptr_t conn_id){
+            // Used by streaming generators to detect client disconnect at
+            // token boundaries. Returns false if the conn is gone, closing,
+            // or draining — i.e. any state where further writes are pointless.
             mg_connection* target = reinterpret_cast<mg_connection*>(conn_id);
             if (!target) return false;
             for (mg_connection* c = s.mgr.conns; c; c = c->next) {
                 if (c == target) {
-                    if (c->is_closing) return false;
-                    inferna_mg_http_reply(c, status_code, headers.c_str(),
-                                           "%s", body.c_str());
-                    return true;
+                    return inferna_mg_is_closing(c) == 0;
                 }
             }
             return false;
-        }, "conn_id"_a, "status_code"_a, "headers"_a, "body"_a)
+        }, "conn_id"_a)
         .def_prop_ro("is_listening", [](Manager& s){ return s.listener != nullptr; });
 }

@@ -148,18 +148,31 @@ class ServerSlot:
         self.sampler.add_dist(seed if seed is not None else 1337)
 
     def reset(self) -> None:
-        """Reset the slot for a new request."""
+        """Reset the slot for a new request.
+
+        Zeroing ``n_tokens`` alone is not enough: the underlying llama KV
+        cache still holds the previous request's tokens at positions
+        0..N-1, so the next ``decode()`` starting at position 0 trips
+        ``it is required that the sequence positions remain consecutive``.
+        ``kv_cache_clear()`` releases all cells across all sequences, which
+        is exactly what we want for slot reuse on a fresh prompt.
+        """
         self.is_processing = False
         self.task_id = None
         self.generated_tokens.clear()
         self.response_text = ""
-        # Reset the context state
+        self.context.kv_cache_clear()
         self.context.n_tokens = 0
 
-    def process_and_generate(self, prompt: str, max_tokens: int = 100, request: Optional["ChatRequest"] = None) -> str:
-        """Process prompt and generate response using the slot's context."""
+    def iter_tokens(self, prompt: str, max_tokens: int = 100, request: Optional["ChatRequest"] = None):
+        """Yield generated token pieces (str) one at a time.
+
+        Caller is responsible for slot lifecycle (``is_processing`` flag,
+        ``reset()`` on completion). Both the streaming and non-streaming
+        chat handlers go through this generator — keeps the sampling loop
+        in one place.
+        """
         try:
-            # Rebuild sampler with per-request parameters when provided
             if request is not None:
                 self._build_sampler(
                     temperature=request.temperature,
@@ -167,68 +180,58 @@ class ServerSlot:
                     seed=request.seed,
                 )
 
-            # Use the existing context for this slot
             context = self.context
-
-            # Tokenize the prompt
             vocab = self.model.get_vocab()
             prompt_tokens = vocab.tokenize(prompt, add_special=True, parse_special=True)
 
             if not prompt_tokens:
-                return ""
-
+                return
             if len(prompt_tokens) >= self.config.n_ctx:
-                return ""  # Prompt too long
+                return
 
-            # Create batch for the prompt (like chat.py approach)
-            batch = llama_batch_get_one(prompt_tokens, 0)  # Start from position 0
+            batch = llama_batch_get_one(prompt_tokens, 0)
             n_past = len(prompt_tokens)
 
-            # Decode the initial batch
             ret = context.decode(batch)
             if ret != 0:
                 logging.warning(f"Initial decode returned {ret}")
-                return ""
+                return
 
-            # Generation loop
-            response_text = ""
-            generated_count = 0
-
-            for i in range(max_tokens):
-                # Check context size
+            for _ in range(max_tokens):
                 if n_past >= context.n_ctx - 1:
                     break
 
-                # Sample next token (like chat.py)
                 assert self.sampler is not None
                 new_token_id = self.sampler.sample(context, -1)
 
-                # Check for EOS
                 if vocab.is_eog(new_token_id):
                     break
 
-                # Convert token to text
                 token_piece = vocab.token_to_piece(new_token_id, 0, True)
-                response_text += token_piece
+                self.response_text += token_piece
+                yield token_piece
 
-                # Create batch for single token at correct position
                 batch = llama_batch_get_one([new_token_id], n_past)
                 n_past += 1
 
-                # Decode the new token
                 ret = context.decode(batch)
                 if ret != 0:
                     logging.warning(f"Token decode returned {ret}")
                     break
-
-                generated_count += 1
-
-            self.response_text = response_text
-            return response_text
-
         except Exception as e:
-            logging.error(f"Error in process_and_generate: {e}")
-            return ""
+            logging.error(f"Error in iter_tokens: {e}")
+
+    def process_and_generate(self, prompt: str, max_tokens: int = 100, request: Optional["ChatRequest"] = None) -> str:
+        """Generate the full response as a single string.
+
+        Thin wrapper around ``iter_tokens`` for the non-streaming code path
+        and any caller that just wants the final text.
+        """
+        # response_text accumulates inside iter_tokens via the per-token
+        # append; consume the generator and return the final string.
+        for _ in self.iter_tokens(prompt, max_tokens, request):
+            pass
+        return self.response_text
 
     def get_generated_text(self) -> str:
         """Get the generated text."""

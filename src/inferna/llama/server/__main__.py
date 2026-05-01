@@ -1,6 +1,7 @@
 import argparse
 import logging
 import time
+from pathlib import Path
 
 from .python import ServerConfig, PythonServer
 
@@ -14,6 +15,12 @@ def main() -> int:
     parser.add_argument("--gpu-layers", type=int, default=-1, help="GPU layers")
     parser.add_argument("--n-parallel", type=int, default=1, help="Number of parallel processing slots")
     parser.add_argument(
+        "--model-alias",
+        default=None,
+        help="Model identifier exposed to clients (shown in webui and /v1/models). "
+             "Defaults to the model file's basename without extension.",
+    )
+    parser.add_argument(
         "--server-type",
         choices=["python", "embedded"],
         default="embedded",
@@ -24,6 +31,7 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO)
 
+    model_alias = args.model_alias if args.model_alias else Path(args.model).stem
     config = ServerConfig(
         model_path=args.model,
         host=args.host,
@@ -31,11 +39,12 @@ def main() -> int:
         n_ctx=args.ctx_size,
         n_gpu_layers=args.gpu_layers,
         n_parallel=args.n_parallel,
+        model_alias=model_alias,
     )
 
     if args.server_type == "embedded":
         try:
-            from .mongoose_server import EmbeddedServer
+            from .embedded import EmbeddedServer
 
             print("Starting embedded server (high-performance C implementation)")
 

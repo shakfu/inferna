@@ -21,10 +21,52 @@ import json
 import logging
 import signal
 import time
+from importlib.resources import files as _resource_files
 from types import FrameType
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 
 from . import _mongoose as _mg  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Web UI assets
+#
+# The build hook in scripts/manage.py copies llama.cpp's prebuilt server SPA
+# into ``inferna/llama/server/assets/webui/*.gz`` (gzipped at build time —
+# the package always ships the compressed form). We load the bytes once at
+# import and serve them with ``Content-Encoding: gzip``.
+#
+# Asset names mirror upstream's tools/server/public/. ``index.html`` is
+# also exposed at ``/`` so a bare visit to the server lands on the UI.
+# ---------------------------------------------------------------------------
+
+_WEBUI_ASSET_TYPES: dict[str, str] = {
+    "index.html": "text/html; charset=utf-8",
+    "bundle.css": "text/css; charset=utf-8",
+    "bundle.js": "application/javascript; charset=utf-8",
+    "loading.html": "text/html; charset=utf-8",
+}
+
+
+def _load_webui_assets() -> dict[str, bytes]:
+    """Read the gzipped UI bundle into memory (called once per process).
+
+    Returns ``{"index.html": <gz bytes>, ...}``. Missing files are silently
+    omitted — at request time we 404 the corresponding route. This lets a
+    dev who hasn't run ``make`` yet still use the JSON API endpoints.
+    """
+    out: dict[str, bytes] = {}
+    base = _resource_files("inferna.llama.server").joinpath("assets", "webui")
+    for name in _WEBUI_ASSET_TYPES:
+        gz = base.joinpath(f"{name}.gz")
+        try:
+            out[name] = gz.read_bytes()
+        except (FileNotFoundError, OSError):
+            continue
+    return out
+
+
+_WEBUI_ASSETS: dict[str, bytes] = _load_webui_assets()
 
 if TYPE_CHECKING:
     from ...rag.embedder import Embedder
@@ -73,6 +115,26 @@ class MongooseConnection:
             {"error": {"type": "invalid_request_error", "message": message}},
             status_code,
         )
+
+    def send_gzipped(self, body: bytes, content_type: str, status_code: int = 200) -> bool:
+        """Send a precompressed (gzip) payload — used for the UI bundle.
+
+        We add ``Vary: Accept-Encoding`` for correctness even though every
+        modern browser accepts gzip; ``Cache-Control`` is short on the
+        HTML shell (so model/template changes show up on reload) and long
+        on the immutable CSS/JS bundles (content-hashed by the upstream
+        build).
+        """
+        if not self.is_valid or self._mgr is None:
+            return False
+        cache = "no-cache" if content_type.startswith("text/html") else "public, max-age=3600"
+        headers = (
+            f"Content-Type: {content_type}\r\n"
+            f"Content-Encoding: gzip\r\n"
+            f"Vary: Accept-Encoding\r\n"
+            f"Cache-Control: {cache}\r\n"
+        )
+        return self._mgr.send_bytes(self._conn_id, status_code, headers, body)
 
 
 class EmbeddedServer:
@@ -289,18 +351,40 @@ class EmbeddedServer:
     def handle_http_request(
         self, conn: MongooseConnection, method: str, uri: str, headers: dict[str, str], body: str
     ) -> None:
+        # Strip query string — mongoose hands us the raw URI. We don't act
+        # on query params yet, but we don't want them to defeat path matching.
+        path = uri.split("?", 1)[0]
         try:
             if method == "GET":
-                if uri == "/health":
+                if path == "/" or path == "/index.html":
+                    self._handle_webui_asset(conn, "index.html")
+                elif path == "/bundle.css":
+                    self._handle_webui_asset(conn, "bundle.css")
+                elif path == "/bundle.js":
+                    self._handle_webui_asset(conn, "bundle.js")
+                elif path == "/loading.html":
+                    self._handle_webui_asset(conn, "loading.html")
+                elif path == "/health":
                     conn.send_json({"status": "ok"})
-                elif uri == "/v1/models":
+                elif path == "/props":
+                    self._handle_props(conn)
+                elif path == "/slots":
+                    self._handle_slots(conn)
+                elif path == "/metrics":
+                    # Prometheus scrape endpoint. The webui calls this but
+                    # tolerates an empty exposition; we return 200 with no
+                    # series rather than a 404 (which would log noise).
+                    if conn._mgr is not None:
+                        conn._mgr.send_reply(conn._conn_id, 200,
+                                              "Content-Type: text/plain; version=0.0.4\r\n", "")
+                elif path == "/v1/models":
                     self._handle_models(conn)
                 else:
                     conn.send_error(404, "Not Found")
             elif method == "POST":
-                if uri == "/v1/chat/completions":
+                if path == "/v1/chat/completions":
                     self._handle_chat_completions(conn, body)
-                elif uri == "/v1/embeddings":
+                elif path == "/v1/embeddings":
                     self._handle_embeddings(conn, body)
                 else:
                     conn.send_error(404, "Not Found")
@@ -309,6 +393,43 @@ class EmbeddedServer:
         except Exception as e:
             self._logger.error(f"Request handling error: {e}")
             conn.send_error(500, "Internal Server Error")
+
+    def _handle_webui_asset(self, conn: MongooseConnection, name: str) -> None:
+        body = _WEBUI_ASSETS.get(name)
+        if body is None:
+            conn.send_error(404, f"UI asset {name} not bundled — rebuild with 'make'")
+            return
+        conn.send_gzipped(body, _WEBUI_ASSET_TYPES[name])
+
+    def _handle_props(self, conn: MongooseConnection) -> None:
+        """Bootstrap payload consumed by the upstream webui at load time."""
+        n_ctx = self._config.n_ctx
+        gen_defaults = {
+            "n_ctx": n_ctx,
+            "temperature": 0.8,
+            "top_p": 0.9,
+            "min_p": 0.05,
+        }
+        conn.send_json({
+            "default_generation_settings": gen_defaults,
+            "total_slots": self._config.n_parallel,
+            "model_path": self._config.model_path,
+            "model_alias": self._config.model_alias,
+            "chat_template": "",  # TODO Phase 4: surface tokenizer's template
+            "build_info": "inferna",
+            "n_ctx": n_ctx,
+            "n_ctx_train": n_ctx,
+        })
+
+    def _handle_slots(self, conn: MongooseConnection) -> None:
+        conn.send_json([
+            {
+                "id": s.id,
+                "is_processing": s.is_processing,
+                "task_id": s.task_id,
+            }
+            for s in self._slots
+        ])
 
     def _handle_models(self, conn: MongooseConnection) -> None:
         models_data = {
@@ -341,6 +462,9 @@ class EmbeddedServer:
                 stream=data.get("stream", False),
                 stop=data.get("stop"),
             )
+            if request.stream:
+                self._stream_chat_completion(conn, request)
+                return
             response = self._process_chat_completion(request)
             response_data = {
                 "id": response.id,
@@ -404,6 +528,124 @@ class EmbeddedServer:
         except Exception as e:
             self._logger.error(f"Embeddings error: {e}")
             conn.send_error(500, str(e))
+
+    def _stream_chat_completion(self, conn: MongooseConnection, request: ChatRequest) -> None:
+        """SSE streaming branch for ``POST /v1/chat/completions``.
+
+        Emits OpenAI-style chat-completion-chunk JSON deltas, one per
+        token, terminated with ``data: [DONE]\\n\\n``. Cancellation:
+        between every token we ask mongoose whether the client is still
+        connected — if not, we break the loop and reset the slot. This
+        accepts up-to-one-token latency on cancel detection (see Phase 1
+        design notes).
+        """
+        import uuid
+
+        slot = self.get_available_slot()
+        if slot is None:
+            # No chunked-stream framing yet — return a regular JSON error.
+            conn.send_error(503, "No available slots")
+            return
+
+        task_id = str(uuid.uuid4())
+        slot.task_id = task_id
+        slot.is_processing = True
+
+        # The first chunk in OpenAI's SSE shape carries the assistant role
+        # delta (no content), subsequent chunks carry content deltas, and
+        # the final non-DONE chunk carries finish_reason.
+        chunk_id = f"chatcmpl-{task_id}"
+        created = int(time.time())
+        mgr = conn._mgr
+        conn_id = conn._conn_id
+
+        def _frame(delta: dict[str, Any], finish: Optional[str] = None) -> bytes:
+            payload = {
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": request.model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+            }
+            return b"data: " + json.dumps(payload).encode() + b"\n\n"
+
+        try:
+            assert mgr is not None
+            ok = mgr.begin_chunked(
+                conn_id, 200,
+                "Content-Type: text/event-stream\r\n"
+                "Cache-Control: no-cache\r\n"
+                "Connection: keep-alive\r\n",
+            )
+            if not ok:
+                return  # connection already gone
+
+            # Role-only opening delta (matches OpenAI behavior).
+            mgr.send_chunk(conn_id, _frame({"role": "assistant"}))
+
+            prompt = self._messages_to_prompt(request.messages)
+            max_tokens = request.max_tokens or 100
+
+            stop_hit = False
+            buffered = ""  # accumulated to detect stop sequences across token boundaries
+            finish_reason = "stop"
+            generated_count = 0
+            for piece in slot.iter_tokens(prompt, max_tokens, request):
+                # Disconnect check — accepts up-to-one-token latency.
+                if not mgr.is_connection_alive(conn_id):
+                    return  # bail without [DONE]; client is gone
+                if _shutdown_requested:
+                    finish_reason = "stop"
+                    break
+
+                # Stop-sequence handling: if the user supplied stop strings
+                # we accumulate the tail of recent output, look for any of
+                # them, and truncate to the prefix before the match.
+                if request.stop:
+                    buffered += piece
+                    matched_at = -1
+                    for sw in request.stop:
+                        idx = buffered.find(sw)
+                        if idx != -1 and (matched_at == -1 or idx < matched_at):
+                            matched_at = idx
+                    if matched_at != -1:
+                        # Emit only the portion of `buffered` before the
+                        # stop word that hadn't been streamed in earlier
+                        # pieces. Conservatively, we just emit nothing
+                        # more after the match — the previous deltas have
+                        # already gone over the wire, so partial inclusion
+                        # of the stop string is acceptable (matches
+                        # llama-server's behavior).
+                        stop_hit = True
+                        break
+
+                if not mgr.send_chunk(conn_id, _frame({"content": piece})):
+                    return
+                generated_count += 1
+
+            if not stop_hit and generated_count >= max_tokens:
+                finish_reason = "length"
+
+            # Closing chunk with finish_reason, then [DONE], then end the
+            # chunked transfer.
+            mgr.send_chunk(conn_id, _frame({}, finish=finish_reason))
+            mgr.send_chunk(conn_id, b"data: [DONE]\n\n")
+            mgr.end_chunked(conn_id)
+        except Exception as e:
+            # Mid-stream errors can't be turned into a clean HTTP error
+            # (we've already sent 200 + headers). Best-effort: emit an
+            # error event and close.
+            self._logger.error(f"Streaming chat completion error: {e}")
+            try:
+                if mgr is not None:
+                    mgr.send_chunk(conn_id, b"data: " + json.dumps(
+                        {"error": {"type": "internal_error", "message": str(e)}}
+                    ).encode() + b"\n\n")
+                    mgr.end_chunked(conn_id)
+            except Exception:
+                pass
+        finally:
+            slot.reset()
 
     def _process_chat_completion(self, request: ChatRequest) -> ChatResponse:
         slot = self.get_available_slot()

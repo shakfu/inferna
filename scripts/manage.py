@@ -1208,6 +1208,89 @@ class LlamaCppBuilder(GgmlBuilder):
         # mtmd (multimodal) headers.
         self.glob_copy(self.src_dir / "tools" / "mtmd", self.include, patterns=["*.h"])
 
+    def _copy_webui_assets(self) -> None:
+        """Copy llama.cpp's prebuilt server webui into the inferna package.
+
+        The pinned llama.cpp source ships the static SPA bundle under
+        ``tools/server/public/`` (older pins: ``examples/server/public/``).
+        We gzip each file at copy time so wheels carry the compressed form
+        (~7 MB raw -> ~2 MB gz) and the embedded server can serve them
+        with ``Content-Encoding: gzip`` directly.
+        """
+        import gzip
+
+        candidates = [
+            self.src_dir / "tools" / "server" / "public",
+            self.src_dir / "examples" / "server" / "public",
+        ]
+        src = next((p for p in candidates if p.exists()), None)
+        if src is None:
+            self.log.warning(
+                f"llama.cpp webui not found under {self.src_dir} "
+                f"(checked {[str(p.relative_to(self.src_dir)) for p in candidates]}); "
+                f"embedded server's web UI will be unavailable on this build."
+            )
+            return
+
+        dst = self.project.cwd / "src" / "inferna" / "llama" / "server" / "assets" / "webui"
+        dst.mkdir(parents=True, exist_ok=True)
+
+        # Files the upstream UI hard-references from index.html. If the pin
+        # ever drops one we want to know loudly rather than ship a broken UI.
+        required = ("index.html", "bundle.css", "bundle.js")
+        optional = ("loading.html",)
+        for name in required:
+            in_path = src / name
+            if not in_path.exists():
+                raise FileNotFoundError(
+                    f"required webui asset missing: {in_path}. "
+                    f"LLAMACPP_VERSION={self.version} may not include it."
+                )
+
+        # Brand-string rewrites applied to bundle.js before gzipping. The
+        # upstream bundle hard-codes "llama.cpp" in three places: the page
+        # title (default + active-conversation suffix) and the
+        # connection-init status toast. We do exact-substring substitution
+        # — the bundle ships without source maps, so length-changing
+        # replacements are safe.
+        brand_subs: dict[str, dict[bytes, bytes]] = {
+            "bundle.js": {
+                # Tab title — default and active-conversation suffix.
+                b'"llama.cpp - AI Chat Interface"': b'"inferna"',
+                b"} - llama.cpp`": b"} - inferna`",
+                # Connection-init status toast.
+                b"Initializing connection to llama.cpp server": (
+                    b"Initializing connection to inferna server"
+                ),
+                # Visible <h1> headings (empty-state hero + navbar brand).
+                # Both upstream <h1>s contain exactly ">llama.cpp</h1>".
+                b">llama.cpp</h1>": b">inferna</h1>",
+            },
+        }
+
+        for name in required + optional:
+            in_path = src / name
+            if not in_path.exists():
+                continue
+            with open(in_path, "rb") as fi:
+                data = fi.read()
+            # Apply brand rewrites if any are configured for this file.
+            for needle, replacement in brand_subs.get(name, {}).items():
+                if needle not in data:
+                    raise RuntimeError(
+                        f"webui brand rewrite failed for {name}: pattern {needle!r} "
+                        f"not found in upstream bundle. Upstream may have changed "
+                        f"the string at {self.version}; update brand_subs in "
+                        f"_copy_webui_assets."
+                    )
+                data = data.replace(needle, replacement)
+            out_path = dst / f"{name}.gz"
+            # mtime=0 -> reproducible gzip output across rebuilds.
+            with gzip.GzipFile(filename="", mode="wb", fileobj=open(out_path, "wb"),
+                                compresslevel=9, mtime=0) as fo:
+                fo.write(data)
+            self.log.info(f"webui asset: {name} ({len(data)} -> {out_path.stat().st_size} bytes)")
+
     def build(self, shared: bool = False) -> None:
         """main build function"""
         if not self.src_dir.exists():
@@ -1218,6 +1301,7 @@ class LlamaCppBuilder(GgmlBuilder):
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
         self._copy_headers()
+        self._copy_webui_assets()
 
         # Get backend-specific CMake options
         backend_options = self.get_backend_cmake_options()
@@ -1284,6 +1368,7 @@ class LlamaCppBuilder(GgmlBuilder):
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
         self._copy_headers()
+        self._copy_webui_assets()
 
         backend_options = self.get_backend_cmake_options()
         # GGML_NATIVE is incompatible with GGML_BACKEND_DL; disable it
@@ -1520,6 +1605,12 @@ class LlamaCppBuilder(GgmlBuilder):
             nlohmann_include.mkdir(exist_ok=True)
             self.glob_copy(self.src_dir / "vendor" / "nlohmann", nlohmann_include, patterns=["*.hpp"])
             self.glob_copy(self.src_dir / "tools" / "mtmd", self.include, patterns=["*.h"])
+
+        # Webui assets (independent of pre-built libs — they live in the source
+        # tree). Ensure the source checkout exists so we can read them.
+        if not self.src_dir.exists():
+            self.setup()
+        self._copy_webui_assets()
 
         url = self._release_url()
         if url is None:

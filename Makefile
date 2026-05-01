@@ -57,7 +57,7 @@ endif
 # =============================================================================
 # Primary targets
 # =============================================================================
-.PHONY: all build build-dynamic setup sync dev dev-abi3 lean reset remake
+.PHONY: all build build-dynamic setup sync dev dev-abi3 lean reset remake reset-webui
 
 all: build
 
@@ -85,6 +85,14 @@ build-dynamic:
 	@$(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic
 
 remake: reset build test
+
+# Drop the gzipped webui assets and regenerate them from the llama.cpp
+# source checkout under build/llama.cpp/tools/server/public/. Use after
+# editing brand_subs in scripts/manage.py to pick up the new strings
+# without doing a full make reset / rebuild.
+reset-webui:
+	@rm -f src/inferna/llama/server/assets/webui/*.gz
+	@$(SYSTEM_PYTHON) scripts/manage.py build --llama-cpp --dynamic --deps-only
 
 # =============================================================================
 # Wheel and distribution
