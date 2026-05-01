@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.1.2]
+
 ### Changed
 
 - `inferna.llama.server.python.ChatRole` (`StrEnum`-equivalent — `class ChatRole(str, enum.Enum)` for the 3.10 floor): named replacement for the `"system"` / `"user"` / `"assistant"` / `"tool"` string literals previously sprinkled across `python.py:361,387-391` and `embedded.py:679,773,792-797`. Members are `str` subclasses so JSON serialization is unchanged (`{"role": "assistant"}` over the wire), equality with raw strings still holds (incoming request payloads — where clients send plain strings — interop without coercion), and they're usable as dict keys. `ChatMessage.role` keeps its `str` annotation so callers can pass either form. `TOOL` is included for forward compat with OpenAI's tool-call response messages even though `_messages_to_prompt` doesn't switch on it yet — having the constant defined now means tool-calling work just adds an `elif` rather than introducing a new string.
