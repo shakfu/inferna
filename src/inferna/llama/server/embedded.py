@@ -17,6 +17,7 @@ Public API (preserved for callers and tests):
 
 from __future__ import annotations
 
+import enum
 import json
 import logging
 import signal
@@ -68,6 +69,20 @@ def _load_webui_assets() -> dict[str, bytes]:
 
 _WEBUI_ASSETS: dict[str, bytes] = _load_webui_assets()
 
+
+class MongooseLogLevel(enum.IntEnum):
+    """Mongoose internal log verbosity — mirrors ``MG_LL_*`` in mongoose.h.
+
+    Pass to :meth:`EmbeddedServer.set_mongoose_log_level`. ``IntEnum`` so
+    plain integers from the CLI flag still work without coercion.
+    """
+
+    NONE = 0
+    ERROR = 1
+    INFO = 2
+    DEBUG = 3
+    VERBOSE = 4
+
 if TYPE_CHECKING:
     from ...rag.embedder import Embedder
     from ..llama_cpp import LlamaModel
@@ -79,6 +94,7 @@ from .python import (
     ChatRequest,
     ChatResponse,
     ChatChoice,
+    ChatRole,
 )
 
 # Signal handler return type — accept any of the three forms Python's
@@ -92,13 +108,20 @@ _shutdown_requested = False
 
 
 class MongooseConnection:
-    """Per-request response writer; wraps an opaque mongoose connection id."""
+    """Per-request response writer; wraps an opaque mongoose connection id.
 
-    __slots__ = ("_conn_id", "_mgr")
+    Tracks the response status and approximate body size so the dispatcher
+    can emit one access-log line per request without each handler having
+    to plumb those values back up.
+    """
+
+    __slots__ = ("_conn_id", "_mgr", "status_code", "body_size")
 
     def __init__(self, mgr: Optional[Any] = None, conn_id: int = 0) -> None:
         self._mgr = mgr
         self._conn_id = conn_id
+        self.status_code: int = 0  # 0 = no response sent yet
+        self.body_size: int = 0
 
     @property
     def is_valid(self) -> bool:
@@ -108,7 +131,11 @@ class MongooseConnection:
         if not self.is_valid or self._mgr is None:
             return False
         body = json.dumps(data)
-        return self._mgr.send_reply(self._conn_id, status_code, "Content-Type: application/json\r\n", body)
+        ok = self._mgr.send_reply(self._conn_id, status_code, "Content-Type: application/json\r\n", body)
+        if ok:
+            self.status_code = status_code
+            self.body_size = len(body)
+        return ok
 
     def send_error(self, status_code: int, message: str) -> bool:
         return self.send_json(
@@ -134,7 +161,11 @@ class MongooseConnection:
             f"Vary: Accept-Encoding\r\n"
             f"Cache-Control: {cache}\r\n"
         )
-        return self._mgr.send_bytes(self._conn_id, status_code, headers, body)
+        ok = self._mgr.send_bytes(self._conn_id, status_code, headers, body)
+        if ok:
+            self.status_code = status_code
+            self.body_size = len(body)
+        return ok
 
 
 class EmbeddedServer:
@@ -146,6 +177,15 @@ class EmbeddedServer:
         self._embedder: Optional["Embedder"] = None
         self._slots: List[ServerSlot] = []
         self._logger = logging.getLogger(__name__)
+        self._access_logger = logging.getLogger(f"{__name__}.access")
+        # Silence mongoose's default DEBUG-level chatter (every
+        # accept/read/write/close, plus a startup `MG_IO_SIZE` banner from
+        # mg_mgr_init itself). Must run BEFORE Manager() so the banner
+        # printed inside mg_mgr_init is also suppressed. The Python
+        # access log below provides one clean line per HTTP request
+        # instead. Override via ``EmbeddedServer.set_mongoose_log_level()``
+        # if you need the raw mongoose trace back for debugging.
+        _mg.Manager.set_log_level(MongooseLogLevel.ERROR)
         self._mgr = _mg.Manager()
         self._running = False
         self._signal_received = 0
@@ -339,14 +379,58 @@ class EmbeddedServer:
 
     # --------------------------------------------------------- HTTP dispatch
 
+    @staticmethod
+    def set_mongoose_log_level(level: Union[int, MongooseLogLevel]) -> None:
+        """Adjust mongoose's internal log verbosity.
+
+        Accepts a :class:`MongooseLogLevel` member or its integer value
+        (0..4). inferna defaults to ``ERROR``; raise to ``DEBUG`` to see
+        every accept/read/write/close from the underlying mongoose poll
+        loop. Affects all ``mg_mgr`` instances in the process.
+        """
+        _mg.Manager.set_log_level(int(level))
+
     def _dispatch(self, conn_id: int, method: str, uri: str, body: str) -> None:
-        """Bridge from the C event handler into our Python routing."""
+        """Bridge from the C event handler into our Python routing.
+
+        Wraps the handler in start/end timing and emits one access-log
+        line per request once a response has been written. Replaces
+        mongoose's per-I/O-event chatter with a higher-signal view:
+
+            GET /props 200 285B 0.4ms
+        """
+        # Single outer try/except so that any failure on this path —
+        # construction, routing, handler, or post-handler bookkeeping —
+        # still lands in our Python logger and still emits an access-log
+        # line. The C++ trampoline in _mongoose.cpp also catches and
+        # 500s, but that path bypasses our logging entirely; we want the
+        # diagnostics here.
+        start = time.monotonic()
+        conn: Optional[MongooseConnection] = None
+        status = 0
+        body_size = 0
         try:
             conn = MongooseConnection(self._mgr, conn_id)
             self.handle_http_request(conn, method, uri, headers={}, body=body)
+            status = conn.status_code
+            body_size = conn.body_size
         except Exception as e:
-            self._logger.error(f"Event handler error: {e}")
-            self._mgr.send_reply(conn_id, 500, "Content-Type: text/plain\r\n", "Internal Server Error")
+            self._logger.exception(f"Event handler error: {e}")
+            try:
+                self._mgr.send_reply(conn_id, 500, "Content-Type: text/plain\r\n", "Internal Server Error")
+            except Exception:
+                # send_reply itself shouldn't be able to raise, but if it
+                # does we don't want to lose the access log on top of it.
+                pass
+            status = 500
+            body_size = len("Internal Server Error")
+        elapsed_ms = (time.monotonic() - start) * 1000.0
+        # Path-only (strip query) for cleaner logs.
+        path = uri.split("?", 1)[0]
+        self._access_logger.info(
+            "%s %s %d %dB %.1fms",
+            method, path, status, body_size, elapsed_ms,
+        )
 
     def handle_http_request(
         self, conn: MongooseConnection, method: str, uri: str, headers: dict[str, str], body: str
@@ -529,6 +613,21 @@ class EmbeddedServer:
             self._logger.error(f"Embeddings error: {e}")
             conn.send_error(500, str(e))
 
+    def _resolve_max_tokens(self, request: ChatRequest) -> int:
+        """Map the request's ``max_tokens`` to a concrete cap.
+
+        Honors the llama-server / OpenAI convention: a missing field, ``0``,
+        or any negative value (canonically ``-1``) means "generate until EOS
+        or context limit." We translate that to ``n_ctx`` as the effective
+        cap — the per-slot decode loop already breaks at
+        ``n_past >= context.n_ctx - 1``, so this is a hard upper bound that
+        the caller will rarely reach. A positive value is honored verbatim.
+        """
+        n = request.max_tokens
+        if n is None or n <= 0:
+            return self._config.n_ctx
+        return n
+
     def _stream_chat_completion(self, conn: MongooseConnection, request: ChatRequest) -> None:
         """SSE streaming branch for ``POST /v1/chat/completions``.
 
@@ -579,12 +678,24 @@ class EmbeddedServer:
             )
             if not ok:
                 return  # connection already gone
+            conn.status_code = 200  # for the access log
+
+            # Local wrapper that tracks total bytes written so the access
+            # log reports a meaningful size for SSE responses (otherwise
+            # the dispatcher only sees the per-chunk len from begin_chunked
+            # and reports 0). Returns the underlying send_chunk result so
+            # callers can still detect a dropped connection.
+            def _send(data: bytes) -> bool:
+                ok = mgr.send_chunk(conn_id, data)
+                if ok:
+                    conn.body_size += len(data)
+                return ok
 
             # Role-only opening delta (matches OpenAI behavior).
-            mgr.send_chunk(conn_id, _frame({"role": "assistant"}))
+            _send(_frame({"role": ChatRole.ASSISTANT}))
 
             prompt = self._messages_to_prompt(request.messages)
-            max_tokens = request.max_tokens or 100
+            max_tokens = self._resolve_max_tokens(request)
 
             stop_hit = False
             buffered = ""  # accumulated to detect stop sequences across token boundaries
@@ -619,7 +730,7 @@ class EmbeddedServer:
                         stop_hit = True
                         break
 
-                if not mgr.send_chunk(conn_id, _frame({"content": piece})):
+                if not _send(_frame({"content": piece})):
                     return
                 generated_count += 1
 
@@ -628,8 +739,8 @@ class EmbeddedServer:
 
             # Closing chunk with finish_reason, then [DONE], then end the
             # chunked transfer.
-            mgr.send_chunk(conn_id, _frame({}, finish=finish_reason))
-            mgr.send_chunk(conn_id, b"data: [DONE]\n\n")
+            _send(_frame({}, finish=finish_reason))
+            _send(b"data: [DONE]\n\n")
             mgr.end_chunked(conn_id)
         except Exception as e:
             # Mid-stream errors can't be turned into a clean HTTP error
@@ -659,7 +770,7 @@ class EmbeddedServer:
             slot.is_processing = True
 
             prompt = self._messages_to_prompt(request.messages)
-            max_tokens = request.max_tokens or 100
+            max_tokens = self._resolve_max_tokens(request)
             generated_text = slot.process_and_generate(prompt, max_tokens)
 
             if request.stop and generated_text:
@@ -675,7 +786,7 @@ class EmbeddedServer:
 
             choice = ChatChoice(
                 index=0,
-                message=ChatMessage(role="assistant", content=generated_text),
+                message=ChatMessage(role=ChatRole.ASSISTANT, content=generated_text),
                 finish_reason="stop",
             )
             return ChatResponse(
@@ -694,11 +805,11 @@ class EmbeddedServer:
     def _messages_to_prompt(self, messages: List[ChatMessage]) -> str:
         parts = []
         for m in messages:
-            if m.role == "system":
+            if m.role == ChatRole.SYSTEM:
                 parts.append(f"System: {m.content}")
-            elif m.role == "user":
+            elif m.role == ChatRole.USER:
                 parts.append(f"User: {m.content}")
-            elif m.role == "assistant":
+            elif m.role == ChatRole.ASSISTANT:
                 parts.append(f"Assistant: {m.content}")
         parts.append("Assistant:")
         return "\n".join(parts)

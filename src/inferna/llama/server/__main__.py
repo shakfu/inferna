@@ -21,6 +21,15 @@ def main() -> int:
              "Defaults to the model file's basename without extension.",
     )
     parser.add_argument(
+        "--mongoose-log-level",
+        type=int,
+        default=None,
+        choices=[0, 1, 2, 3, 4],
+        help="Mongoose internal log verbosity. 0=none, 1=errors only (inferna default), "
+             "2=info, 3=debug (mongoose's default — every accept/read/write/close), 4=verbose. "
+             "Most users want this off; set to 3 to debug HTTP-level issues.",
+    )
+    parser.add_argument(
         "--server-type",
         choices=["python", "embedded"],
         default="embedded",
@@ -49,6 +58,8 @@ def main() -> int:
             print("Starting embedded server (high-performance C implementation)")
 
             server = EmbeddedServer(config)
+            if args.mongoose_log_level is not None:
+                server.set_mongoose_log_level(args.mongoose_log_level)
 
             if not server.start():
                 print("Failed to start embedded server")

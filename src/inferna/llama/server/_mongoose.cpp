@@ -33,6 +33,7 @@ extern "C" {
                                       size_t len);
     void inferna_mg_http_end_chunk(struct mg_connection* c);
     int inferna_mg_is_closing(struct mg_connection* c);
+    void inferna_mg_log_set(int level);
 }
 
 namespace nb = nanobind;
@@ -186,5 +187,10 @@ NB_MODULE(_mongoose, m) {
             }
             return false;
         }, "conn_id"_a)
-        .def_prop_ro("is_listening", [](Manager& s){ return s.listener != nullptr; });
+        .def_prop_ro("is_listening", [](Manager& s){ return s.listener != nullptr; })
+        .def_static("set_log_level", [](int level){
+            // 0=NONE, 1=ERROR, 2=INFO, 3=DEBUG, 4=VERBOSE. Default at
+            // process start is 3 — embedded server lowers it to 1.
+            inferna_mg_log_set(level);
+        }, "level"_a);
 }

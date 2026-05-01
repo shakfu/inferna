@@ -103,3 +103,11 @@ void inferna_mg_http_end_chunk(struct mg_connection *c) {
 int inferna_mg_is_closing(struct mg_connection *c) {
     return (c->is_closing || c->is_draining) ? 1 : 0;
 }
+
+/* Set mongoose's global log level. Maps directly to MG_LL_NONE..VERBOSE
+ * (0..4). Default at process start is 3 (DEBUG), which prints every
+ * accept/read/write/close. Embedded server callers usually want 1 (ERROR)
+ * plus their own Python-side access log. */
+void inferna_mg_log_set(int level) {
+    mg_log_set(level);
+}

@@ -10,6 +10,7 @@ This approach avoids the complexity of wrapping cpp-httplib and complex C++ temp
 while still providing the full server functionality using the existing libllama.a linkage.
 """
 
+import enum
 import json
 import time
 import threading
@@ -25,6 +26,21 @@ import uuid
 
 # Import our existing inferna bindings
 from ..llama_cpp import LlamaModel, LlamaContext, LlamaSampler, llama_batch_get_one
+
+
+class ChatRole(str, enum.Enum):
+    """Conversation roles in the OpenAI chat-completion schema.
+
+    Subclassing ``str`` (the 3.10-compatible equivalent of ``enum.StrEnum``)
+    keeps members JSON-serializable and equal to their raw string value, so
+    ``ChatMessage.role`` can stay typed ``str`` and incoming-request payloads
+    (where clients send plain strings) interop without coercion.
+    """
+
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 @dataclass
@@ -342,7 +358,7 @@ class PythonServer:
 
             # Create response
             choice = ChatChoice(
-                index=0, message=ChatMessage(role="assistant", content=generated_text), finish_reason="stop"
+                index=0, message=ChatMessage(role=ChatRole.ASSISTANT, content=generated_text), finish_reason="stop"
             )
 
             response = ChatResponse(
@@ -368,11 +384,11 @@ class PythonServer:
         prompt_parts = []
 
         for message in messages:
-            if message.role == "system":
+            if message.role == ChatRole.SYSTEM:
                 prompt_parts.append(f"System: {message.content}")
-            elif message.role == "user":
+            elif message.role == ChatRole.USER:
                 prompt_parts.append(f"User: {message.content}")
-            elif message.role == "assistant":
+            elif message.role == ChatRole.ASSISTANT:
                 prompt_parts.append(f"Assistant: {message.content}")
 
         prompt_parts.append("Assistant:")
