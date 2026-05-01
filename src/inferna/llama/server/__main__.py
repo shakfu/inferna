@@ -18,7 +18,7 @@ def main() -> int:
         "--model-alias",
         default=None,
         help="Model identifier exposed to clients (shown in webui and /v1/models). "
-             "Defaults to the model file's basename without extension.",
+        "Defaults to the model file's basename without extension.",
     )
     parser.add_argument(
         "--mongoose-log-level",
@@ -26,8 +26,8 @@ def main() -> int:
         default=None,
         choices=[0, 1, 2, 3, 4],
         help="Mongoose internal log verbosity. 0=none, 1=errors only (inferna default), "
-             "2=info, 3=debug (mongoose's default — every accept/read/write/close), 4=verbose. "
-             "Most users want this off; set to 3 to debug HTTP-level issues.",
+        "2=info, 3=debug (mongoose's default — every accept/read/write/close), 4=verbose. "
+        "Most users want this off; set to 3 to debug HTTP-level issues.",
     )
     parser.add_argument(
         "--server-type",
@@ -87,7 +87,11 @@ def main() -> int:
     if args.server_type == "python":
         print("Starting Python server")
 
-        with PythonServer(config) as server:
+        # Mypy can't see that this branch is mutually exclusive with the
+        # ``args.server_type == "embedded"`` branch above (which binds
+        # ``server`` to an ``EmbeddedServer``), so using a distinct name
+        # avoids a spurious "Incompatible types in assignment" error.
+        with PythonServer(config) as py_server:  # noqa: F841 — exits via KeyboardInterrupt below
             print(f"Python server running at http://{args.host}:{args.port}")
             print("Press Ctrl+C to stop...")
 

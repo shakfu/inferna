@@ -1243,8 +1243,7 @@ class LlamaCppBuilder(GgmlBuilder):
             in_path = src / name
             if not in_path.exists():
                 raise FileNotFoundError(
-                    f"required webui asset missing: {in_path}. "
-                    f"LLAMACPP_VERSION={self.version} may not include it."
+                    f"required webui asset missing: {in_path}. LLAMACPP_VERSION={self.version} may not include it."
                 )
 
         # Brand-string rewrites applied to bundle.js before gzipping. The
@@ -1259,9 +1258,7 @@ class LlamaCppBuilder(GgmlBuilder):
                 b'"llama.cpp - AI Chat Interface"': b'"inferna"',
                 b"} - llama.cpp`": b"} - inferna`",
                 # Connection-init status toast.
-                b"Initializing connection to llama.cpp server": (
-                    b"Initializing connection to inferna server"
-                ),
+                b"Initializing connection to llama.cpp server": (b"Initializing connection to inferna server"),
                 # Visible <h1> headings (empty-state hero + navbar brand).
                 # Both upstream <h1>s contain exactly ">llama.cpp</h1>".
                 b">llama.cpp</h1>": b">inferna</h1>",
@@ -1286,8 +1283,7 @@ class LlamaCppBuilder(GgmlBuilder):
                 data = data.replace(needle, replacement)
             out_path = dst / f"{name}.gz"
             # mtime=0 -> reproducible gzip output across rebuilds.
-            with gzip.GzipFile(filename="", mode="wb", fileobj=open(out_path, "wb"),
-                                compresslevel=9, mtime=0) as fo:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=open(out_path, "wb"), compresslevel=9, mtime=0) as fo:
                 fo.write(data)
             self.log.info(f"webui asset: {name} ({len(data)} -> {out_path.stat().st_size} bytes)")
 

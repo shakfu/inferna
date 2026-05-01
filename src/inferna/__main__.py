@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterator, cast
 
 
 @contextlib.contextmanager
-def _silence_stderr():
+def _silence_stderr() -> Iterator[None]:
     """Redirect fd 2 to /dev/null for native libs that bypass log callbacks."""
     sys.stderr.flush()
     saved = os.dup(2)
@@ -22,6 +22,7 @@ def _silence_stderr():
         sys.stderr.flush()
         os.dup2(saved, 2)
         os.close(saved)
+
 
 from .api import Response
 
@@ -214,7 +215,11 @@ def cmd_info() -> int:
     # stable-diffusion.cpp
     print("stable-diffusion.cpp:")
     try:
-        from .sd import get_system_info, ggml_backend_load_all as sd_load_backends, set_log_callback as sd_set_log_callback
+        from .sd import (
+            get_system_info,
+            ggml_backend_load_all as sd_load_backends,
+            set_log_callback as sd_set_log_callback,
+        )
 
         sd_set_log_callback(lambda level, text: None)
         # Load backends so sd sees GPU registries

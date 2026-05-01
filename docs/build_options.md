@@ -7,7 +7,7 @@ This guide covers advanced build configuration for inferna. For basic backend se
 Inferna uses a two-phase build:
 
 1. **Phase 1 -- Build dependencies**: `scripts/manage.py build --deps-only` clones and builds llama.cpp (and optionally whisper.cpp, stable-diffusion.cpp), producing static libraries in `thirdparty/`.
-2. **Phase 2 -- Build inferna**: `uv pip install .` (or `uv sync`) runs scikit-build-core, which links the pre-built libraries into Cython extension modules.
+2. **Phase 2 -- Build inferna**: `uv pip install .` (or `uv sync`) runs scikit-build-core, which links the pre-built libraries into nanobind extension modules.
 
 Most options in this guide affect Phase 1. Backend flags (`GGML_CUDA`, etc.) affect both phases.
 

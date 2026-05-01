@@ -22,8 +22,6 @@
 
 ### Medium Priority
 
-- [ ] **Path-filtered `push` / `pull_request` triggers** -- llama.cpp's `build-vulkan.yml:5-25`, `release.yml:10-28`, `editorconfig.yml:9-14` all auto-trigger on narrow `paths:` filters. inferna is entirely `workflow_dispatch` today, so real regressions can ship to users. Auto-trigger CPU cibw on PRs touching `src/inferna/**`, `scripts/manage.py`, `pyproject.toml`; keep GPU wheels on `workflow_dispatch`
-
 - [ ] **Lightweight Python lint / type-check workflows** -- llama.cpp has `python-lint.yml`, `python-type-check.yml`, `python-check-requirements.yml`, `editorconfig.yml` using `runs-on: ubuntu-slim`, triggered only on `**/*.py` / config path changes, running in <1 min. Cheap pre-filter before the 40-minute wheel matrix. Add `.github/workflows/python-lint.yml` with `ruff check` and optionally `mypy` / `ty`
 
 - [ ] **Composite actions for repeated toolchain setup** -- llama.cpp factors into `.github/actions/{windows-setup-cuda,linux-setup-vulkan,windows-setup-rocm,unarchive-tar,get-tag-name}/action.yml` and reuses them across `build-vulkan.yml`, `release.yml`, `build-cache.yml`. inferna duplicates the Vulkan-SDK pwsh install (~15 lines) and a version-reading Python snippet (`build-cibw.yml:234-239`, `build-gpu-wheels.yml:664-670`). Extract `.github/actions/setup-vulkan-windows` and `.github/actions/get-version`
@@ -91,8 +89,6 @@ Items distilled from a 2026-04 wrapper-code review. Two HIGH correctness bugs (`
 - [ ] **Add `tests/test_llama_native.py`.** Direct-surface coverage for symbols the integration tests skip: `LlamaModelKvOverride`/`TensorBuftOverride`, `GgmlBackend*` info, threadpool `attach`/`detach`, `chat_builtin_templates`, TTS helpers, `set_log_callback`.
 
 ### Pre-existing TU consolidation
-
-- [ ] **Deduplicate `ggml_backend_load_all` initialization** across `_llama_native.cpp`, `_whisper_native.cpp`, and `_sd_native.cpp`. Extract a shared helper so the three modules cannot drift on backend setup.
 
 - [ ] **Consolidate `LlamaBatch.set_batch` / `add_sequence` fill loops** in `src/inferna/llama/_llama_native.cpp`. Both methods duplicate the per-token `pos` / `seq_id` / `n_seq_id` / `logits` / `token` assignment; factor the inner loop into a single helper parameterized by starting offset and `seq_id`.
 

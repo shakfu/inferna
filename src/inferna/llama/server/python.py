@@ -15,7 +15,7 @@ import json
 import time
 import threading
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
 
 if TYPE_CHECKING:
     from ...rag.embedder import Embedder
@@ -180,7 +180,7 @@ class ServerSlot:
         self.context.kv_cache_clear()
         self.context.n_tokens = 0
 
-    def iter_tokens(self, prompt: str, max_tokens: int = 100, request: Optional["ChatRequest"] = None):
+    def iter_tokens(self, prompt: str, max_tokens: int = 100, request: Optional["ChatRequest"] = None) -> Iterator[str]:
         """Yield generated token pieces (str) one at a time.
 
         Caller is responsible for slot lifecycle (``is_processing`` flag,

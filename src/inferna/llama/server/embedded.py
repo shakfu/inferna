@@ -20,13 +20,26 @@ from __future__ import annotations
 import enum
 import json
 import logging
+import queue
 import signal
+import threading
 import time
+import uuid
+from dataclasses import dataclass, field
 from importlib.resources import files as _resource_files
 from types import FrameType
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 
 from . import _mongoose as _mg  # type: ignore[attr-defined]
+from .python import (
+    ChatChoice,
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    ChatRole,
+    ServerConfig,
+    ServerSlot,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +70,7 @@ def _load_webui_assets() -> dict[str, bytes]:
     dev who hasn't run ``make`` yet still use the JSON API endpoints.
     """
     out: dict[str, bytes] = {}
-    base = _resource_files("inferna.llama.server").joinpath("assets", "webui")
+    base = _resource_files("inferna.llama.server").joinpath("assets").joinpath("webui")
     for name in _WEBUI_ASSET_TYPES:
         gz = base.joinpath(f"{name}.gz")
         try:
@@ -83,19 +96,10 @@ class MongooseLogLevel(enum.IntEnum):
     DEBUG = 3
     VERBOSE = 4
 
+
 if TYPE_CHECKING:
     from ...rag.embedder import Embedder
     from ..llama_cpp import LlamaModel
-
-from .python import (
-    ServerConfig,
-    ServerSlot,
-    ChatMessage,
-    ChatRequest,
-    ChatResponse,
-    ChatChoice,
-    ChatRole,
-)
 
 # Signal handler return type — accept any of the three forms Python's
 # signal module returns from `signal.signal(...)`: None, an int (e.g.
@@ -127,7 +131,7 @@ class MongooseConnection:
     def is_valid(self) -> bool:
         return self._conn_id != 0 and self._mgr is not None
 
-    def send_json(self, data: dict[str, Any], status_code: int = 200) -> bool:
+    def send_json(self, data: Any, status_code: int = 200) -> bool:
         if not self.is_valid or self._mgr is None:
             return False
         body = json.dumps(data)
@@ -168,6 +172,50 @@ class MongooseConnection:
         return ok
 
 
+@dataclass
+class _StreamingState:
+    """Per-stream context shared between the main poll thread and a worker.
+
+    Mongoose is a single-threaded poll-based event loop: every ``Manager``
+    method (``send_chunk``, ``end_chunked``, ``is_connection_alive``) must
+    be called from the thread that drives ``mg_mgr_poll``. If we generated
+    tokens inline in the dispatch handler, every ``send_chunk`` call would
+    only queue bytes into the connection's send buffer — actual socket
+    writes only happen on the next poll cycle, which can't run until the
+    handler returns. Net result: the entire response flushes in one batch
+    at the end of generation, defeating the visible point of streaming.
+
+    The fix moves generation to a worker thread that pushes pre-formatted
+    SSE frames into a thread-safe queue. The main poll thread drains that
+    queue between polls and calls ``send_chunk`` itself, letting mongoose
+    flush each chunk to the wire as it lands.
+
+    Field ownership is single-writer: ``chunks`` is producer/consumer;
+    ``slot``, the llama context, and ``iter_tokens`` are touched only by
+    the worker; ``cancelled`` is set by the main thread when it observes
+    a closed connection and read by the worker between tokens.
+    """
+
+    conn_id: int
+    slot: "ServerSlot"
+    prompt: str
+    max_tokens: int
+    stop_words: List[str]
+    request: "ChatRequest"
+    chunk_id: str
+    created: int
+    model: str
+    # Worker → main: pre-formatted SSE frame bytes, terminated by None.
+    chunks: "queue.SimpleQueue[Optional[bytes]]" = field(default_factory=queue.SimpleQueue)
+    # Main → worker: tells the worker to stop generating early. Reads of
+    # bool are atomic in CPython (GIL); no lock needed.
+    cancelled: bool = False
+    # Bookkeeping for the per-stream access-log line emitted on completion.
+    started_at: float = 0.0
+    body_size: int = 0
+    thread: Optional[threading.Thread] = None
+
+
 class EmbeddedServer:
     """High-performance embedded HTTP server for LLM inference using Mongoose."""
 
@@ -189,6 +237,10 @@ class EmbeddedServer:
         self._mgr = _mg.Manager()
         self._running = False
         self._signal_received = 0
+        # Active streaming-completion state, keyed by mongoose conn_id.
+        # Only the main poll thread mutates this dict; workers are
+        # producers on their state's queue and never touch the registry.
+        self._streams: dict[int, _StreamingState] = {}
         # Saved by _setup_signal_handlers, restored by stop(). Without
         # this, the bound `self._signal_handler` method registered with
         # signal.signal() retains a strong reference to `self`, which in
@@ -364,11 +416,19 @@ class EmbeddedServer:
         self._restore_signal_handlers()
 
     def wait_for_shutdown(self) -> None:
-        """Pump the event loop until SIGINT/SIGTERM is delivered."""
+        """Pump the event loop until SIGINT/SIGTERM is delivered.
+
+        Tighter poll interval (50ms) than the original 100ms because each
+        poll cycle is also when streamed SSE chunks queued by worker
+        threads get flushed to the wire — too long here means tokens
+        visibly batch in the browser.
+        """
         global _shutdown_requested
         self._logger.info("Starting embedded server event loop...")
         while not _shutdown_requested:
-            self._mgr.poll(100)  # 100ms — same cadence as the prior pyx
+            self._mgr.poll(50)
+            if self._streams:
+                self._drain_streams()
         self._logger.info(f"Exiting on signal {self._signal_received}")
         self._close_all_connections_from_main_thread()
 
@@ -429,7 +489,11 @@ class EmbeddedServer:
         path = uri.split("?", 1)[0]
         self._access_logger.info(
             "%s %s %d %dB %.1fms",
-            method, path, status, body_size, elapsed_ms,
+            method,
+            path,
+            status,
+            body_size,
+            elapsed_ms,
         )
 
     def handle_http_request(
@@ -459,8 +523,7 @@ class EmbeddedServer:
                     # tolerates an empty exposition; we return 200 with no
                     # series rather than a 404 (which would log noise).
                     if conn._mgr is not None:
-                        conn._mgr.send_reply(conn._conn_id, 200,
-                                              "Content-Type: text/plain; version=0.0.4\r\n", "")
+                        conn._mgr.send_reply(conn._conn_id, 200, "Content-Type: text/plain; version=0.0.4\r\n", "")
                 elif path == "/v1/models":
                     self._handle_models(conn)
                 else:
@@ -494,26 +557,30 @@ class EmbeddedServer:
             "top_p": 0.9,
             "min_p": 0.05,
         }
-        conn.send_json({
-            "default_generation_settings": gen_defaults,
-            "total_slots": self._config.n_parallel,
-            "model_path": self._config.model_path,
-            "model_alias": self._config.model_alias,
-            "chat_template": "",  # TODO Phase 4: surface tokenizer's template
-            "build_info": "inferna",
-            "n_ctx": n_ctx,
-            "n_ctx_train": n_ctx,
-        })
+        conn.send_json(
+            {
+                "default_generation_settings": gen_defaults,
+                "total_slots": self._config.n_parallel,
+                "model_path": self._config.model_path,
+                "model_alias": self._config.model_alias,
+                "chat_template": "",  # TODO Phase 4: surface tokenizer's template
+                "build_info": "inferna",
+                "n_ctx": n_ctx,
+                "n_ctx_train": n_ctx,
+            }
+        )
 
     def _handle_slots(self, conn: MongooseConnection) -> None:
-        conn.send_json([
-            {
-                "id": s.id,
-                "is_processing": s.is_processing,
-                "task_id": s.task_id,
-            }
-            for s in self._slots
-        ])
+        conn.send_json(
+            [
+                {
+                    "id": s.id,
+                    "is_processing": s.is_processing,
+                    "task_id": s.task_id,
+                }
+                for s in self._slots
+            ]
+        )
 
     def _handle_models(self, conn: MongooseConnection) -> None:
         models_data = {
@@ -631,15 +698,18 @@ class EmbeddedServer:
     def _stream_chat_completion(self, conn: MongooseConnection, request: ChatRequest) -> None:
         """SSE streaming branch for ``POST /v1/chat/completions``.
 
-        Emits OpenAI-style chat-completion-chunk JSON deltas, one per
-        token, terminated with ``data: [DONE]\\n\\n``. Cancellation:
-        between every token we ask mongoose whether the client is still
-        connected — if not, we break the loop and reset the slot. This
-        accepts up-to-one-token latency on cancel detection (see Phase 1
-        design notes).
-        """
-        import uuid
+        Opens the chunked response on the main poll thread, sends the
+        role-only opener synchronously, then hands off generation to a
+        worker thread. The worker pushes pre-formatted SSE frames into a
+        per-stream queue; ``_drain_streams()`` (called from the poll
+        loop) sends them on the wire. This is the only way to get
+        token-by-token visible streaming on a single-threaded mongoose
+        poll loop — see :class:`_StreamingState` for the rationale.
 
+        Returns as soon as the worker is launched. The dispatcher's
+        access-log line will only see the opener bytes; a separate
+        completion log entry is emitted when the stream finishes.
+        """
         slot = self.get_available_slot()
         if slot is None:
             # No chunked-stream framing yet — return a regular JSON error.
@@ -650,113 +720,168 @@ class EmbeddedServer:
         slot.task_id = task_id
         slot.is_processing = True
 
-        # The first chunk in OpenAI's SSE shape carries the assistant role
-        # delta (no content), subsequent chunks carry content deltas, and
-        # the final non-DONE chunk carries finish_reason.
         chunk_id = f"chatcmpl-{task_id}"
         created = int(time.time())
         mgr = conn._mgr
         conn_id = conn._conn_id
+        assert mgr is not None
+
+        if not mgr.begin_chunked(
+            conn_id,
+            200,
+            "Content-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n",
+        ):
+            slot.reset()
+            return  # connection already gone
+        conn.status_code = 200
+
+        # Send the role-only opener synchronously so the browser sees
+        # the response start before any generation latency.
+        opener_payload = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": request.model,
+            "choices": [{"index": 0, "delta": {"role": ChatRole.ASSISTANT}, "finish_reason": None}],
+        }
+        opener_bytes = b"data: " + json.dumps(opener_payload).encode() + b"\n\n"
+        if mgr.send_chunk(conn_id, opener_bytes):
+            conn.body_size += len(opener_bytes)
+
+        # Stand up the worker. The dispatcher returns immediately; the
+        # poll loop drains queued chunks via _drain_streams().
+        state = _StreamingState(
+            conn_id=conn_id,
+            slot=slot,
+            prompt=self._messages_to_prompt(request.messages),
+            max_tokens=self._resolve_max_tokens(request),
+            stop_words=list(request.stop or []),
+            request=request,
+            chunk_id=chunk_id,
+            created=created,
+            model=request.model,
+            started_at=time.monotonic(),
+            body_size=len(opener_bytes),
+        )
+        self._streams[conn_id] = state
+        state.thread = threading.Thread(
+            target=self._stream_worker,
+            args=(state,),
+            daemon=True,
+            name=f"inferna-stream-{conn_id:x}",
+        )
+        state.thread.start()
+
+    def _stream_worker(self, state: _StreamingState) -> None:
+        """Run on a worker thread. Generates tokens and queues SSE frames.
+
+        Touches only ``state.slot`` (and through it the llama context /
+        sampler), the local frame helper, and ``state.chunks`` (push-only).
+        Never calls any ``Manager`` method — the main thread does all
+        socket-side work via :meth:`_drain_streams`.
+        """
 
         def _frame(delta: dict[str, Any], finish: Optional[str] = None) -> bytes:
             payload = {
-                "id": chunk_id,
+                "id": state.chunk_id,
                 "object": "chat.completion.chunk",
-                "created": created,
-                "model": request.model,
+                "created": state.created,
+                "model": state.model,
                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
             }
             return b"data: " + json.dumps(payload).encode() + b"\n\n"
 
+        stop_hit = False
+        buffered = ""  # accumulated to detect stop sequences across token boundaries
+        finish_reason = "stop"
+        generated_count = 0
         try:
-            assert mgr is not None
-            ok = mgr.begin_chunked(
-                conn_id, 200,
-                "Content-Type: text/event-stream\r\n"
-                "Cache-Control: no-cache\r\n"
-                "Connection: keep-alive\r\n",
-            )
-            if not ok:
-                return  # connection already gone
-            conn.status_code = 200  # for the access log
-
-            # Local wrapper that tracks total bytes written so the access
-            # log reports a meaningful size for SSE responses (otherwise
-            # the dispatcher only sees the per-chunk len from begin_chunked
-            # and reports 0). Returns the underlying send_chunk result so
-            # callers can still detect a dropped connection.
-            def _send(data: bytes) -> bool:
-                ok = mgr.send_chunk(conn_id, data)
-                if ok:
-                    conn.body_size += len(data)
-                return ok
-
-            # Role-only opening delta (matches OpenAI behavior).
-            _send(_frame({"role": ChatRole.ASSISTANT}))
-
-            prompt = self._messages_to_prompt(request.messages)
-            max_tokens = self._resolve_max_tokens(request)
-
-            stop_hit = False
-            buffered = ""  # accumulated to detect stop sequences across token boundaries
-            finish_reason = "stop"
-            generated_count = 0
-            for piece in slot.iter_tokens(prompt, max_tokens, request):
-                # Disconnect check — accepts up-to-one-token latency.
-                if not mgr.is_connection_alive(conn_id):
-                    return  # bail without [DONE]; client is gone
-                if _shutdown_requested:
-                    finish_reason = "stop"
+            for piece in state.slot.iter_tokens(state.prompt, state.max_tokens, state.request):
+                if state.cancelled or _shutdown_requested:
                     break
 
-                # Stop-sequence handling: if the user supplied stop strings
-                # we accumulate the tail of recent output, look for any of
-                # them, and truncate to the prefix before the match.
-                if request.stop:
+                if state.stop_words:
                     buffered += piece
                     matched_at = -1
-                    for sw in request.stop:
+                    for sw in state.stop_words:
                         idx = buffered.find(sw)
                         if idx != -1 and (matched_at == -1 or idx < matched_at):
                             matched_at = idx
                     if matched_at != -1:
-                        # Emit only the portion of `buffered` before the
-                        # stop word that hadn't been streamed in earlier
-                        # pieces. Conservatively, we just emit nothing
-                        # more after the match — the previous deltas have
-                        # already gone over the wire, so partial inclusion
-                        # of the stop string is acceptable (matches
-                        # llama-server's behavior).
                         stop_hit = True
                         break
 
-                if not _send(_frame({"content": piece})):
-                    return
+                state.chunks.put(_frame({"content": piece}))
                 generated_count += 1
 
-            if not stop_hit and generated_count >= max_tokens:
+            if not stop_hit and generated_count >= state.max_tokens:
                 finish_reason = "length"
 
-            # Closing chunk with finish_reason, then [DONE], then end the
-            # chunked transfer.
-            _send(_frame({}, finish=finish_reason))
-            _send(b"data: [DONE]\n\n")
-            mgr.end_chunked(conn_id)
+            if not state.cancelled:
+                state.chunks.put(_frame({}, finish=finish_reason))
+                state.chunks.put(b"data: [DONE]\n\n")
         except Exception as e:
-            # Mid-stream errors can't be turned into a clean HTTP error
-            # (we've already sent 200 + headers). Best-effort: emit an
-            # error event and close.
-            self._logger.error(f"Streaming chat completion error: {e}")
-            try:
-                if mgr is not None:
-                    mgr.send_chunk(conn_id, b"data: " + json.dumps(
-                        {"error": {"type": "internal_error", "message": str(e)}}
-                    ).encode() + b"\n\n")
-                    mgr.end_chunked(conn_id)
-            except Exception:
-                pass
+            self._logger.exception(f"Streaming worker error: {e}")
+            if not state.cancelled:
+                err = {"error": {"type": "internal_error", "message": str(e)}}
+                try:
+                    state.chunks.put(b"data: " + json.dumps(err).encode() + b"\n\n")
+                except Exception:
+                    pass
         finally:
-            slot.reset()
+            # Sentinel: tell the main thread no more chunks are coming so
+            # it can finalize the response and reclaim the slot.
+            state.chunks.put(None)
+
+    def _drain_streams(self) -> None:
+        """Flush any queued SSE chunks for active streams (main thread).
+
+        Called every poll tick when at least one stream is active. For
+        each stream, pulls everything currently queued, sends it on the
+        wire, and on the ``None`` sentinel finalizes the chunked transfer
+        and releases the slot. Detects client disconnect proactively so
+        the worker can stop generating at the next token boundary.
+        """
+        finished: list[int] = []
+        for conn_id, state in self._streams.items():
+            if not state.cancelled and not self._mgr.is_connection_alive(conn_id):
+                state.cancelled = True
+            try:
+                while True:
+                    chunk = state.chunks.get_nowait()
+                    if chunk is None:
+                        # Worker exited. Close the response cleanly unless
+                        # the client is gone (in which case mongoose has
+                        # already torn the connection down).
+                        if not state.cancelled:
+                            self._mgr.end_chunked(conn_id)
+                        finished.append(conn_id)
+                        break
+                    if state.cancelled:
+                        # Client disconnected partway through; drop the
+                        # rest of the stream's frames on the floor.
+                        continue
+                    if self._mgr.send_chunk(conn_id, chunk):
+                        state.body_size += len(chunk)
+                    else:
+                        state.cancelled = True
+            except queue.Empty:
+                # No more chunks ready this tick.
+                pass
+
+        for conn_id in finished:
+            state = self._streams.pop(conn_id)
+            state.slot.reset()
+            elapsed_ms = (time.monotonic() - state.started_at) * 1000.0
+            verb = "stream-cancel" if state.cancelled else "stream-done"
+            self._access_logger.info(
+                "%s conn=%x model=%s bytes=%d elapsed=%.1fms",
+                verb,
+                conn_id,
+                state.model,
+                state.body_size,
+                elapsed_ms,
+            )
 
     def _process_chat_completion(self, request: ChatRequest) -> ChatResponse:
         slot = self.get_available_slot()

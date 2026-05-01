@@ -416,7 +416,7 @@ Approximate relative performance (inference speed):
 Inferna has a two-stage build process:
 
 1. **Dependency build** (`scripts/manage.py`): Builds llama.cpp, whisper.cpp, stable-diffusion.cpp as static libraries
-2. **Extension build** (`CMakeLists.txt`): Builds Cython extensions with scikit-build-core, linking against the static libraries
+2. **Extension build** (`CMakeLists.txt`): Builds nanobind extension modules with scikit-build-core, linking against the static libraries
 
 ### Customizing Dependency Build
 
@@ -429,7 +429,7 @@ CMAKE_CUDA_ARCHITECTURES="86-real;89-real" python3 scripts/manage.py build --lla
 
 ### Customizing Extension Build
 
-For the Cython extension build, pass CMake args via scikit-build-core:
+For the nanobind extension build, pass CMake args via scikit-build-core:
 
 ```bash
 # Pass CMake args during wheel build

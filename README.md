@@ -1,10 +1,6 @@
-# Inferna - an experiment
+# Inferna - a multimodal Python inference library
 
-**WARNING**: inferna is an experimental recent ai-driven translation and is buggy, not stable, and not working with different gpu architectures. Don't use it. Use [cyllama](https://pypi.org/project/cyllama) instead which is much more mature and tested.
-
----
-
-Inferna is a Python library for running local AI models across text, speech, and image modalities. It wraps three established C++ inference engines behind a single high-level API:
+Inferna is a multimodal Python inference library for running local AI text, speech, and image models. It wraps three established C++ inference engines behind a single high-level API:
 
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)** - Text generation, chat, embeddings, and text-to-speech
 - **[whisper.cpp](https://github.com/ggerganov/whisper.cpp)** - Speech-to-text transcription and translation
@@ -25,6 +21,7 @@ How inferna differs from cyllama:
 | **Minimum Python** | 3.12 | 3.10 |
 | **Release cadence** | tracks major upstream releases of `llama.cpp` / `stable-diffusion.cpp` | tracks bleeding-edge `llama.cpp` / `stable-diffusion.cpp`, updated frequently |
 | **Release lineage** | `0.1.0` corresponds to cyllama `0.2.14` | -- |
+| **Embedded web UI** | ships a chat webui (rebrand of llama.cpp's reference [llama-server webui](https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui)) at `GET /` on `EmbeddedServer`, with SSE streaming | API-only |
 
 ## Features
 
@@ -46,7 +43,7 @@ How inferna differs from cyllama:
 
 - Image/Video generation -- stable-diffusion.cpp handles image, image-edit and video models.
 
-- OpenAI-compatible servers -- EmbeddedServer (C/Mongoose) and PythonServer with chat completions and embeddings endpoints
+- OpenAI-compatible servers -- EmbeddedServer (C/Mongoose) with built-in chat web UI and SSE streaming, plus a pure-Python fallback (PythonServer); both expose chat-completions and embeddings endpoints
 
 - Framework integrations -- OpenAI API client, LangChain LLM interface
 
@@ -62,7 +59,7 @@ This installs the CPU backend for Linux and Windows. For macOS, the Metal backen
 
 ### GPU-Accelerated Variants (DISABLED FOR NOW)
 
-GPU variants are NOT YET available on PyPI as separate dynamically linked packages:
+GPU variants are **NOT YET** available on PyPI as separate dynamically linked packages, but you **can** build them locally (see below, and also `Makefile` for gpu-specific targets).
 
 ```sh
 pip install inferna-cuda12   # NVIDIA GPU (CUDA 12.4)        -- Linux x86_64, Windows x86_64
@@ -137,7 +134,7 @@ inferna rag -m models/llama.gguf -e models/bge-small.gguf -d docs/ -p "How do I 
 inferna rag -m models/llama.gguf -e models/bge-small.gguf -f file.md   # interactive mode
 inferna rag -m models/llama.gguf -e models/bge-small.gguf -d docs/ --db docs.sqlite -p "..."  # index to persistent DB
 inferna rag -m models/llama.gguf -e models/bge-small.gguf --db docs.sqlite -p "..."           # reuse existing DB, no re-indexing
-inferna server -m models/llama.gguf --port 8080
+inferna server -m models/llama.gguf --port 8080         # then open http://127.0.0.1:8080/ for the chat UI
 inferna transcribe -m models/ggml-base.en.bin audio.wav
 inferna tts -m models/tts.gguf -p "Hello world"
 inferna sd txt2img --model models/sd.gguf --prompt "a sunset"

@@ -1,6 +1,6 @@
 # Introduction
 
-inferna is a zero-dependency Python library for local AI inference. It provides high-performance Cython bindings to three powerful C++ inference engines:
+inferna is a zero-dependency Python library for local AI inference. It provides high-performance nanobind-based bindings to three powerful C++ inference engines:
 
 - **llama.cpp** - Large language model inference for text generation, chat, and embeddings
 
@@ -16,7 +16,7 @@ Unlike other Python LLM libraries that require PyTorch, TensorFlow, or other hea
 
 ### High Performance
 
-By wrapping optimized C++ code with Cython (not Python bindings), inferna achieves near-native performance:
+By wrapping optimized C++ code with nanobind (a low-overhead binding generator that reads upstream C/C++ headers directly), inferna achieves near-native performance:
 
 - GPU acceleration via Metal (macOS), CUDA (NVIDIA), Vulkan (cross-platform)
 

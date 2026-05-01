@@ -4,7 +4,7 @@ This is the official documentation for **inferna**, a high-performance Python li
 
 ## About
 
-inferna provides high-performance Cython bindings to three C++ inference engines -- all from Python with zero runtime dependencies:
+inferna provides high-performance nanobind bindings to three C++ inference engines -- all from Python with zero runtime dependencies:
 
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)** -- LLM text generation, chat, embeddings, and text-to-speech
 

@@ -902,7 +902,7 @@ class MemoryEstimate:
 
 ## Core llama.cpp API
 
-Low-level Cython wrappers for direct llama.cpp access.
+Low-level nanobind wrappers for direct llama.cpp access.
 
 ### Core Classes
 
@@ -1252,79 +1252,96 @@ if spec.is_compat():
 
 Three OpenAI-compatible server implementations.
 
-### Embedded Server
+### Embedded Server (C/Mongoose) — recommended
 
-Pure Python server implementation.
-
-```python
-from inferna.llama.server.embedded import start_server
-
-# Start server
-start_server(
-    model_path="models/llama.gguf",
-    host="127.0.0.1",
-    port=8000,
-    n_ctx=2048,
-    n_gpu_layers=-1
-)
-
-# Use with OpenAI client
-import openai
-openai.api_base = "http://127.0.0.1:8000/v1"
-
-response = openai.ChatCompletion.create(
-    model="inferna",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-```
-
----
-
-### Mongoose Server
-
-High-performance C server using Mongoose library.
+Mongoose-backed HTTP server with built-in chat web UI and SSE streaming. Uses Python worker threads for token generation so streamed tokens flush to the wire as they're produced. Configured via `ServerConfig`.
 
 ```python
-from inferna.llama.server.mongoose_server import EmbeddedServer
+from inferna.llama.server.python import ServerConfig
+from inferna.llama.server.embedded import EmbeddedServer, start_embedded_server
 
-server = EmbeddedServer(
+# Convenience helper — builds the config and starts the server
+server = start_embedded_server(
     model_path="models/llama.gguf",
     host="127.0.0.1",
     port=8080,
     n_ctx=2048,
-    n_threads=4
+    n_gpu_layers=-1,
+    n_parallel=2,
+    model_alias="my-llama",  # shown in the web UI's Model field
 )
-
-server.start()
-
-# Server runs in background
-# Access at http://127.0.0.1:8080
-
+# Server is now accepting requests; point a browser at http://127.0.0.1:8080/
+# for the chat UI, or use any OpenAI-compatible client against /v1/...
+server.wait_for_shutdown()  # blocks until SIGINT/SIGTERM
 server.stop()
 ```
 
----
-
-### LlamaServer
-
-Python wrapper around the llama.cpp server binary.
+Or build the config explicitly:
 
 ```python
-from inferna.llama.server import LlamaServer, LauncherServerConfig
+config = ServerConfig(
+    model_path="models/llama.gguf",
+    host="127.0.0.1",
+    port=8080,
+    n_ctx=2048,
+    n_parallel=2,
+    embedding=True,                      # enables /v1/embeddings
+    embedding_model_path="models/bge-small-en-v1.5-q8_0.gguf",
+)
+
+with EmbeddedServer(config) as server:
+    server.wait_for_shutdown()
+```
+
+### Python Server (fallback)
+
+Pure-Python server using stdlib `http.server`. Same `/v1/...` JSON API as `EmbeddedServer` but no web UI and no SSE worker-thread fan-out.
+
+```python
+from inferna.llama.server.python import ServerConfig, PythonServer, start_python_server
+
+# Convenience helper
+server = start_python_server(model_path="models/llama.gguf", port=8080)
+# server runs in a background thread; main thread is free to do other work
+
+# Or as a context manager
+with PythonServer(ServerConfig(model_path="models/llama.gguf")) as server:
+    import time
+    while True:
+        time.sleep(1)
+```
+
+### Using the server with the OpenAI client
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="not-needed")
+resp = client.chat.completions.create(
+    model="my-llama",
+    messages=[{"role": "user", "content": "Hello!"}],
+    stream=True,
+)
+for chunk in resp:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+### LlamaServer (subprocess wrapper)
+
+Manages an external `llama-server` binary as a child process — useful if you want llama.cpp's reference server (e.g. for features inferna's embedded server doesn't yet expose) but want lifecycle management from Python.
+
+```python
+from inferna.llama.server.launcher import LlamaServer, LauncherServerConfig
 
 config = LauncherServerConfig(
     model_path="models/llama.gguf",
     host="127.0.0.1",
-    port=8080
+    port=8080,
 )
-
 server = LlamaServer(config, server_binary="bin/llama-server")
 server.start()
-
-# Check status
 if server.is_running():
-    print("Server is running")
-
+    print("running")
 server.stop()
 ```
 

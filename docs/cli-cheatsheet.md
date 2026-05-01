@@ -223,17 +223,22 @@ Start an OpenAI-compatible HTTP server.
 ```bash
 inferna server -m models/llama.gguf
 inferna server -m models/llama.gguf --port 9090 --server-type python
+inferna server -m models/llama.gguf --model-alias my-llama --n-parallel 4
 ```
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `-m, --model` | string | (required) | Path to GGUF model |
-| `--host` | string | 127.0.0.1 | Host to bind to |
+| `--host` | string | 127.0.0.1 | Host to bind to (use `0.0.0.0` for LAN) |
 | `--port` | int | 8080 | Port to listen on |
 | `--ctx-size` | int | 2048 | Context window size |
-| `--gpu-layers` | int | -1 | GPU layers to offload |
+| `--gpu-layers` | int | -1 | GPU layers to offload (-1 = all) |
 | `--n-parallel` | int | 1 | Number of parallel processing slots |
+| `--model-alias` | string | (filename stem) | Identifier shown in the web UI's "Model" field and `/v1/models[].id` |
+| `--mongoose-log-level` | int | 1 | Mongoose internal log verbosity (0=none, 1=errors, 2=info, 3=debug, 4=verbose). Default silences routine I/O chatter; raise to 3 to debug HTTP-level issues |
 | `--server-type` | choice | embedded | Server implementation: `python` or `embedded` |
+
+The embedded server (default) serves a chat web UI at `GET /`. See [Server Usage Examples](server_usage_examples.md) for the full endpoint surface and SSE streaming details.
 
 ---
 

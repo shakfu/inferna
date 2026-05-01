@@ -929,9 +929,7 @@ class TestEmbeddedServerLifecycle:
         """
         from inferna.llama.server.embedded import EmbeddedServer
 
-        config = ServerConfig(
-            model_path=model_path, host="127.0.0.1", port=8099, n_ctx=256
-        )
+        config = ServerConfig(model_path=model_path, host="127.0.0.1", port=8099, n_ctx=256)
         server = EmbeddedServer(config)
 
         # Replace the native Manager with a fake whose listen() returns

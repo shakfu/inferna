@@ -130,9 +130,7 @@ class TestSpeculativeCompatibility:
         ctx = LlamaContext(model, ctx_params)
 
         prompt_tokens = [1, 2, 3, 4, 5]
-        batch = LlamaBatch(
-            n_tokens=len(prompt_tokens), embd=0, n_seq_max=1, verbose=False
-        )
+        batch = LlamaBatch(n_tokens=len(prompt_tokens), embd=0, n_seq_max=1, verbose=False)
         for i, tok in enumerate(prompt_tokens):
             batch.add(tok, i, [0], i == len(prompt_tokens) - 1)
         ctx.decode(batch)
@@ -144,8 +142,7 @@ class TestSpeculativeCompatibility:
 
         pos_max_after = ctx.memory_seq_pos_max(0)
         assert pos_max_after == pos_max_before, (
-            f"is_compat clobbered seq 0: pos_max went "
-            f"{pos_max_before} -> {pos_max_after}"
+            f"is_compat clobbered seq 0: pos_max went {pos_max_before} -> {pos_max_after}"
         )
         # The probe seq itself must be left empty after is_compat returns.
         assert ctx.memory_seq_pos_max(1) < 0
@@ -163,9 +160,7 @@ class TestSpeculativeCompatibility:
         ctx = LlamaContext(model, ctx_params)
 
         prompt_tokens = [1, 2, 3, 4, 5]
-        batch = LlamaBatch(
-            n_tokens=len(prompt_tokens), embd=0, n_seq_max=1, verbose=False
-        )
+        batch = LlamaBatch(n_tokens=len(prompt_tokens), embd=0, n_seq_max=1, verbose=False)
         for i, tok in enumerate(prompt_tokens):
             batch.add(tok, i, [0], i == len(prompt_tokens) - 1)
         ctx.decode(batch)
