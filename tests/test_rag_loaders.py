@@ -398,6 +398,23 @@ class TestDirectoryLoader:
         assert docs[0].text == "Custom"
 
 
+def _symlinks_supported() -> bool:
+    """Probe whether the current process can create symlinks. On Windows this
+    requires Developer Mode or admin privileges (WinError 1314 otherwise)."""
+    with tempfile.TemporaryDirectory() as d:
+        target = Path(d) / "t"
+        target.write_text("")
+        try:
+            (Path(d) / "l").symlink_to(target)
+            return True
+        except (OSError, NotImplementedError):
+            return False
+
+
+@pytest.mark.skipif(
+    not _symlinks_supported(),
+    reason="Symlink creation not permitted (Windows needs Developer Mode or admin)",
+)
 class TestDirectoryLoaderSymlinks:
     """Test DirectoryLoader symlink handling."""
 

@@ -5,8 +5,14 @@
 # with intent for local experimentation.
 export MACOSX_DEPLOYMENT_TARGET ?= 11.0
 
-# Find system Python (python3 or python) - manage.py only uses stdlib
-SYSTEM_PYTHON := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
+# Find system Python (python3 or python) - manage.py only uses stdlib.
+# Windows ships `python` (no `python3`), and `command -v` isn't available
+# in the default shell, so branch on OS before probing.
+ifeq ($(OS),Windows_NT)
+    SYSTEM_PYTHON := python
+else
+    SYSTEM_PYTHON := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
+endif
 
 # Backend flags (can be overridden via environment variables)
 # Default: Metal enabled on macOS only, all others disabled
