@@ -72,7 +72,7 @@ Items distilled from a 2026-04 wrapper-code review. Two HIGH correctness bugs (`
 
 ### Coverage — bindings worth filling in
 
-- [ ] **Bind `llama_set_adapters_lora` + `llama_set_adapter_cvec`.** Without these, `LlamaAdapterLora` is read-only — `lora_adapter_init` works but the loaded adapter cannot actually be applied to a context. (`_llama_native.cpp` near line 915.) Verified against `thirdparty/llama.cpp/include/llama.h`.
+- [x] ~~**Bind `llama_set_adapters_lora`**~~ — done. `LlamaContext.set_adapters_lora(adapters, scales)` bound; `LLM.load_lora` / `unload_lora` / `clear_loras` / `list_loras` exposed. `llama_set_adapter_cvec` (control vectors) still unbound — separate, lower priority.
 
 - [ ] **Bind the `whisper_*_with_state` family.** `_whisper_native.cpp:592-598` exposes `WhisperState` as a constructor-only stub. The whole point of `whisper_state` is concurrent decoding from one context; without methods (`whisper_full_with_state`, `whisper_encode_with_state`, etc.) the class is useless.
 
@@ -97,6 +97,78 @@ Items distilled from a 2026-04 wrapper-code review. Two HIGH correctness bugs (`
 ### Open observation (not yet a verified bug)
 
 - [ ] **Investigate flaky `test_embedded_server_context_manager`.** One failure observed in a 1389-test run (`mg_listen` returned null on port 8097), passes cleanly on rerun. Root cause unverified — candidates include macOS TIME_WAIT residue, transient external interference, or an internal race across rapid `mg_mgr_init`/`mg_listen` cycles. Highest-value next move: log `errno`/`strerror(errno)` from the `_mongoose.cpp` listen path so the next flake produces a real signal instead of three guesses.
+
+## Wrapper Layer (REVIEW.md, 2026-05)
+
+Items distilled from the second wrapper-code review (2026-05). Correctness fixes (UTF-8 streaming, Jinja `except`, `BatchMemoryPool`), the `LLM` god-class split into `ResponseCache` / `ChatTemplateRenderer` / `MCPFacade`, and the value-add features (LoRA, embeddings, structured outputs, function calling, logprobs, prompt cache / KV reuse, whisper streaming) all shipped in-session. This list is what remained.
+
+### P1 — high impact
+
+- [ ] **Continuous batching in `EmbeddedServer`.** Multi-day. Today's slot decode loop is sequential per request; a real per-slot continuous batching loop (one sampler per slot, ragged decode, true concurrent users) is the largest perf upgrade and the reason vLLM/llama-cpp-server outpace ad-hoc loops. Touches `src/inferna/llama/server/embedded.py`, `python.py:ServerSlot`, the streaming SSE path. Probably needs the `embedded.py` (~950 LOC) split first (see P3).
+
+- [ ] **Vision in OpenAI-compat (`image_url` content parts).** Half-day. `integrations/openai_compat.py` does not handle `messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "..."}}]}]`. The MTMD context exists (`inferna.llama.mtmd`); plumb it: detect image content parts in `_create_completion`, encode via MTMD, build the multimodal prompt. Pair with a high-level `LLM.chat_with_images(messages, images)` convenience.
+
+- [ ] **Expose KV-cache control on `LLM`.** Half-day. Native bindings exist (`memory_seq_rm`, `memory_seq_pos_max`, `memory_seq_cp`, `memory_seq_keep`, `memory_seq_add`); `LLM` only uses them internally for the prompt-cache layer. Public surface (`LLM.kv.drop`, `LLM.kv.copy`, `LLM.kv.pos_max`) unblocks user-built prompt caches, multi-conversation slot reuse, and the next round of agent-style work.
+
+### P2 — useful features, half-day each
+
+- [ ] **Penalty parameters.** Add `frequency_penalty: float = 0.0` and `presence_penalty: float = 0.0` to `GenerationConfig` (matches OpenAI naming). Wire into `_ensure_sampler` via `add_penalties(penalty_freq=..., penalty_present=...)` — the underlying chain already takes them (see `agents/constrained.py:139`). Tiny.
+
+- [ ] **Speculative decoding ergonomics.** `_speculative.py` exists and is functional but agents/users have to hand-wire it. Add `LLM.enable_speculative(draft_model_path, n_draft=8)` convenience. Optional sibling-finder helper that resolves a smaller HF variant for a given main model. Print acceptance-rate stats on close so users can tune `n_draft`.
+
+- [ ] **Whisper VAD convenience.** `WhisperVadParams` is bound but no Python helper for "transcribe-with-VAD-segmentation". Build `transcribe_with_vad(audio, ...)` that pre-segments via VAD and stitches segment outputs. Sits next to `WhisperStreamer` in `whisper/streaming.py` (or sibling `vad.py`).
+
+- [ ] **`logprobs` in OpenAI-compat.** Now that `LLM(..., logprobs=True)` populates `Response.logprobs`, surface this through `integrations/openai_compat.py` so `client.chat.completions.create(logprobs=True, top_logprobs=K)` round-trips.
+
+- [ ] **Streaming SSE chat completions in `EmbeddedServer` — verify wire format.** `openai_compat.py` (the client adapter) supports `stream=True`. The HTTP-level SSE encoding in `embedded.py` was flagged as "needs verification" during the REVIEW pass — confirm it matches OpenAI's `data: {chunk}\n\n` framing and add a regression test.
+
+- [ ] **RoPE / YaRN scaling exposure.** `LlamaContextParams` carries the fields natively; expose on `GenerationConfig` (`rope_freq_base`, `rope_freq_scale`, `yarn_*`). Required for users running NTK-aware long-context configs.
+
+### P3 — polish / cleanup
+
+- [ ] **Split `embedded.py` (~950 LOC).** Mongoose binding + routing + slot management + chat completion all in one file. Same shape of refactor as the recent `LLM` split. Suggested seams: `_mongoose.py`, `routes/`, `slots.py`, `chat_completion.py`. High leverage on continuous batching and vision-in-OpenAI-compat.
+
+- [ ] **`__all__` everywhere.** Public modules (`inferna/__init__.py`, `api.py`, `llama/llama_cpp.py`, `whisper/whisper_cpp.py`, `sd/stable_diffusion.py`) lack `__all__`. Add it so the public/private boundary is explicit and `from inferna import *` is well-defined.
+
+- [ ] **`@overload` on `LLM.__call__`.** Returns `Response | Iterator[str]` depending on `stream=`; static checkers can't narrow without overloads. Add `@overload` for `stream=True` → `Iterator[str]` and `stream=False` → `Response`.
+
+- [ ] **Lazy imports in `inferna/__init__.py` and `agents/__init__.py`.** Importing `inferna` today pulls MCP, jsonrpc, langchain integration, RAG. `from inferna import LLM` should not pay for those. Use PEP 562 module-level `__getattr__` to defer.
+
+- [ ] **Centralize defaults.** Same numeric default appears in 3-4 places (`DEFAULT_MAX_TOKENS=512` in `defaults.py` vs `n_predict=32` in `simple()` etc.). Single source in `defaults.py`; CLI/api modules import constants.
+
+- [ ] **Common exception base.** `ValueError` / `RuntimeError` / `ActionParseError` / `VectorStoreError` with no shared base. Add `InfernaError` so users can write a single `except` that catches "library errors only".
+
+- [ ] **Generator return-type annotations.** Several `Iterator[str]` that are actually `Generator[str, None, None]`. Mostly cosmetic.
+
+- [ ] **Frozen dataclasses.** `GenerationStats`, `Response` (immutable in practice), `ResponseCacheInfo` could be `frozen=True`. Surfaces accidental mutation. (`TokenLogprob`, `TopLogprob`, `StreamSegment` already frozen.)
+
+- [ ] **Context managers on remaining classes.** `EmbeddedServer`, `RAG`, `WhisperContext`, `SDContext` lack `__enter__`/`__exit__`. Native cleanup works either way; explicit is better.
+
+- [ ] **Centralize sampler / server log routing.** `Sampler.print_perf_data()` and `EmbeddedServer` access logs go to stdout. Pipe through `logging` so deployments capture them.
+
+- [ ] **Naming: `ngl` vs `n_gpu_layers`.** `simple()` uses `ngl`; everything else uses `n_gpu_layers`. Pick one form per layer (long names in code, short flags only in CLI) and document.
+
+- [ ] **Whisper wildcard import.** `whisper/whisper_cpp.py` does `from ._whisper_native import *` while `llama/llama_cpp.py` enumerates explicitly. Standardize on enumeration + `__all__`.
+
+- [ ] **Thread-safety docs.** `WhisperContext` / `SDContext` say nothing about thread safety; one-line "not thread-safe; one context per thread" docstring matches what `LLM._busy_lock` documents.
+
+### P4 — nice-to-have
+
+- [ ] **Reranker auto-enable in RAG.** `rag/pipeline.py:117-150` plumbs `rerank` / `reranker` arguments; default is `False`. Consider auto-enabling when a reranker is supplied (currently silently no-op without `rerank=True`).
+
+- [ ] **Streaming agent steps.** `ReActAgent` runs eagerly; no incremental "thought" stream. UX issue for long runs.
+
+- [ ] **ReActAgent context compaction.** Hardcoded char cap rather than token-aware summarization. Fine as a starting point; flag it as a known limitation.
+
+- [ ] **Model registry / `inferna.list_models()`.** Cache parsed GGUF metadata under `~/.cache/inferna/`. Quality-of-life.
+
+- [ ] **Observability / OpenTelemetry.** Span generation around `_generate_stream`, structured server logs, sampler perf via logger. Cheap but not load-bearing.
+
+- [ ] **Stable-diffusion gaps.** ControlNet (high-level wrappers); async `convert_model`; inpainting mask helpers.
+
+- [ ] **Whisper language-detection confidence.** `WhisperContext.full_lang_id()` returns the id; pair with the score so callers can threshold.
+
+- [ ] **Tighten GBNF whitespace rule.** The grammar's `space ::= | " " | "\n"{1,2} [ \t]{0,20}` allows up to 22 whitespace chars per separator. Sampling can drown in pretty-print whitespace, occasionally truncating mid-structure under `max_tokens`. Tighten upstream in `inferna.utils.json_schema_to_grammar` and confirm no regression in the structured-output tests. Workaround in `tests/test_function_calling.py` was a deterministic config (`temperature=0`, `max_tokens=256`) — see the test fixture's `_LIVE_CFG`.
 
 ## RAG Scaling (see docs/dev/scaling_rag.md)
 
