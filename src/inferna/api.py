@@ -42,6 +42,8 @@ Async Example:
 
 import asyncio
 import codecs
+import heapq
+import math
 import signal
 import threading
 from typing import (
@@ -255,6 +257,40 @@ class GenerationStats:
     generation_time: float = 0.0
 
 
+@dataclass(frozen=True)
+class TopLogprob:
+    """One entry in a per-token ``top_logprobs`` list.
+
+    Mirrors OpenAI's chat-completion logprobs schema (sans ``bytes``,
+    which is encoder-specific and not currently surfaced).
+    """
+
+    token: str
+    token_id: int
+    logprob: float
+
+
+@dataclass(frozen=True)
+class TokenLogprob:
+    """Logprob record for a single generated token.
+
+    ``logprob`` is the log-softmax of the raw model logits at the
+    sampling step -- i.e. ``log p(token | context)`` under the
+    untransformed model distribution. Sampler-side transforms
+    (temperature, top-k, top-p, grammar masking, penalties) reshape the
+    *sampling* distribution but not the reported logprob, matching
+    OpenAI's contract: a token sampled under heavy temperature scaling
+    can land on a low-logprob outcome.
+    """
+
+    token: str
+    token_id: int
+    logprob: float
+    # Optional top-K alternatives at this step, in descending logprob
+    # order. Empty when the caller didn't request ``top_logprobs``.
+    top_logprobs: List[TopLogprob] = field(default_factory=list)
+
+
 @dataclass
 class Response:
     """
@@ -292,6 +328,13 @@ class Response:
     # length 0 in ``auto`` mode if the model chose to answer in text).
     # ``None`` when ``tools=`` was not supplied.
     tool_calls: Optional[List[ToolCall]] = None
+    # Populated when the call passed ``logprobs=True``: one entry per
+    # generated token, in order. Each entry carries the sampled
+    # token's raw-logit logprob plus (when ``top_logprobs > 0``) the
+    # top-K alternative tokens at that step. ``None`` when logprobs
+    # were not requested. Streaming generations leave this ``None``
+    # because the caller assembles chunks externally.
+    logprobs: Optional[List[TokenLogprob]] = None
 
     def __str__(self) -> str:
         """Return the text content. Enables backward-compatible string usage."""
@@ -589,6 +632,17 @@ class LLM:
         self._ctx_size: int = 0  # Track current context size for reuse decisions
         self._sampler: Optional[LlamaSampler] = None
 
+        # Token ids currently resident in seq 0 of the live context's KV
+        # cache, in order. Maintained across calls so a follow-up prompt
+        # that shares a prefix with the previous (prompt + generated)
+        # turn can skip the redundant prefill: ``_generate_stream``
+        # computes the longest common prefix, drops the divergent tail
+        # via ``ctx.memory_seq_rm(0, overlap, -1)``, and prefills only
+        # the suffix. Cleared on ``reset_context``, on context
+        # recreation (size grew), on close, and whenever LoRA state
+        # changes (a different adapter set produces different KV).
+        self._kv_seq_tokens: List[int] = []
+
         # MCP client is created lazily on the first add_mcp_server() call so
         # callers who never use MCP pay no import or connection cost.
         self._mcp = MCPFacade()
@@ -647,6 +701,9 @@ class LLM:
         if getattr(self, "_ctx", None) is not None:
             self._ctx = None
             self._ctx_size = 0
+        # Drop the prompt-cache shadow with the context that owned the KV.
+        if getattr(self, "_kv_seq_tokens", None):
+            self._kv_seq_tokens = []
 
         if getattr(self, "_sampler", None) is not None:
             self._sampler = None
@@ -797,6 +854,9 @@ class LLM:
                     print("Resetting context")
                 self._ctx = None
                 self._ctx_size = 0
+            # Drop the prompt-cache shadow: the next generation should
+            # see no prefix overlap and prefill from scratch.
+            self._kv_seq_tokens = []
         finally:
             self._busy_lock.release()
 
@@ -1064,8 +1124,12 @@ class LLM:
         - The required size exceeds current context size
         - The instance was closed (will reopen)
 
-        The KV cache is cleared via llama_kv_cache_clear() when reusing
-        a context to ensure clean state for new generations.
+        KV cache is **not** cleared here. The prompt-cache layer in
+        ``_generate_stream`` manages the seq-0 KV state explicitly:
+        when the new prompt shares a prefix with the previous turn it
+        rolls the cache back to the divergence point via
+        ``memory_seq_rm`` and prefills only the suffix; otherwise it
+        wipes seq 0 and prefills from scratch.
 
         Returns the live context so callers don't have to re-narrow
         ``self._ctx`` from ``Optional`` after this method runs.
@@ -1082,18 +1146,20 @@ class LLM:
 
         # Check if we can reuse existing context
         if self._ctx is not None and self._ctx_size >= required_ctx:
-            # Reuse existing context - just clear the KV cache
             if self.verbose:
                 print(f"Reusing context (size {self._ctx_size}, need {required_ctx})")
-            self._ctx.kv_cache_clear()
             return self._ctx
 
-        # Need to create new context (either none exists or too small)
+        # Need to create new context (either none exists or too small).
+        # The fresh context starts with empty KV, so the prompt-cache
+        # shadow must be cleared too -- otherwise the next generation
+        # would think a prefix is cached when it isn't.
         if self.verbose:
             if self._ctx is not None:
                 print(f"Recreating context: {self._ctx_size} -> {required_ctx} tokens")
             else:
                 print(f"Creating context: {required_ctx} tokens")
+        self._kv_seq_tokens = []
 
         ctx_params = LlamaContextParams()
         ctx_params.n_ctx = required_ctx
@@ -1120,10 +1186,15 @@ class LLM:
         Centralised so context creation, ``load_lora``, ``unload_lora``,
         and ``clear_loras`` all route the same call into llama.cpp. Passing
         an empty list clears any previously applied set on the context.
+        Also invalidates the prompt-cache shadow (``self._kv_seq_tokens``)
+        because changing the active adapter set produces a different
+        attention model -- the previously cached KV no longer reflects
+        the model the next generation will see.
         """
         adapters = [a for a, _ in self._loras]
         scales = [s for _, s in self._loras]
         ctx.set_adapters_lora(adapters, scales)
+        self._kv_seq_tokens = []
 
     def _ensure_sampler(
         self,
@@ -1186,6 +1257,8 @@ class LLM:
         response_format: Optional[Any] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Union[str, Dict[str, Any]] = "auto",
+        logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> Union[Response, Iterator[str]]:
         """
         Generate text from a prompt.
@@ -1212,6 +1285,14 @@ class LLM:
                 callers should just omit ``tools``), or
                 ``{"type": "function", "function": {"name": "x"}}``
                 (constrain to one specific tool).
+            logprobs: If ``True``, attach a ``Response.logprobs`` list
+                with one ``TokenLogprob`` per generated token. The
+                logprob is the log-softmax of the raw model logits at
+                each step (independent of temperature / top-k / top-p
+                / grammar transforms applied by the sampler).
+            top_logprobs: When ``> 0``, also attach the top-K
+                alternative tokens at each step. Implies
+                ``logprobs=True``. Capped at the model vocab size.
 
         Returns:
             Response object (if stream=False) or iterator of text chunks (if stream=True).
@@ -1225,6 +1306,16 @@ class LLM:
             # this by emitting incremental ``arguments`` deltas. Keep
             # the surface narrow for now.
             raise NotImplementedError("stream=True with tools= is not supported yet")
+        if top_logprobs < 0:
+            raise ValueError(f"top_logprobs must be >= 0, got {top_logprobs}")
+        if top_logprobs > 0:
+            logprobs = True
+        if logprobs and stream:
+            # Streaming logprobs would land per-chunk in the iterator;
+            # callers that want them today should use the non-streaming
+            # path. We can wire this through _generate_stream later if
+            # there's demand.
+            raise NotImplementedError("stream=True with logprobs=True is not supported yet")
 
         self._try_acquire_busy()
         if stream:
@@ -1243,6 +1334,8 @@ class LLM:
                 response_format=response_format,
                 tools=tools,
                 tool_choice=tool_choice,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
             )
         finally:
             self._busy_lock.release()
@@ -1255,6 +1348,8 @@ class LLM:
         response_format: Optional[Any] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Union[str, Dict[str, Any]] = "auto",
+        logprobs: bool = False,
+        top_logprobs: int = 0,
     ) -> Response:
         """Non-streaming generation returning Response object."""
         config = config or self.config
@@ -1273,12 +1368,15 @@ class LLM:
             using_tools = False
 
         # Check cache first (only when no on_token callback and no
-        # response_format / tools -- structured outputs bypass caching
-        # since the cache key would have to include the schema and
-        # pydantic validators don't reliably round-trip through pickle).
+        # response_format / tools / logprobs -- structured outputs bypass
+        # caching since the cache key would have to include the schema
+        # and pydantic validators don't reliably round-trip through
+        # pickle; logprobs bypass caching because the cached Response
+        # would have stale per-token records that don't reflect the
+        # caller's current top_logprobs setting).
         cache_key: Optional[str] = None
         cache = self._cache
-        if cache is not None and on_token is None and compiled is None:
+        if cache is not None and on_token is None and compiled is None and not logprobs:
             cache_key = self._make_cache_key(prompt, config)
             if cache_key is not None:
                 cached = cache.get(cache_key)
@@ -1293,8 +1391,21 @@ class LLM:
         prompt_tokens = self.vocab.tokenize(prompt, add_special=config.add_bos, parse_special=config.parse_special)
         n_prompt = len(prompt_tokens)
 
+        # Per-token logprob sink. ``_generate_stream`` appends one
+        # ``TokenLogprob`` per generated token when this list is non-None.
+        logprobs_sink: Optional[List[TokenLogprob]] = [] if logprobs else None
+
         # Generate text
-        chunks = list(self._generate_stream(prompt, config, on_token, _compiled_format=compiled))
+        chunks = list(
+            self._generate_stream(
+                prompt,
+                config,
+                on_token,
+                _compiled_format=compiled,
+                _logprobs_sink=logprobs_sink,
+                _top_logprobs=top_logprobs,
+            )
+        )
         text = "".join(chunks)
 
         end_time = time.time()
@@ -1345,6 +1456,7 @@ class LLM:
             model=self.model_path,
             parsed=parsed,
             tool_calls=tool_calls,
+            logprobs=logprobs_sink,
         )
 
         # Store in cache if enabled
@@ -1360,6 +1472,8 @@ class LLM:
         on_token: Optional[Callable[[str], None]] = None,
         response_format: Optional[Any] = None,
         _compiled_format: Optional[CompiledResponseFormat] = None,
+        _logprobs_sink: Optional[List[TokenLogprob]] = None,
+        _top_logprobs: int = 0,
     ) -> Iterator[str]:
         """
         Internal streaming generation implementation.
@@ -1401,21 +1515,72 @@ class LLM:
         # active context. Cleared here; ``cancel()`` sets both layers.
         ctx.cancel = False
 
-        # Process prompt in batches to avoid exceeding n_batch limit. If
-        # the caller has already issued ``cancel()`` (or does so during a
-        # long prefill), the abort callback aborts the in-progress decode
-        # and we bail before generation begins.
+        # ----- Prompt-cache: prefix-share with the previous turn -------
+        #
+        # Compute the longest token-id prefix the new prompt shares with
+        # whatever currently lives in seq 0's KV. Drop the divergent
+        # tail and prefill only the suffix. This makes multi-turn chat
+        # essentially free on the prompt side once the conversation
+        # exceeds a few turns: a 4k-token system prompt only gets
+        # decoded once.
+        #
+        # Always reserve at least the last prompt token for fresh
+        # decode -- ``sample(ctx, -1)`` reads logits from the most
+        # recent decode, so we need at least one fresh token to give
+        # the sampler valid logits to consume.
+        cached = self._kv_seq_tokens
+        max_overlap = min(len(cached), n_prompt)
+        overlap = 0
+        for k in range(max_overlap):
+            if cached[k] != prompt_tokens[k]:
+                break
+            overlap = k + 1
+        # Reserve the last prompt token so the sampler has fresh logits.
+        # Guarded against an empty prompt (n_prompt == 0): the
+        # overlap-vs-n_prompt comparison would otherwise yield -1 and
+        # corrupt the prefill loop's start position.
+        if n_prompt > 0 and overlap >= n_prompt:
+            overlap = n_prompt - 1
+
+        if overlap > 0:
+            # Trim seq 0 back to position ``overlap``. memory_seq_rm with
+            # p1=-1 means "drop everything from p0 to the end".
+            ctx.memory_seq_rm(0, overlap, -1)
+            if self.verbose:
+                print(f"Prompt cache hit: reusing {overlap}/{n_prompt} prompt tokens")
+        else:
+            # No prefix overlap: clear seq 0 and fall through to full
+            # prefill. memory_seq_rm with p0=0 / p1=-1 drops everything
+            # in this sequence; other sequences (e.g. embedding) live
+            # in different contexts so they're untouched.
+            ctx.memory_seq_rm(0, 0, -1)
+
+        # Process the prompt suffix in batches to avoid exceeding n_batch.
+        # If the caller has already issued ``cancel()`` (or does so during
+        # a long prefill), the abort callback aborts the in-progress
+        # decode and we bail before generation begins.
         n_batch = config.n_batch
-        for i in range(0, n_prompt, n_batch):
+        for i in range(overlap, n_prompt, n_batch):
             if self._cancel_event.is_set():
+                # Cancellation mid-prefill leaves the KV in a partial
+                # state. Drop the shadow so the next call rebuilds from
+                # scratch rather than trusting torn state.
+                self._kv_seq_tokens = []
                 return
             batch_tokens = prompt_tokens[i : i + n_batch]
-            batch = llama_batch_get_one(batch_tokens, i)  # Pass position offset
+            batch = llama_batch_get_one(batch_tokens, i)  # absolute position
             ctx.decode(batch)
 
         # Generate tokens
         n_pos = n_prompt
         n_generated = 0
+        # Track sampled token ids so the prompt-cache shadow can be
+        # updated at the end of the loop. The KV at completion holds
+        # ``prompt_tokens + sampled_ids`` in seq 0; recording the same
+        # list lets the next call's prefix match find this turn's full
+        # output (system prompt + user + assistant) as a candidate
+        # prefix.
+        sampled_ids: List[int] = []
 
         # Stop sequence handling: buffer recent output to detect sequences spanning tokens
         # We only need to buffer enough to detect the longest stop sequence
@@ -1442,6 +1607,14 @@ class LLM:
             # Sample next token
             new_token_id = sampler.sample(ctx, -1)
 
+            # Capture per-token logprob before EOG / piece decoding so
+            # we record one entry per generated token in the same order
+            # the caller observes them. Skipped for EOG (matches
+            # OpenAI's contract: the stop token does not appear in the
+            # logprobs array).
+            if _logprobs_sink is not None and not self.vocab.is_eog(new_token_id):
+                _logprobs_sink.append(self._build_token_logprob(ctx, new_token_id, _top_logprobs))
+
             # Check for end of generation
             if self.vocab.is_eog(new_token_id):
                 break
@@ -1454,6 +1627,7 @@ class LLM:
                 # context so the next token has the right KV state.
                 batch = llama_batch_get_one([new_token_id], n_pos)
                 ctx.decode(batch)
+                sampled_ids.append(new_token_id)
                 n_pos += 1
                 n_generated += 1
                 continue
@@ -1498,8 +1672,18 @@ class LLM:
             batch = llama_batch_get_one([new_token_id], n_pos)
             ctx.decode(batch)
 
+            sampled_ids.append(new_token_id)
             n_pos += 1
             n_generated += 1
+
+        # Update the prompt-cache shadow to reflect the actual KV state
+        # at this point: prompt_tokens followed by every token we
+        # decoded. This includes EOG-truncated runs and stop-sequence
+        # truncations because both of those break out of the loop
+        # *before* the next decode -- meaning the KV reflects the last
+        # appended ``sampled_ids`` entry, not the current iteration's
+        # un-decoded one.
+        self._kv_seq_tokens = list(prompt_tokens) + sampled_ids
 
         # Flush any bytes still buffered in the incremental decoder. With
         # errors="replace" this turns dangling continuation bytes into
@@ -1532,6 +1716,67 @@ class LLM:
             print(f"\nGenerated {n_generated} tokens")
             sampler.print_perf_data()
             ctx.print_perf_data()
+
+    def _build_token_logprob(
+        self,
+        ctx: LlamaContext,
+        token_id: int,
+        top_k: int,
+    ) -> TokenLogprob:
+        """Compute the logprob of ``token_id`` (and optionally top-K) at the last decoded position.
+
+        Uses ``ctx.get_logits_ith(-1)`` to fetch the raw logit vector
+        produced by the most recent ``decode`` call. The log-softmax is
+        computed in numerically-stable form (subtract max before exp).
+        Pure Python because numpy is a dev-only dep; per-token cost is
+        ~30ms on a 128k vocab, which is a real but tolerable overhead
+        on the ``logprobs=True`` opt-in path. ``top_k`` is the
+        commonly-small alternative count and uses ``heapq.nlargest`` so
+        per-token top-K cost is O(n log k), not O(n log n).
+        """
+        logits = ctx.get_logits_ith(-1)
+        max_logit = max(logits)
+        # ``sum(map(math.exp, ...))`` is ~3x faster than the equivalent
+        # for-accumulator loop because the C-implemented map+sum pair
+        # avoids per-iteration Python bytecode dispatch.
+        exp_sum = sum(map(math.exp, (v - max_logit for v in logits)))
+        log_z = max_logit + math.log(exp_sum)
+        sampled_logprob = float(logits[token_id]) - log_z
+
+        sampled_piece = self._safe_piece(token_id)
+
+        top_logprobs: List[TopLogprob] = []
+        if top_k > 0:
+            # Pull top-K by raw logit (equivalent to top-K by logprob
+            # since log-softmax is monotonic). ``heapq.nlargest`` is
+            # O(n log k); for the typical k=5..20 case this is much
+            # cheaper than a full sort over a 128k vocab.
+            k = min(top_k, len(logits))
+            indexed = heapq.nlargest(k, enumerate(logits), key=lambda kv: kv[1])
+            for tid, raw in indexed:
+                top_logprobs.append(
+                    TopLogprob(
+                        token=self._safe_piece(tid),
+                        token_id=int(tid),
+                        logprob=float(raw) - log_z,
+                    )
+                )
+
+        return TokenLogprob(
+            token=sampled_piece,
+            token_id=int(token_id),
+            logprob=sampled_logprob,
+            top_logprobs=top_logprobs,
+        )
+
+    def _safe_piece(self, token_id: int) -> str:
+        """Decode ``token_id`` to a string, replacing invalid UTF-8 with U+FFFD.
+
+        Used by the logprob capture path where we want a printable
+        representation of every candidate token, even byte-level BPE
+        fragments that can't decode cleanly on their own.
+        """
+        return cast(str, self.vocab.token_to_piece(token_id, special=True))
 
     def _find_stop_sequence(self, text: str, stop_sequences: List[str]) -> Tuple[Optional[int], int]:
         """

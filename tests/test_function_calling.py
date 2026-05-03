@@ -15,11 +15,20 @@ import json
 
 import pytest
 
-from inferna import LLM, FunctionCall, ToolCall
+from inferna import LLM, FunctionCall, GenerationConfig, ToolCall
 from inferna._internal.function_calling import (
     CompiledToolResult,
     compile_tools,
 )
+
+
+# Deterministic config for the live tool-calling tests. The default
+# GenerationConfig (temperature > 0, max_tokens=512) lets the model
+# wander into excessive JSON whitespace and occasionally truncate
+# mid-arguments, which surfaces as ``tool_calls=[]`` (validator fail)
+# in flaky failures. Fixed seed + temperature=0 + a larger token cap
+# pins the output deterministically.
+_LIVE_CFG = GenerationConfig(max_tokens=256, temperature=0.0, seed=42)
 
 
 # ----------------------------------------------------------------------
@@ -179,7 +188,7 @@ class TestCompileErrors:
 
 @pytest.fixture(scope="module")
 def llm(model_path: str):
-    instance = LLM(model_path, verbose=False)
+    instance = LLM(model_path, verbose=False, config=_LIVE_CFG)
     yield instance
     instance.close()
     del instance

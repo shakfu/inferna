@@ -32,3 +32,6 @@ lang_max_id = _N.lang_max_id
 lang_id = _N.lang_id
 lang_str = _N.lang_str
 lang_str_full = _N.lang_str_full
+
+# Streaming API (rolling-window real-time transcription).
+from .streaming import StreamSegment, WhisperStreamer, transcribe_stream  # noqa: E402, F401
