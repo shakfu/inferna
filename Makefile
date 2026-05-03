@@ -132,14 +132,13 @@ publish-test: check
 # =============================================================================
 # Testing
 # =============================================================================
-.PHONY: test test-fast test-slow test-verbose coverage memray leaks
+.PHONY: test test-durations test-fast test-slow test-verbose coverage memray leaks
 
-# Full suite — every test, including slow leak/integration cycles. Use
-# `test-fast` for the fast-feedback variant and `test-slow` to run only
-# the deselected ones. Default capture is on so C-level stdout/stderr
-# from llama.cpp/whisper.cpp/stable-diffusion.cpp stays out of the log
-# unless a test fails. Use `test-verbose` to stream native output live.
+# Full suite — every test
 test:
+	@uv run pytest
+
+test-durations:
 	@uv run pytest --durations=50 --durations-min=1.0
 
 # Skip integration suites and tests marked @pytest.mark.slow (memory

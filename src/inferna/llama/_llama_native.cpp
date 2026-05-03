@@ -822,10 +822,23 @@ NB_MODULE(_llama_native, m) {
             // Byte-level BPE pieces can be partial UTF-8 sequences (lone
             // continuation bytes etc.). Decode with errors="replace" so a
             // single bad piece does not raise UnicodeDecodeError out of the
-            // hot generation loop.
+            // hot generation loop. Streaming callers that need byte-accurate
+            // output should use ``token_to_piece_bytes`` and feed the result
+            // through an incremental UTF-8 decoder.
             PyObject* str = PyUnicode_DecodeUTF8(buf, len, "replace");
             if (!str) throw nb::python_error();
             return nb::steal(str);
+        }, "token"_a, "lstrip"_a = 0, "special"_a = false)
+        .def("token_to_piece_bytes", [](LlamaVocabW& s, int token, int lstrip, bool special) -> nb::bytes {
+            char buf[128];
+            int len = llama_token_to_piece(s.ptr, token, buf, sizeof(buf), lstrip, special);
+            if (len < 0) throw std::invalid_argument(
+                "Failed to convert token " + std::to_string(token) + " to piece");
+            // Raw bytes; caller is responsible for incremental UTF-8 decoding.
+            // This is what streaming generation should use so that codepoints
+            // split across token boundaries (common with byte-level BPE) are
+            // joined cleanly rather than emitted as U+FFFD replacements.
+            return nb::bytes(buf, (size_t) len);
         }, "token"_a, "lstrip"_a = 0, "special"_a = false)
         .def("detokenize", [](LlamaVocabW& s, const std::vector<int>& tokens,
                                 int text_len_max, bool remove_special, bool unparse_special) {
@@ -1204,6 +1217,45 @@ NB_MODULE(_llama_native, m) {
             s.ensure_valid();
             llama_set_causal_attn(s.ptr, c);
         })
+        .def("set_adapters_lora", [](LlamaContextW& s,
+                                      const std::vector<LlamaAdapterLoraW*>& adapters,
+                                      const std::vector<float>& scales){
+            // Replaces the full set of LoRA adapters currently active on this
+            // context. Pass empty lists to clear. The model owns each
+            // adapter's lifetime (constructed via LlamaModel.lora_adapter_init);
+            // the context only borrows references for as long as they remain
+            // applied. Scales follow llama.cpp's convention (1.0 = full weight,
+            // 0.0 = no contribution, negative = subtract).
+            s.ensure_valid();
+            if (adapters.size() != scales.size()) {
+                throw std::invalid_argument(
+                    "set_adapters_lora: adapters and scales must be the same length");
+            }
+            std::vector<llama_adapter_lora*> ptrs;
+            ptrs.reserve(adapters.size());
+            for (auto* w : adapters) {
+                if (w == nullptr || w->ptr == nullptr) {
+                    throw std::invalid_argument(
+                        "set_adapters_lora: adapter handle is null or freed");
+                }
+                ptrs.push_back(w->ptr);
+            }
+            std::vector<float> scales_copy(scales);
+            int rc = llama_set_adapters_lora(
+                s.ptr,
+                ptrs.empty() ? nullptr : ptrs.data(),
+                ptrs.size(),
+                scales_copy.empty() ? nullptr : scales_copy.data());
+            if (rc != 0) {
+                throw std::runtime_error(
+                    "llama_set_adapters_lora failed: rc=" + std::to_string(rc));
+            }
+        }, "adapters"_a, "scales"_a,
+           "Apply LoRA adapters to this context. Pass parallel lists of "
+           "adapter handles and scales (typically 1.0). Replaces any "
+           "previously applied set; pass empty lists to clear. Adapters "
+           "must be constructed via LlamaModel.lora_adapter_init on the "
+           "same model.")
         .def("install_cancel_callback", [](LlamaContextW& s){
             s.ensure_valid();
             llama_set_abort_callback(s.ptr, _cancel_flag_callback, &s.cancel_flag);

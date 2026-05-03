@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob as _glob
 import json
+import logging
 import os
 import re
 import struct
@@ -17,6 +18,8 @@ import time
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+logger = logging.getLogger(__name__)
 
 # Imported lazily inside callers to avoid an import cycle through llama_cpp.py.
 # from . import _llama_native as _N
@@ -115,9 +118,17 @@ class BatchMemoryPool:
             batch = self._pools[key].pop()
             try:
                 batch.reset()
-            except Exception:
-                pass
-            return batch
+                return batch
+            except Exception as exc:
+                # A failed reset means the batch is in an undefined state;
+                # discarding it and constructing a fresh one is safer than
+                # handing a half-reset batch back to the caller. Log so the
+                # event is observable rather than silent.
+                logger.warning(
+                    "BatchMemoryPool: reset() failed (%s: %s); discarding pooled batch",
+                    type(exc).__name__,
+                    exc,
+                )
         return _N.LlamaBatch(n_tokens=n_tokens, embd=embd, n_seq_max=n_seq_max)
 
     def return_batch(self, batch: Any) -> None:

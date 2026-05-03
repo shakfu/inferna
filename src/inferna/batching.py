@@ -23,6 +23,7 @@ Example:
 
 from typing import Any, List, Optional
 from dataclasses import dataclass
+import codecs
 import logging
 import time
 
@@ -296,6 +297,11 @@ class BatchGenerator:
         responses = [""] * len(prompts)
         active_sequences = set(range(len(prompts)))
         seq_positions = {i: 0 for i in range(len(prompts))}
+        # One incremental UTF-8 decoder per sequence; byte-level BPE pieces
+        # routinely split codepoints across tokens, and per-piece replace
+        # decoding would corrupt them to U+FFFD. The decoder buffers the
+        # tail until a complete codepoint lands.
+        utf8_decoders = [codecs.getincrementaldecoder("utf-8")(errors="replace") for _ in prompts]
 
         # Add all prompt tokens to batch, tracking batch index for each sequence's logits
         seq_logits_idx = {}
@@ -332,12 +338,9 @@ class BatchGenerator:
                     active_sequences.remove(seq_id)
                     continue
 
-                # Decode token
-                try:
-                    piece = self.vocab.token_to_piece(new_token, special=True)
-                    responses[seq_id] += piece
-                except UnicodeDecodeError:
-                    logger.warning("Failed to decode token %d in sequence %d: UnicodeDecodeError", new_token, seq_id)
+                # Decode token via per-sequence incremental UTF-8 decoder.
+                piece_bytes = self.vocab.token_to_piece_bytes(new_token, special=True)
+                responses[seq_id] += utf8_decoders[seq_id].decode(piece_bytes)
 
                 # Add to batch for next iteration and remember new logits index
                 batch.add(new_token, seq_positions[seq_id], [seq_id], True)
@@ -348,6 +351,12 @@ class BatchGenerator:
             # Decode batch if not empty
             if batch.n_tokens > 0:
                 self.ctx.decode(batch)
+
+        # Flush any bytes still buffered in each per-sequence decoder.
+        for seq_id, decoder in enumerate(utf8_decoders):
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                responses[seq_id] += tail
 
         # Return batch to pool if pooling is enabled
         if self.use_pooling:

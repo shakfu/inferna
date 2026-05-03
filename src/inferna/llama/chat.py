@@ -5,6 +5,7 @@ Chat implementation equivalent to build/llama.cpp/examples/simple-chat/simple-ch
 This module provides a Python implementation of the chat example using the inferna wrapper.
 """
 
+import logging
 import sys
 import time
 import argparse
@@ -40,6 +41,8 @@ try:
     from inferna._vendor.jinja2.exceptions import TemplateError as _JinjaTemplateError
 except ImportError:  # pragma: no cover
     _JinjaTemplateError = type("_JinjaTemplateError", (Exception,), {})
+
+logger = logging.getLogger(__name__)
 
 
 def print_usage() -> None:
@@ -132,8 +135,15 @@ class Chat:
             return self._apply_jinja_template(messages, add_assistant_msg)
         except _JinjaTemplateError:
             pass
-        except Exception:
-            pass
+        except (TypeError, KeyError, AttributeError) as exc:
+            # Render-context issues -- fall back to the C-API path but
+            # log so silent miscompilations are visible. Other exception
+            # classes (NameError, ImportError, ...) signal real bugs and
+            # are allowed to propagate.
+            logger.warning(
+                "Jinja chat-template rendering failed (%s); falling back to C-API path",
+                type(exc).__name__,
+            )
 
         # --- Tier 2: C API (substring heuristic) ---
         tmpl = self.model.get_default_chat_template()

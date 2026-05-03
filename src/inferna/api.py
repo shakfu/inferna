@@ -41,6 +41,7 @@ Async Example:
 """
 
 import asyncio
+import codecs
 import hashlib
 import signal
 import threading
@@ -82,7 +83,10 @@ from .defaults import (
     DEFAULT_SPLIT_MODE,
 )
 
+from ._internal.structured import CompiledResponseFormat, compile_response_format
 from .llama.llama_cpp import (
+    LlamaAdapterLora,
+    LlamaBatch,
     LlamaModel,
     LlamaContext,
     LlamaModelParams,
@@ -279,6 +283,11 @@ class Response:
     stats: Optional[GenerationStats] = None
     finish_reason: str = "stop"
     model: str = ""
+    # Populated when the call passed ``response_format=``: the validator
+    # output (``json.loads(text)`` for dict schemas / ``json_object``,
+    # a populated pydantic model instance for ``BaseModel`` schemas).
+    # ``None`` for plain (unconstrained) generation.
+    parsed: Optional[Any] = None
 
     def __str__(self) -> str:
         """Return the text content. Enables backward-compatible string usage."""
@@ -666,6 +675,23 @@ class LLM:
         # callers who never use MCP pay no import or connection cost.
         self._mcp_client: Optional["McpClient"] = None
 
+        # LoRA adapters currently applied to the generation context. The list
+        # is the source of truth across context recreations: ``_ensure_context``
+        # re-applies it after constructing a fresh ``LlamaContext`` so a LoRA
+        # loaded with ``load_lora`` survives ``reset_context()`` and the
+        # automatic resize that fires when ``required_ctx > self._ctx_size``.
+        # Each entry is ``(adapter_handle, scale)``; the model owns the
+        # adapter's underlying memory (see LlamaModel.lora_adapter_init).
+        self._loras: List[tuple[LlamaAdapterLora, float]] = []
+
+        # Embedding context (separate from the generation context because
+        # llama.cpp's embeddings flag is set at context creation and a
+        # generation context's KV state would interfere with embedding output).
+        # Lazily constructed on the first ``embed()`` call and reused for
+        # subsequent calls.
+        self._embed_ctx: Optional[LlamaContext] = None
+        self._embed_n_ctx: int = 0
+
     def __enter__(self) -> "LLM":
         """Context manager entry."""
         return self
@@ -706,6 +732,20 @@ class LLM:
 
         if getattr(self, "_sampler", None) is not None:
             self._sampler = None
+
+        # Drop the embedding context (constructed lazily by embed()). The
+        # underlying llama_context owns no shared state with the generation
+        # context, so dropping it just frees the embedding-mode KV cache.
+        if getattr(self, "_embed_ctx", None) is not None:
+            self._embed_ctx = None
+            self._embed_n_ctx = 0
+
+        # Drop adapter handles. The model owns each adapter's memory, so
+        # dropping our references just clears the apply-list; the next
+        # generation context to come up will start with no adapters
+        # attached, matching the freshly-loaded-LLM contract.
+        if getattr(self, "_loras", None):
+            self._loras = []
 
         # Disconnect any MCP servers the caller attached. Best-effort:
         # transports already log their own errors and we don't want a flaky
@@ -846,6 +886,226 @@ class LLM:
         finally:
             self._busy_lock.release()
 
+    # ------------------------------------------------------------------
+    # LoRA adapter management
+    # ------------------------------------------------------------------
+
+    def load_lora(self, path: str, scale: float = 1.0) -> LlamaAdapterLora:
+        """Load a LoRA adapter and apply it to the generation context.
+
+        The adapter is loaded against ``self.model`` (so it must have been
+        trained on a compatible base) and then applied to the live context
+        with the given ``scale``. If the context has not been created yet,
+        the adapter is recorded and applied automatically when the first
+        generation triggers ``_ensure_context``.
+
+        Args:
+            path: Filesystem path to a GGUF LoRA adapter.
+            scale: Adapter strength. ``1.0`` applies the adapter at full
+                weight, ``0.0`` disables it (useful for keeping it loaded
+                but inactive), negative values subtract.
+
+        Returns:
+            The ``LlamaAdapterLora`` handle. Pass it back to
+            :meth:`unload_lora` to remove this specific adapter, or call
+            :meth:`clear_loras` to remove all of them.
+
+        Raises:
+            FileNotFoundError: If ``path`` does not exist.
+            ValueError: If the adapter fails to load (e.g. wrong base
+                model, malformed file).
+        """
+        adapter = self.model.lora_adapter_init(path)
+        self._loras.append((adapter, scale))
+        if self._ctx is not None:
+            self._apply_loras_to(self._ctx)
+        if self.verbose:
+            print(f"Loaded LoRA: {path} (scale={scale})")
+        return adapter
+
+    def unload_lora(self, adapter: LlamaAdapterLora) -> None:
+        """Remove a previously loaded LoRA adapter.
+
+        The adapter is dropped from the apply-list and the change is
+        pushed to the live context (if any). The adapter handle remains
+        valid -- the model still owns it -- so callers can re-apply it
+        later via ``load_lora`` (which will re-load from disk; for now
+        the handle itself is not re-attachable without a fresh load).
+
+        Args:
+            adapter: A handle previously returned from :meth:`load_lora`.
+
+        Raises:
+            ValueError: If ``adapter`` is not currently applied.
+        """
+        before = len(self._loras)
+        self._loras = [(a, s) for (a, s) in self._loras if a is not adapter]
+        if len(self._loras) == before:
+            raise ValueError("unload_lora: adapter is not currently applied")
+        if self._ctx is not None:
+            self._apply_loras_to(self._ctx)
+
+    def clear_loras(self) -> None:
+        """Remove all LoRA adapters from the generation context."""
+        if not self._loras and self._ctx is None:
+            return
+        self._loras = []
+        if self._ctx is not None:
+            self._apply_loras_to(self._ctx)
+
+    def list_loras(self) -> List[tuple[LlamaAdapterLora, float]]:
+        """Return a copy of the (adapter, scale) list currently applied."""
+        return list(self._loras)
+
+    # ------------------------------------------------------------------
+    # Embeddings
+    # ------------------------------------------------------------------
+
+    def embed(
+        self,
+        text: Union[str, List[str]],
+        pooling: str = "mean",
+        normalize: bool = True,
+    ) -> Union[List[float], List[List[float]]]:
+        """Compute an embedding for one or more strings.
+
+        Constructs a sibling embedding context (separate from the
+        generation context, since llama.cpp's embeddings flag is set at
+        context creation and a generation context's KV state would
+        interfere with embedding output). The embedding context is
+        cached on the instance and reused across calls.
+
+        Pooling is performed in Python over the per-token hidden states
+        returned by ``llama_get_embeddings``. This matches the strategy
+        in :class:`inferna.rag.Embedder` and avoids relying on
+        llama.cpp's internal pooling, which has historically been
+        unreliable for some generative-model architectures used in
+        embedding mode.
+
+        Args:
+            text: A single string or a list of strings.
+            pooling: One of ``"mean"``, ``"cls"``, ``"last"``. ``"mean"``
+                averages over all tokens (the standard choice for
+                BERT-style embedding models like BGE/Snowflake);
+                ``"cls"`` uses the first token's hidden state;
+                ``"last"`` uses the last token's hidden state (often
+                preferred for decoder-only models).
+            normalize: If ``True`` (default), L2-normalize each output
+                vector. Cosine similarity collapses to a dot product
+                under L2-normal vectors, which is what most vector
+                stores expect.
+
+        Returns:
+            A single ``list[float]`` if ``text`` is a string, or a
+            ``list[list[float]]`` if ``text`` is a list. The dimension
+            matches ``self.model.n_embd``.
+
+        Raises:
+            ValueError: If ``pooling`` is not one of the supported
+                strategies.
+        """
+        if isinstance(text, str):
+            single = True
+            texts: List[str] = [text]
+        else:
+            single = False
+            texts = list(text)
+        if not texts:
+            return []
+
+        if pooling not in ("mean", "cls", "last"):
+            raise ValueError(f"Invalid pooling type: {pooling!r}. Must be one of: 'mean', 'cls', 'last'")
+
+        # Tokenise upfront so we can size the embedding context to the
+        # longest input. ``add_special=True`` matches Embedder; embedding
+        # models (BGE etc.) expect the [CLS] / [BOS] token.
+        tokenised = [self.vocab.tokenize(t, add_special=True, parse_special=False) for t in texts]
+        max_tokens = max((len(toks) for toks in tokenised), default=1)
+        # Cap at the model's training context so we don't ask for more
+        # than the model can encode.
+        n_ctx_train = self.model.n_ctx_train
+        if max_tokens > n_ctx_train:
+            for i, toks in enumerate(tokenised):
+                if len(toks) > n_ctx_train:
+                    tokenised[i] = toks[:n_ctx_train]
+            max_tokens = n_ctx_train
+
+        ctx = self._ensure_embed_context(max_tokens)
+        n_embd = self.model.n_embd
+
+        results: List[List[float]] = []
+        for tokens in tokenised:
+            if not tokens:
+                # Empty input → empty embedding. Skip the decode rather
+                # than feeding a zero-token batch (which llama.cpp rejects).
+                results.append([0.0] * n_embd)
+                continue
+            n_tokens = len(tokens)
+            ctx.kv_cache_clear()
+
+            # Mark every token for output so per-token hidden states are
+            # available for pooling. ``embd=0`` because we're feeding token
+            # ids, not pre-computed embeddings.
+            batch = LlamaBatch(n_tokens=n_tokens, embd=0, n_seq_max=1)
+            for pos, tok in enumerate(tokens):
+                batch.add(tok, pos, [0], True)
+            ctx.decode(batch)
+
+            raw = ctx.get_embeddings()
+            # ``get_embeddings`` returns a flat list sized
+            # ``n_tokens * n_embd``; defensively recompute in case the
+            # tokeniser stripped tokens.
+            actual_tokens = len(raw) // n_embd if n_embd else 0
+            if actual_tokens == 0:
+                results.append([0.0] * n_embd)
+                continue
+
+            if pooling == "mean":
+                pooled = [0.0] * n_embd
+                for t in range(actual_tokens):
+                    base = t * n_embd
+                    for i in range(n_embd):
+                        pooled[i] += raw[base + i]
+                inv = 1.0 / actual_tokens
+                pooled = [v * inv for v in pooled]
+            elif pooling == "cls":
+                pooled = list(raw[:n_embd])
+            else:  # "last"
+                base = (actual_tokens - 1) * n_embd
+                pooled = list(raw[base : base + n_embd])
+
+            if normalize:
+                norm_sq = sum(v * v for v in pooled)
+                if norm_sq > 0.0:
+                    inv = norm_sq**-0.5
+                    pooled = [v * inv for v in pooled]
+            results.append(pooled)
+
+        return results[0] if single else results
+
+    def _ensure_embed_context(self, required_tokens: int) -> LlamaContext:
+        """Lazily construct (or resize) the embedding context."""
+        if self._embed_ctx is not None and self._embed_n_ctx >= required_tokens:
+            return self._embed_ctx
+
+        if self.verbose and self._embed_ctx is not None:
+            print(f"Resizing embed context: {self._embed_n_ctx} -> {required_tokens}")
+        elif self.verbose:
+            print(f"Creating embed context: {required_tokens} tokens")
+
+        ctx_params = LlamaContextParams()
+        ctx_params.n_ctx = max(required_tokens, 32)
+        ctx_params.n_batch = max(required_tokens, 32)
+        # Pooling is done in Python; ask llama.cpp for raw per-token states.
+        ctx_params.pooling_type = 0  # NONE
+        ctx_params.no_perf = not self.verbose
+
+        ctx = LlamaContext(self.model, ctx_params)
+        ctx.set_embeddings_mode(True)
+        self._embed_ctx = ctx
+        self._embed_n_ctx = ctx_params.n_ctx
+        return ctx
+
     @property
     def cache_enabled(self) -> bool:
         """Return True if response caching is enabled."""
@@ -961,19 +1221,54 @@ class LLM:
         ctx.install_cancel_callback()
         self._ctx = ctx
         self._ctx_size = required_ctx
+        # Re-apply any LoRA adapters previously attached via load_lora().
+        # set_adapters_lora is a no-op when the list is empty, so this is
+        # safe to call unconditionally on every context (re)creation.
+        self._apply_loras_to(ctx)
         return ctx
 
-    def _ensure_sampler(self, config: GenerationConfig) -> LlamaSampler:
+    def _apply_loras_to(self, ctx: LlamaContext) -> None:
+        """Apply ``self._loras`` to a context.
+
+        Centralised so context creation, ``load_lora``, ``unload_lora``,
+        and ``clear_loras`` all route the same call into llama.cpp. Passing
+        an empty list clears any previously applied set on the context.
+        """
+        adapters = [a for a, _ in self._loras]
+        scales = [s for _, s in self._loras]
+        ctx.set_adapters_lora(adapters, scales)
+
+    def _ensure_sampler(
+        self,
+        config: GenerationConfig,
+        grammar: Optional[str] = None,
+        grammar_root: str = "root",
+    ) -> LlamaSampler:
         """Create or recreate sampler if needed.
 
         Returns the live sampler so callers don't have to re-narrow
         ``self._sampler`` from ``Optional`` after this method runs.
+
+        Args:
+            config: GenerationConfig driving the sampler chain.
+            grammar: Optional GBNF grammar string. When supplied, a
+                grammar sampler is added FIRST in the chain so it
+                filters the logit set before any other sampler runs;
+                this is the order ``llama_sampler_chain`` expects for
+                grammar to be effective.
+            grammar_root: Root rule name in ``grammar``.
         """
         # Always create fresh sampler to respect new config
         sampler_params = LlamaSamplerChainParams()
         sampler_params.no_perf = not self.verbose
 
         sampler = LlamaSampler(sampler_params)
+
+        # Grammar must come first: it filters the logit distribution
+        # down to grammar-valid tokens, then temperature/top-k/top-p
+        # operate over that filtered set.
+        if grammar is not None:
+            sampler.add_grammar(self.vocab, grammar, grammar_root)
 
         # Add sampling methods based on config
         if config.temperature == 0.0:
@@ -1001,6 +1296,7 @@ class LLM:
         config: Optional[GenerationConfig] = None,
         stream: bool = False,
         on_token: Optional[Callable[[str], None]] = None,
+        response_format: Optional[Any] = None,
     ) -> Union[Response, Iterator[str]]:
         """
         Generate text from a prompt.
@@ -1010,6 +1306,12 @@ class LLM:
             config: Generation configuration (uses instance config if None)
             stream: If True, return iterator of text chunks
             on_token: Optional callback called for each generated token
+            response_format: Optional structured-output specifier. Accepts
+                ``{"type": "json_object"}`` (any well-formed JSON),
+                ``{"type": "json_schema", "schema": <dict | BaseModel>}``,
+                or a pydantic ``BaseModel`` subclass directly. When
+                supplied, generation is grammar-constrained and the
+                resulting text is parsed onto ``Response.parsed``.
 
         Returns:
             Response object (if stream=False) or iterator of text chunks (if stream=True).
@@ -1021,22 +1323,35 @@ class LLM:
             # exhausted, closed, or garbage collected. Returning the
             # wrapper unconditionally (no try/finally here) hands lock
             # ownership to the generator.
-            return self._stream_with_busy_release(self._generate_stream(prompt, config, on_token))
+            return self._stream_with_busy_release(
+                self._generate_stream(prompt, config, on_token, response_format=response_format)
+            )
         try:
-            return self._generate(prompt, config, on_token)
+            return self._generate(prompt, config, on_token, response_format=response_format)
         finally:
             self._busy_lock.release()
 
     def _generate(
-        self, prompt: str, config: Optional[GenerationConfig] = None, on_token: Optional[Callable[[str], None]] = None
+        self,
+        prompt: str,
+        config: Optional[GenerationConfig] = None,
+        on_token: Optional[Callable[[str], None]] = None,
+        response_format: Optional[Any] = None,
     ) -> Response:
         """Non-streaming generation returning Response object."""
         config = config or self.config
 
-        # Check cache first (only if no on_token callback)
+        # Compile the structured-output spec up front so a malformed
+        # schema raises before we touch the GPU.
+        compiled = compile_response_format(response_format)
+
+        # Check cache first (only when no on_token callback and no
+        # response_format -- structured outputs bypass caching since
+        # the cache key would have to include the schema and pydantic
+        # validators don't reliably round-trip through pickle).
         cache_key: Optional[str] = None
         cache = self._cache
-        if cache is not None and on_token is None:
+        if cache is not None and on_token is None and compiled is None:
             cache_key = self._make_cache_key(prompt, config)
             if cache_key is not None:
                 cached = cache.get(cache_key)
@@ -1052,7 +1367,7 @@ class LLM:
         n_prompt = len(prompt_tokens)
 
         # Generate text
-        chunks = list(self._generate_stream(prompt, config, on_token))
+        chunks = list(self._generate_stream(prompt, config, on_token, _compiled_format=compiled))
         text = "".join(chunks)
 
         end_time = time.time()
@@ -1069,7 +1384,26 @@ class LLM:
             tokens_per_second=n_generated / total_time if total_time > 0 else 0.0,
         )
 
-        response = Response(text=text, stats=stats, finish_reason="stop", model=self.model_path)
+        parsed: Optional[Any] = None
+        if compiled is not None:
+            # Grammar guarantees structural validity, but a buggy
+            # grammar (or a model that hits max_tokens before closing
+            # the structure) can still fail validation. Surface that
+            # via Response.parsed=None plus finish_reason="length"
+            # rather than raising, so callers can decide whether to
+            # retry.
+            try:
+                parsed = compiled.validator(text)
+            except ValueError:
+                parsed = None
+
+        response = Response(
+            text=text,
+            stats=stats,
+            finish_reason="stop",
+            model=self.model_path,
+            parsed=parsed,
+        )
 
         # Store in cache if enabled
         if cache_key is not None and cache is not None:
@@ -1078,7 +1412,12 @@ class LLM:
         return response
 
     def _generate_stream(
-        self, prompt: str, config: Optional[GenerationConfig] = None, on_token: Optional[Callable[[str], None]] = None
+        self,
+        prompt: str,
+        config: Optional[GenerationConfig] = None,
+        on_token: Optional[Callable[[str], None]] = None,
+        response_format: Optional[Any] = None,
+        _compiled_format: Optional[CompiledResponseFormat] = None,
     ) -> Iterator[str]:
         """
         Internal streaming generation implementation.
@@ -1093,6 +1432,16 @@ class LLM:
         # ``cancel()`` from before this call does not carry over.
         self._cancel_event.clear()
 
+        # Resolve structured-output grammar. ``_generate`` pre-compiles
+        # and threads it via ``_compiled_format`` to avoid double work;
+        # streaming callers (``__call__(stream=True)``) come in through
+        # ``response_format`` and we compile here.
+        compiled = _compiled_format
+        if compiled is None and response_format is not None:
+            compiled = compile_response_format(response_format)
+        grammar = compiled.grammar if compiled is not None else None
+        grammar_root = compiled.grammar_root if compiled is not None else "root"
+
         start_time = time.time()
 
         # Tokenize prompt
@@ -1105,7 +1454,7 @@ class LLM:
         # Ensure context and sampler are ready
         # Always recreate sampler to ensure fresh state
         ctx = self._ensure_context(n_prompt, config)
-        sampler = self._ensure_sampler(config)
+        sampler = self._ensure_sampler(config, grammar=grammar, grammar_root=grammar_root)
         # Mirror the Python-side cancel flag onto the C-level flag for the
         # active context. Cleared here; ``cancel()`` sets both layers.
         ctx.cancel = False
@@ -1131,6 +1480,15 @@ class LLM:
         stop_buffer = ""
         max_stop_len = max(len(s) for s in config.stop_sequences) if config.stop_sequences else 0
 
+        # Byte-level BPE tokenizers routinely emit pieces that contain
+        # partial UTF-8 codepoints (e.g. one lead byte, then continuation
+        # bytes in subsequent tokens). An incremental decoder buffers the
+        # tail until a complete codepoint lands and emits "" otherwise --
+        # this preserves bytes that would be corrupted to U+FFFD by a
+        # per-piece replace decode, and keeps stop-sequence matching
+        # operating on the true decoded text.
+        utf8_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
         for _ in range(config.max_tokens):
             # Cooperative cancellation check between tokens. The mid-decode
             # ggml abort callback handles cancellation during long
@@ -1146,12 +1504,17 @@ class LLM:
             if self.vocab.is_eog(new_token_id):
                 break
 
-            # Decode token to text
-            try:
-                piece = self.vocab.token_to_piece(new_token_id, special=True)
-            except UnicodeDecodeError:
-                logger.warning("Failed to decode token %d: UnicodeDecodeError", new_token_id)
-                piece = ""
+            # Decode token to text via the incremental UTF-8 decoder.
+            piece_bytes = self.vocab.token_to_piece_bytes(new_token_id, special=True)
+            piece = utf8_decoder.decode(piece_bytes)
+            if not piece:
+                # Codepoint not yet complete -- still need to advance the
+                # context so the next token has the right KV state.
+                batch = llama_batch_get_one([new_token_id], n_pos)
+                ctx.decode(batch)
+                n_pos += 1
+                n_generated += 1
+                continue
 
             # Handle stop sequences
             if config.stop_sequences:
@@ -1195,6 +1558,18 @@ class LLM:
 
             n_pos += 1
             n_generated += 1
+
+        # Flush any bytes still buffered in the incremental decoder. With
+        # errors="replace" this turns dangling continuation bytes into
+        # U+FFFD rather than dropping them silently.
+        tail = utf8_decoder.decode(b"", final=True)
+        if tail:
+            if config.stop_sequences:
+                stop_buffer += tail
+            else:
+                if on_token:
+                    on_token(tail)
+                yield tail
 
         # Flush remaining buffer (no stop sequence found)
         if config.stop_sequences and stop_buffer:
@@ -1345,14 +1720,16 @@ class LLM:
                 # pipeline-level fallback above us catches anything
                 # that fails on both paths.
                 pass
-            except Exception:
-                # Any other failure inside the vendored jinja2 path
-                # (TemplateSyntaxError on a malformed template, missing
-                # bos_token retrieval, etc.) -- fall back to the legacy
-                # path. We catch broadly here because we'd rather
-                # degrade to the older code path than crash the
-                # caller; the legacy path is well-understood.
-                pass
+            except (TypeError, KeyError, AttributeError) as exc:
+                # Render-time issues with the rendering context (missing
+                # variables, wrong types in messages). These are
+                # recoverable via the legacy substring-heuristic path,
+                # but we log so they're observable rather than silent.
+                # Genuine bugs (NameError, ImportError, ...) propagate.
+                logger.warning(
+                    "Jinja chat-template rendering failed (%s); falling back to C-API path",
+                    type(exc).__name__,
+                )
 
         # Get template - use provided or model's default. The provided
         # `template` argument can be (a) a Jinja template string, (b) the
