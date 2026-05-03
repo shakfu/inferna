@@ -31,6 +31,11 @@ from .api import (
     chat_async,
 )
 
+# Tool-calling types live in an internal module; re-export at the top
+# level so callers don't reach into _internal.
+from ._internal.function_calling import FunctionCall as FunctionCall
+from ._internal.function_calling import ToolCall as ToolCall
+
 # Batching
 from .batching import batch_generate, BatchGenerator, BatchRequest, BatchResponse
 

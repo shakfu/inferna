@@ -83,6 +83,11 @@ from .defaults import (
     DEFAULT_SPLIT_MODE,
 )
 
+from ._internal.function_calling import (
+    CompiledToolResult,
+    ToolCall,
+    compile_tools,
+)
 from ._internal.structured import CompiledResponseFormat, compile_response_format
 from .llama.llama_cpp import (
     LlamaAdapterLora,
@@ -288,6 +293,11 @@ class Response:
     # a populated pydantic model instance for ``BaseModel`` schemas).
     # ``None`` for plain (unconstrained) generation.
     parsed: Optional[Any] = None
+    # Populated when the call passed ``tools=``: the tool calls the
+    # model produced (length 1 when ``tool_choice`` forced a call;
+    # length 0 in ``auto`` mode if the model chose to answer in text).
+    # ``None`` when ``tools=`` was not supplied.
+    tool_calls: Optional[List[ToolCall]] = None
 
     def __str__(self) -> str:
         """Return the text content. Enables backward-compatible string usage."""
@@ -1297,6 +1307,8 @@ class LLM:
         stream: bool = False,
         on_token: Optional[Callable[[str], None]] = None,
         response_format: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Union[str, Dict[str, Any]] = "auto",
     ) -> Union[Response, Iterator[str]]:
         """
         Generate text from a prompt.
@@ -1312,11 +1324,31 @@ class LLM:
                 or a pydantic ``BaseModel`` subclass directly. When
                 supplied, generation is grammar-constrained and the
                 resulting text is parsed onto ``Response.parsed``.
+            tools: Optional OpenAI-shaped tool list (``[{"type": "function",
+                "function": {"name": ..., "parameters": ...}}, ...]``).
+                When supplied, generation is grammar-constrained to a
+                tool-call envelope and ``Response.tool_calls`` is
+                populated. Mutually exclusive with ``response_format``.
+            tool_choice: ``"required"`` (must call a tool, default when
+                ``tools`` is set unless ``"auto"`` is requested), ``"auto"``
+                (model picks tool vs. plain content), ``"none"`` (forbid;
+                callers should just omit ``tools``), or
+                ``{"type": "function", "function": {"name": "x"}}``
+                (constrain to one specific tool).
 
         Returns:
             Response object (if stream=False) or iterator of text chunks (if stream=True).
             The Response object can be used as a string due to __str__ implementation.
         """
+        if tools is not None and response_format is not None:
+            raise ValueError("tools= and response_format= are mutually exclusive")
+        if tools is not None and stream:
+            # Tool-call streaming would need to assemble JSON chunks
+            # before validation; the OpenAI streaming protocol handles
+            # this by emitting incremental ``arguments`` deltas. Keep
+            # the surface narrow for now.
+            raise NotImplementedError("stream=True with tools= is not supported yet")
+
         self._try_acquire_busy()
         if stream:
             # The wrapper releases the lock when the generator is
@@ -1327,7 +1359,14 @@ class LLM:
                 self._generate_stream(prompt, config, on_token, response_format=response_format)
             )
         try:
-            return self._generate(prompt, config, on_token, response_format=response_format)
+            return self._generate(
+                prompt,
+                config,
+                on_token,
+                response_format=response_format,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
         finally:
             self._busy_lock.release()
 
@@ -1337,18 +1376,29 @@ class LLM:
         config: Optional[GenerationConfig] = None,
         on_token: Optional[Callable[[str], None]] = None,
         response_format: Optional[Any] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Union[str, Dict[str, Any]] = "auto",
     ) -> Response:
         """Non-streaming generation returning Response object."""
         config = config or self.config
 
-        # Compile the structured-output spec up front so a malformed
-        # schema raises before we touch the GPU.
-        compiled = compile_response_format(response_format)
+        # Compile the structured-output / tool-call spec up front so a
+        # malformed schema raises before we touch the GPU. ``tools=`` and
+        # ``response_format=`` share the same compiled-grammar surface
+        # so only one pipeline lights up at a time (mutual exclusion is
+        # enforced by ``__call__``).
+        compiled: Optional[CompiledResponseFormat]
+        if tools is not None:
+            compiled = compile_tools(tools, tool_choice)
+            using_tools = True
+        else:
+            compiled = compile_response_format(response_format)
+            using_tools = False
 
         # Check cache first (only when no on_token callback and no
-        # response_format -- structured outputs bypass caching since
-        # the cache key would have to include the schema and pydantic
-        # validators don't reliably round-trip through pickle).
+        # response_format / tools -- structured outputs bypass caching
+        # since the cache key would have to include the schema and
+        # pydantic validators don't reliably round-trip through pickle).
         cache_key: Optional[str] = None
         cache = self._cache
         if cache is not None and on_token is None and compiled is None:
@@ -1384,25 +1434,40 @@ class LLM:
             tokens_per_second=n_generated / total_time if total_time > 0 else 0.0,
         )
 
+        # Route the validator's output. For ``tools=`` the result is a
+        # CompiledToolResult which fans out across both Response.text
+        # (auto-mode 'content' branch) and Response.tool_calls; for
+        # ``response_format=`` it's a plain dict / pydantic instance
+        # that lands on Response.parsed.
         parsed: Optional[Any] = None
+        tool_calls: Optional[List[ToolCall]] = None
+        final_text = text
         if compiled is not None:
-            # Grammar guarantees structural validity, but a buggy
-            # grammar (or a model that hits max_tokens before closing
-            # the structure) can still fail validation. Surface that
-            # via Response.parsed=None plus finish_reason="length"
-            # rather than raising, so callers can decide whether to
-            # retry.
             try:
-                parsed = compiled.validator(text)
+                validated = compiled.validator(text)
             except ValueError:
-                parsed = None
+                # Grammar guarantees structural validity, but the model
+                # can still hit max_tokens mid-structure. Surface that
+                # via Response.parsed=None / tool_calls=None rather
+                # than raising; caller decides whether to retry.
+                validated = None
+            if using_tools:
+                if isinstance(validated, CompiledToolResult):
+                    tool_calls = validated.tool_calls
+                    if validated.content is not None:
+                        final_text = validated.content
+                else:
+                    tool_calls = []
+            else:
+                parsed = validated
 
         response = Response(
-            text=text,
+            text=final_text,
             stats=stats,
             finish_reason="stop",
             model=self.model_path,
             parsed=parsed,
+            tool_calls=tool_calls,
         )
 
         # Store in cache if enabled
