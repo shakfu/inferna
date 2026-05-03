@@ -11,19 +11,24 @@ from inferna.rag import SqliteVectorStore, VectorStoreError, SearchResult
 
 # Check if sqlite-vector extension is available
 def extension_available() -> bool:
-    """Check if sqlite-vector extension exists and can be loaded."""
+    """Check if sqlite-vector extension exists and can be loaded.
+
+    Uses the same resolver as the runtime
+    (``SqliteVectorStore._resolve_extension_path``, surfaced as the
+    ``EXTENSION_PATH`` class attribute) rather than a hardcoded
+    source-tree path: in an editable scikit-build-core install the
+    compiled ``vector.{dylib,so,dll}`` lands in the site-packages
+    mirror, not back into ``src/inferna/rag/``. The previous check
+    only consulted the source tree and skipped the whole suite even
+    when a working extension was installed.
+    """
     import sqlite3
-    import sys
 
     if not hasattr(sqlite3.Connection, "enable_load_extension"):
         return False
-    ext_path = Path(__file__).parent.parent / "src" / "inferna" / "rag" / "vector"
-    if sys.platform == "darwin":
-        return ext_path.with_suffix(".dylib").exists()
-    elif sys.platform == "win32":
-        return ext_path.with_suffix(".dll").exists()
-    else:
-        return ext_path.with_suffix(".so").exists()
+    suffix = ".dylib" if sys.platform == "darwin" else ".dll" if sys.platform == "win32" else ".so"
+    ext_file = SqliteVectorStore.EXTENSION_PATH.with_suffix(suffix)
+    return ext_file.exists()
 
 
 # Skip all tests if extension not available
