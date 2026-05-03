@@ -9,7 +9,7 @@ import logging
 import sys
 import time
 import argparse
-from typing import Any, Callable, Dict, List, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Optional
 
 from ..defaults import (
     DEFAULT_MAX_TOKENS,
@@ -27,7 +27,6 @@ from .llama_cpp import (
     LlamaModel,
     LlamaContext,
     LlamaSampler,
-    LlamaChatMessage,
     LlamaModelParams,
     LlamaContextParams,
     LlamaSamplerChainParams,
@@ -123,121 +122,22 @@ class Chat:
         messages: List[Any],
         add_assistant_msg: bool = True,
     ) -> str:
-        """Apply chat template using vendored jinja2 with C API fallback.
+        """Render ``messages`` against the model's chat template.
 
-        Mirrors the two-tier approach in ``inferna.api.LLM._apply_template``:
-        try the vendored jinja2 interpreter first (handles Gemma 4, Qwen3,
-        and any template the C heuristic doesn't recognise), then fall back
-        to the C ``llama_chat_apply_template`` on failure.
+        Thin wrapper over
+        :func:`inferna._internal.chat_template.apply_template`. Accepts a
+        mixed list of dicts and ``LlamaChatMessage`` instances and
+        normalises them to dicts, since the shared renderer takes dicts.
         """
-        # --- Tier 1: vendored jinja2 ---
-        try:
-            return self._apply_jinja_template(messages, add_assistant_msg)
-        except _JinjaTemplateError:
-            pass
-        except (TypeError, KeyError, AttributeError) as exc:
-            # Render-context issues -- fall back to the C-API path but
-            # log so silent miscompilations are visible. Other exception
-            # classes (NameError, ImportError, ...) signal real bugs and
-            # are allowed to propagate.
-            logger.warning(
-                "Jinja chat-template rendering failed (%s); falling back to C-API path",
-                type(exc).__name__,
-            )
+        from inferna._internal.chat_template import apply_template
 
-        # --- Tier 2: C API (substring heuristic) ---
-        tmpl = self.model.get_default_chat_template()
-        if tmpl:
-            chat_msgs = []
-            for msg in messages:
-                if isinstance(msg, LlamaChatMessage):
-                    chat_msgs.append(msg)
-                else:
-                    chat_msgs.append(LlamaChatMessage(role=msg["role"], content=msg["content"]))
-            return cast(str, self.model.chat_apply_template(tmpl, chat_msgs, add_assistant_msg))
-
-        # --- Tier 3: simple User/Assistant formatting ---
-        conversation = ""
-        for msg in messages:
-            role = msg["role"] if isinstance(msg, dict) else msg.role
-            content = msg["content"] if isinstance(msg, dict) else msg.content
-            if role == "user":
-                conversation += f"User: {content}\n"
-            elif role == "assistant":
-                conversation += f"Assistant: {content}\n"
-            elif role == "system":
-                conversation += f"System: {content}\n"
-        if add_assistant_msg:
-            conversation += "Assistant:"
-        return conversation
-
-    def _apply_jinja_template(
-        self,
-        messages: List[Any],
-        add_generation_prompt: bool = True,
-    ) -> str:
-        """Render the model's embedded chat template via vendored jinja2."""
-        import json
-        from datetime import datetime
-
-        from inferna._vendor.jinja2 import ext as _jinja2_ext
-        from inferna._vendor.jinja2.exceptions import TemplateError
-        from inferna._vendor.jinja2.sandbox import ImmutableSandboxedEnvironment
-
-        template_str = self.model.get_default_chat_template()
-        if not template_str:
-            raise TemplateError("Model has no embedded chat template")
-
-        vocab = self.model.get_vocab()
-        bos_id = vocab.token_bos()
-        eos_id = vocab.token_eos()
-        bos_token = vocab.token_to_piece(bos_id, special=True) if bos_id >= 0 else ""
-        eos_token = vocab.token_to_piece(eos_id, special=True) if eos_id >= 0 else ""
-
-        def raise_exception(message: str) -> str:
-            raise TemplateError(message)
-
-        def tojson_filter(
-            value: Any,
-            ensure_ascii: bool = False,
-            indent: Optional[int] = None,
-            separators: Optional[Tuple[str, str]] = None,
-            sort_keys: bool = False,
-        ) -> str:
-            return json.dumps(
-                value, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys
-            )
-
-        def strftime_now(fmt: str) -> str:
-            return datetime.now().strftime(fmt)
-
-        env = ImmutableSandboxedEnvironment(
-            trim_blocks=True,
-            lstrip_blocks=True,
-            extensions=[_jinja2_ext.loopcontrols],
-        )
-        env.filters["tojson"] = tojson_filter
-        env.globals["raise_exception"] = raise_exception
-        env.globals["strftime_now"] = strftime_now
-
-        # Normalise messages to dicts for the template
-        msg_dicts = []
+        msg_dicts: List[Dict[str, str]] = []
         for msg in messages:
             if isinstance(msg, dict):
                 msg_dicts.append(msg)
             else:
                 msg_dicts.append({"role": msg.role, "content": msg.content})
-
-        compiled = env.from_string(template_str)
-        return cast(
-            str,
-            compiled.render(
-                messages=msg_dicts,
-                bos_token=bos_token,
-                eos_token=eos_token,
-                add_generation_prompt=add_generation_prompt,
-            ),
-        )
+        return apply_template(self.model, msg_dicts, add_generation_prompt=add_assistant_msg)
 
     def generate(self, prompt: str, on_token: Optional[Callable[[str], None]] = None) -> str:
         """Generate response for the given prompt using a fresh context.

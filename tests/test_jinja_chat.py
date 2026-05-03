@@ -35,6 +35,19 @@ ROOT = Path(__file__).resolve().parent.parent
 GEMMA_MODEL = ROOT / "models" / "Gemma-4-E4B-it-Q5_K_M.gguf"
 
 
+def _apply_jinja_via_module(llm, messages, add_generation_prompt: bool = True) -> str:
+    """Helper: invoke the Jinja-only renderer on ``llm.model``.
+
+    The implementation moved from ``LLM._apply_jinja_template`` to
+    ``inferna._internal.chat_template._apply_jinja`` during the LLM
+    god-class split. Tests call this helper instead of the now-removed
+    private method; behaviour is identical.
+    """
+    from inferna._internal.chat_template import _apply_jinja
+
+    return _apply_jinja(llm.model, messages, add_generation_prompt)
+
+
 # ---------------------------------------------------------------------------
 # Layer 1: vendored jinja2 itself
 # ---------------------------------------------------------------------------
@@ -166,11 +179,12 @@ class TestApplyJinjaTemplate:
         from inferna.api import LLM
 
         llm = LLM(model_path, verbose=False)
-        prompt = llm._apply_jinja_template(
+        prompt = _apply_jinja_via_module(
+            llm,
             [
                 {"role": "system", "content": "You are helpful."},
                 {"role": "user", "content": "Hi."},
-            ]
+            ],
         )
         assert "<|start_header_id|>system<|end_header_id|>" in prompt
         assert "You are helpful." in prompt
@@ -186,7 +200,8 @@ class TestApplyJinjaTemplate:
         from inferna.api import LLM
 
         llm = LLM(model_path, verbose=False)
-        prompt = llm._apply_jinja_template(
+        prompt = _apply_jinja_via_module(
+            llm,
             [{"role": "user", "content": "Hi."}],
             add_generation_prompt=False,
         )
@@ -199,7 +214,7 @@ class TestApplyJinjaTemplate:
         from inferna.api import LLM
 
         llm = LLM(model_path, verbose=False)
-        prompt = llm._apply_jinja_template([{"role": "user", "content": "Just a user message."}])
+        prompt = _apply_jinja_via_module(llm, [{"role": "user", "content": "Just a user message."}])
         assert "Just a user message." in prompt
         assert "<|start_header_id|>user<|end_header_id|>" in prompt
 
@@ -209,12 +224,13 @@ class TestApplyJinjaTemplate:
         from inferna.api import LLM
 
         llm = LLM(model_path, verbose=False)
-        prompt = llm._apply_jinja_template(
+        prompt = _apply_jinja_via_module(
+            llm,
             [
                 {"role": "user", "content": "Q1"},
                 {"role": "assistant", "content": "A1"},
                 {"role": "user", "content": "Q2"},
-            ]
+            ],
         )
         # All three must appear in order
         i_q1 = prompt.find("Q1")
@@ -231,11 +247,11 @@ class TestApplyJinjaTemplate:
 
         llm = LLM(model_path, verbose=False)
         with pytest.raises(ValueError, match="missing 'content'"):
-            llm._apply_jinja_template([{"role": "user"}])
+            _apply_jinja_via_module(llm, [{"role": "user"}])
         with pytest.raises(ValueError, match="missing or invalid 'role'"):
-            llm._apply_jinja_template([{"content": "no role"}])
+            _apply_jinja_via_module(llm, [{"content": "no role"}])
         with pytest.raises(TypeError):
-            llm._apply_jinja_template(["not a dict"])
+            _apply_jinja_via_module(llm, ["not a dict"])
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +278,7 @@ class TestApplyTemplateFallback:
         msgs = [{"role": "user", "content": "Hello."}]
 
         via_wrapper = llm._apply_template(msgs)
-        via_direct = llm._apply_jinja_template(msgs)
+        via_direct = _apply_jinja_via_module(llm, msgs)
         assert via_wrapper == via_direct
 
     def test_wrapper_uses_legacy_path_when_template_is_named(self, model_path):
@@ -308,11 +324,12 @@ class TestGemma4Regression:
 
         llm = LLM(str(GEMMA_MODEL), verbose=False)
         try:
-            prompt = llm._apply_jinja_template(
+            prompt = _apply_jinja_via_module(
+                llm,
                 [
                     {"role": "system", "content": "You are helpful."},
                     {"role": "user", "content": "Hi."},
-                ]
+                ],
             )
             # Gemma 4 specifically uses `<|turn>` markers, NOT
             # `<start_of_turn>` (which is what Gemma 2/3 use, and what

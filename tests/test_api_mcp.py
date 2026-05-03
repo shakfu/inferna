@@ -23,8 +23,10 @@ def _make_unloaded_llm():
     """
     from inferna.api import LLM
 
+    from inferna._internal.mcp_facade import MCPFacade
+
     obj = LLM.__new__(LLM)
-    obj._mcp_client = None
+    obj._mcp = MCPFacade()
     obj._closed = False
     obj.verbose = False
     obj._ctx = None
@@ -66,11 +68,11 @@ class TestTransportInference:
 class TestAttachmentLifecycle:
     def test_lazy_client_creation(self):
         llm = _make_unloaded_llm()
-        assert llm._mcp_client is None
+        assert llm._mcp._client is None
         # list_* before any attach returns empty without constructing a client.
         assert llm.list_mcp_tools() == []
         assert llm.list_mcp_resources() == []
-        assert llm._mcp_client is None
+        assert llm._mcp._client is None
 
     def test_add_then_remove(self):
         llm = _make_unloaded_llm()
@@ -100,22 +102,22 @@ class TestAttachmentLifecycle:
     def test_close_disconnects_mcp(self):
         llm = _make_unloaded_llm()
         client = MagicMock()
-        llm._mcp_client = client
+        llm._mcp._client = client
 
         llm.close()
 
         client.disconnect_all.assert_called_once()
-        assert llm._mcp_client is None
+        assert llm._mcp._client is None
 
     def test_close_swallows_disconnect_error(self):
         llm = _make_unloaded_llm()
         client = MagicMock()
         client.disconnect_all.side_effect = RuntimeError("transport broke")
-        llm._mcp_client = client
+        llm._mcp._client = client
         # Should not propagate -- local resource cleanup must not be
         # blocked by a flaky remote.
         llm.close()
-        assert llm._mcp_client is None
+        assert llm._mcp._client is None
 
 
 class TestDispatch:
@@ -133,7 +135,7 @@ class TestDispatch:
         llm = _make_unloaded_llm()
         client = MagicMock()
         client.call_tool.return_value = "ok"
-        llm._mcp_client = client
+        llm._mcp._client = client
 
         result = llm.call_mcp_tool("srv/tool", {"x": 1})
 
@@ -144,7 +146,7 @@ class TestDispatch:
         llm = _make_unloaded_llm()
         client = MagicMock()
         client.read_resource.return_value = "content"
-        llm._mcp_client = client
+        llm._mcp._client = client
 
         assert llm.read_mcp_resource("file:///x") == "content"
         client.read_resource.assert_called_once_with("file:///x")
@@ -158,7 +160,7 @@ class TestDispatch:
         client.get_resources.return_value = [
             McpResource(uri="file:///x", name="x", server_name="srv"),
         ]
-        llm._mcp_client = client
+        llm._mcp._client = client
 
         tools = llm.list_mcp_tools()
         resources = llm.list_mcp_resources()
@@ -186,7 +188,7 @@ class TestChatWithToolsRouting:
         client = MagicMock()
         sentinel_tool = MagicMock(name="mcp_tool")
         client.get_tools_for_agent.return_value = [sentinel_tool]
-        llm._mcp_client = client
+        llm._mcp._client = client
 
         with patch("inferna.agents.react.ReActAgent") as MockAgent:
             MockAgent.return_value.run.return_value = MagicMock(answer="done")
@@ -209,7 +211,7 @@ class TestChatWithToolsRouting:
         llm = _make_unloaded_llm()
         client = MagicMock()
         client.get_tools_for_agent.return_value = [MagicMock(name="mcp_tool")]
-        llm._mcp_client = client
+        llm._mcp._client = client
 
         with patch("inferna.agents.react.ReActAgent") as MockAgent:
             MockAgent.return_value.run.return_value = MagicMock(answer="ok")

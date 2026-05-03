@@ -42,15 +42,12 @@ Async Example:
 
 import asyncio
 import codecs
-import hashlib
 import signal
 import threading
-from collections import OrderedDict
 from typing import (
     TYPE_CHECKING,
     AsyncIterator,
     Iterator,
-    NamedTuple,
     Optional,
     Dict,
     Any,
@@ -62,7 +59,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from .agents.mcp import McpClient, McpResource, McpTool
+    from .agents.mcp import McpResource, McpTool
 from dataclasses import dataclass, field
 import logging
 import time
@@ -83,37 +80,34 @@ from .defaults import (
     DEFAULT_SPLIT_MODE,
 )
 
+from ._internal.chat_template import (
+    apply_template as _apply_chat_template,
+)
+from ._internal.chat_template import (
+    get_template as _get_chat_template,
+)
 from ._internal.function_calling import (
     CompiledToolResult,
     ToolCall,
     compile_tools,
 )
+from ._internal.mcp_facade import MCPFacade
+from ._internal.response_cache import ResponseCache, ResponseCacheInfo, make_cache_key
 from ._internal.structured import CompiledResponseFormat, compile_response_format
 from .llama.llama_cpp import (
     LlamaAdapterLora,
     LlamaBatch,
+    LlamaChatMessage,  # noqa: F401  -- re-exported for backwards compat
     LlamaModel,
     LlamaContext,
     LlamaModelParams,
     LlamaContextParams,
     LlamaSampler,
     LlamaSamplerChainParams,
-    LlamaChatMessage,
     llama_batch_get_one,
     ggml_backend_load_all,
     disable_logging,
 )
-
-# Alias the vendored jinja2 TemplateError so the chat-template fallback
-# inside _apply_template can catch it without paying the import cost on
-# every call. The vendored jinja2 lives at inferna._vendor.jinja2 and is
-# pure Python, so this import is cheap and always succeeds -- but we
-# guard with try/except anyway so a corrupted vendor directory doesn't
-# break api.py module loading.
-try:
-    from inferna._vendor.jinja2.exceptions import TemplateError as _JinjaTemplateError
-except ImportError:  # pragma: no cover - vendor directory should always exist
-    _JinjaTemplateError = type("_JinjaTemplateError", (Exception,), {})
 
 
 @dataclass
@@ -393,96 +387,10 @@ class Response:
         return json.dumps(self.to_dict(), indent=indent)
 
 
-class ResponseCacheInfo(NamedTuple):
-    """Cache statistics for LLM response caching."""
-
-    hits: int
-    misses: int
-    maxsize: int
-    currsize: int
-    ttl: Optional[float]  # TTL in seconds, None if no expiration
-
-
-class _ResponseLRUCache:
-    """
-    LRU cache for Response objects with optional TTL support.
-
-    Stores (Response, timestamp) tuples and checks expiration on get().
-    Expired entries are treated as cache misses.
-    """
-
-    def __init__(self, maxsize: int, ttl: Optional[float] = None):
-        """
-        Initialize the cache.
-
-        Args:
-            maxsize: Maximum number of entries
-            ttl: Time-to-live in seconds, None for no expiration
-        """
-        self._maxsize = maxsize
-        self._ttl = ttl
-        self._cache: OrderedDict[str, Tuple[Any, float]] = OrderedDict()
-        self._hits = 0
-        self._misses = 0
-
-    def get(self, key: str) -> Optional[Any]:
-        """
-        Get a value from the cache.
-
-        Returns None if key not found or entry expired.
-        Expired entries are removed from cache.
-        """
-        if key not in self._cache:
-            self._misses += 1
-            return None
-
-        value, timestamp = self._cache[key]
-
-        # Check TTL expiration
-        if self._ttl is not None:
-            if time.time() - timestamp > self._ttl:
-                # Entry expired - remove and return miss
-                del self._cache[key]
-                self._misses += 1
-                return None
-
-        # Move to end (most recently used)
-        self._cache.move_to_end(key)
-        self._hits += 1
-        return value
-
-    def put(self, key: str, value: Any) -> None:
-        """
-        Store a value in the cache.
-
-        If cache is full, evicts the least recently used entry.
-        """
-        if key in self._cache:
-            # Update existing entry
-            self._cache[key] = (value, time.time())
-            self._cache.move_to_end(key)
-        else:
-            # Check capacity
-            if len(self._cache) >= self._maxsize:
-                # Evict oldest (first item)
-                self._cache.popitem(last=False)
-            self._cache[key] = (value, time.time())
-
-    def clear(self) -> None:
-        """Clear all cache entries and reset statistics."""
-        self._cache.clear()
-        self._hits = 0
-        self._misses = 0
-
-    def info(self) -> ResponseCacheInfo:
-        """Return cache statistics."""
-        return ResponseCacheInfo(
-            hits=self._hits,
-            misses=self._misses,
-            maxsize=self._maxsize,
-            currsize=len(self._cache),
-            ttl=self._ttl,
-        )
+# ResponseCacheInfo and the cache implementation now live in
+# ``inferna._internal.response_cache``. They are re-imported above so
+# the public name ``ResponseCacheInfo`` remains importable from
+# ``inferna.api`` for backwards compatibility.
 
 
 class _SigintHandle:
@@ -616,9 +524,9 @@ class LLM:
         self._cancel_event = threading.Event()
 
         # Initialize response cache
-        self._cache: Optional[_ResponseLRUCache] = None
+        self._cache: Optional[ResponseCache] = None
         if cache_size > 0:
-            self._cache = _ResponseLRUCache(cache_size, cache_ttl)
+            self._cache = ResponseCache(cache_size, cache_ttl)
 
         from .utils.validation import validate_gguf_file
 
@@ -683,7 +591,7 @@ class LLM:
 
         # MCP client is created lazily on the first add_mcp_server() call so
         # callers who never use MCP pay no import or connection cost.
-        self._mcp_client: Optional["McpClient"] = None
+        self._mcp = MCPFacade()
 
         # LoRA adapters currently applied to the generation context. The list
         # is the source of truth across context recreations: ``_ensure_context``
@@ -757,16 +665,12 @@ class LLM:
         if getattr(self, "_loras", None):
             self._loras = []
 
-        # Disconnect any MCP servers the caller attached. Best-effort:
-        # transports already log their own errors and we don't want a flaky
-        # remote server to block local resource cleanup.
-        client = getattr(self, "_mcp_client", None)
-        if client is not None:
-            try:
-                client.disconnect_all()
-            except Exception:
-                pass
-            self._mcp_client = None
+        # Disconnect any MCP servers the caller attached. The facade
+        # handles the best-effort teardown (errors are logged, not
+        # raised) so a flaky remote server can't block local cleanup.
+        mcp = getattr(self, "_mcp", None)
+        if mcp is not None:
+            mcp.close()
 
         self._closed = True
 
@@ -1143,39 +1047,12 @@ class LLM:
             self._cache.clear()
 
     def _make_cache_key(self, prompt: str, config: GenerationConfig) -> Optional[str]:
+        """Thin wrapper around :func:`make_cache_key`.
+
+        Kept as a method so subclasses / tests can monkeypatch it; the
+        actual key derivation lives in ``_internal/response_cache.py``.
         """
-        Generate a cache key from prompt and config.
-
-        Returns None if caching should be skipped (e.g., random seed).
-
-        The key includes parameters that affect output:
-        - prompt, temperature, top_k, top_p, min_p
-        - repeat_penalty, max_tokens, stop_sequences (sorted)
-        - seed, add_bos, parse_special
-
-        Infrastructure parameters are excluded:
-        - n_gpu_layers, main_gpu, split_mode, tensor_split, n_ctx, n_batch
-        """
-        # Skip caching for random seed
-        if config.seed == LLAMA_DEFAULT_SEED:
-            return None
-
-        # Build key from output-affecting parameters
-        key_parts = [
-            prompt,
-            str(config.temperature),
-            str(config.top_k),
-            str(config.top_p),
-            str(config.min_p),
-            str(config.repeat_penalty),
-            str(config.max_tokens),
-            str(sorted(config.stop_sequences)),
-            str(config.seed),
-            str(config.add_bos),
-            str(config.parse_special),
-        ]
-        key_str = "\0".join(key_parts)
-        return hashlib.sha256(key_str.encode()).hexdigest()
+        return make_cache_key(prompt, config, random_seed_sentinel=LLAMA_DEFAULT_SEED)
 
     def _ensure_context(self, prompt_length: int, config: GenerationConfig) -> LlamaContext:
         """
@@ -1742,204 +1619,16 @@ class LLM:
         template: Optional[str] = None,
         add_generation_prompt: bool = True,
     ) -> str:
-        """Apply chat template to messages using the loaded model.
+        """Render ``messages`` against the loaded model's chat template.
 
-        Two paths, tried in order:
-
-        1. **Vendored jinja2 (full Jinja support).** When the caller has
-           not requested a specific template, evaluate the model's
-           embedded chat template via the vendored ``jinja2`` interpreter
-           under ``inferna._vendor``. This handles any GGUF whose
-           embedded template uses Jinja syntax that llama.cpp's basic C
-           API doesn't recognise (Gemma 4 is the canonical example -- the
-           substring heuristic in ``llm_chat_detect_template`` fails to
-           match its template, so the legacy path returns -1, but the
-           Jinja interpreter evaluates it cleanly).
-
-        2. **Legacy substring-heuristic path.** Falls back to the
-           original ``llama_chat_apply_template`` C API on
-           ``TemplateError`` (template raised, e.g. Gemma's
-           ``raise_exception('System role not supported')``) or any
-           other failure inside the Jinja path. The fallback also fires
-           when the caller explicitly requests a named template via the
-           ``template`` parameter, since named-template lookup is a
-           feature of the legacy path.
-
-        The pipeline-level three-tier fallback in
-        ``inferna.rag.pipeline.RAGPipeline._chat_with_fallback`` (system
-        + user -> merged user -> raw completion) sits outside this
-        method as the outermost safety net, so any RuntimeError that
-        propagates here is caught one layer up and degraded gracefully.
+        Thin wrapper over :func:`inferna._internal.chat_template.apply_template`,
+        which owns the Jinja → C-API → simple-format fallback ladder.
         """
-        # Try the vendored jinja2 path when no specific template was
-        # requested. The Jinja interpreter handles full Jinja semantics,
-        # so it works on every embedded template the legacy substring
-        # heuristic doesn't recognise.
-        if template is None:
-            try:
-                return self._apply_jinja_template(messages, add_generation_prompt)
-            except _JinjaTemplateError:
-                # Template raised inside Jinja (e.g. Gemma's
-                # raise_exception). Fall through to the legacy path,
-                # which has its own per-template-name handling. The
-                # pipeline-level fallback above us catches anything
-                # that fails on both paths.
-                pass
-            except (TypeError, KeyError, AttributeError) as exc:
-                # Render-time issues with the rendering context (missing
-                # variables, wrong types in messages). These are
-                # recoverable via the legacy substring-heuristic path,
-                # but we log so they're observable rather than silent.
-                # Genuine bugs (NameError, ImportError, ...) propagate.
-                logger.warning(
-                    "Jinja chat-template rendering failed (%s); falling back to C-API path",
-                    type(exc).__name__,
-                )
-
-        # Get template - use provided or model's default. The provided
-        # `template` argument can be (a) a Jinja template string, (b) the
-        # GGUF metadata key under which a named template is stored, or
-        # (c) one of llama.cpp's built-in aliases (chatml, llama3, gemma,
-        # mistral, ...). Cases (a) and (c) are both handled directly by
-        # llama_chat_apply_template, so we resolve case (b) first via the
-        # metadata lookup and otherwise hand the string off as-is. We do
-        # NOT pre-emptively warn about unrecognised names: the metadata
-        # lookup and the built-in alias table are two different sources
-        # of truth, and asking only the metadata lookup would
-        # false-positive on every legitimate built-in alias.
-        if template:
-            tmpl = self.model.get_default_chat_template_by_name(template) or template
-        else:
-            tmpl = self.model.get_default_chat_template()
-
-        if tmpl:
-            chat_messages = []
-            for i, msg in enumerate(messages):
-                if not isinstance(msg, dict):
-                    raise TypeError(f"Message at index {i} must be a dict, got {type(msg).__name__}")
-                role = msg.get("role")
-                if not role or not isinstance(role, str):
-                    raise ValueError(f"Message at index {i} missing or invalid 'role': {msg!r}")
-                content = msg.get("content")
-                if content is None:
-                    raise ValueError(f"Message at index {i} missing 'content' key")
-                chat_messages.append(LlamaChatMessage(role=role, content=str(content)))
-            return cast(str, self.model.chat_apply_template(tmpl, chat_messages, add_generation_prompt))
-        else:
-            return _format_messages_simple(messages)
-
-    def _apply_jinja_template(
-        self,
-        messages: List[Dict[str, str]],
-        add_generation_prompt: bool = True,
-    ) -> str:
-        """Render the model's embedded chat template via vendored jinja2.
-
-        Mirrors HuggingFace ``transformers.PreTrainedTokenizerBase.apply_chat_template``:
-        get the embedded template string from GGUF metadata, evaluate it
-        in an ``ImmutableSandboxedEnvironment`` with the standard context
-        (``messages``, ``bos_token``, ``eos_token``, ``add_generation_prompt``)
-        and the standard custom globals (``raise_exception``,
-        ``strftime_now``) plus the ``tojson`` filter. The same approach
-        is used by millions of HuggingFace users, so any GGUF whose chat
-        template was generated from a HuggingFace tokenizer config is
-        compatible by construction.
-
-        Raises:
-            _JinjaTemplateError: If the template explicitly raised
-                (e.g. Gemma's ``raise_exception('System role not
-                supported')``) or if the model has no embedded template.
-            ImportError: Should not happen because jinja2 is vendored,
-                but caught defensively in the caller.
-        """
-        import json
-        from datetime import datetime
-
-        from inferna._vendor.jinja2 import ext as _jinja2_ext
-        from inferna._vendor.jinja2.exceptions import TemplateError
-        from inferna._vendor.jinja2.sandbox import ImmutableSandboxedEnvironment
-
-        template_str = self.model.get_default_chat_template()
-        if not template_str:
-            raise TemplateError("Model has no embedded chat template")
-
-        # Resolve bos/eos token strings via the existing public C API.
-        # The model exposes token IDs through its vocab; we convert them
-        # to text via token_to_piece. Tokens may legitimately be missing
-        # (some embedding-only models have no BOS/EOS), in which case we
-        # pass empty strings -- a template that references {{ bos_token }}
-        # will just render an empty string in that position.
-        vocab = self.model.get_vocab()
-        bos_id = vocab.token_bos()
-        eos_id = vocab.token_eos()
-        bos_token = vocab.token_to_piece(bos_id, special=True) if bos_id >= 0 else ""
-        eos_token = vocab.token_to_piece(eos_id, special=True) if eos_id >= 0 else ""
-
-        def raise_exception(message: str) -> str:
-            raise TemplateError(message)
-
-        def tojson_filter(
-            value: Any,
-            ensure_ascii: bool = False,
-            indent: Optional[int] = None,
-            separators: Optional[Tuple[str, str]] = None,
-            sort_keys: bool = False,
-        ) -> str:
-            return json.dumps(
-                value,
-                ensure_ascii=ensure_ascii,
-                indent=indent,
-                separators=separators,
-                sort_keys=sort_keys,
-            )
-
-        def strftime_now(fmt: str) -> str:
-            return datetime.now().strftime(fmt)
-
-        env = ImmutableSandboxedEnvironment(
-            trim_blocks=True,
-            lstrip_blocks=True,
-            extensions=[_jinja2_ext.loopcontrols],
-        )
-        env.filters["tojson"] = tojson_filter
-        env.globals["raise_exception"] = raise_exception
-        env.globals["strftime_now"] = strftime_now
-
-        # Validate and normalise messages: same shape checks the legacy
-        # path performs, but raised inside the new code path so callers
-        # see consistent error types regardless of which branch ran.
-        for i, msg in enumerate(messages):
-            if not isinstance(msg, dict):
-                raise TypeError(f"Message at index {i} must be a dict, got {type(msg).__name__}")
-            if not msg.get("role") or not isinstance(msg.get("role"), str):
-                raise ValueError(f"Message at index {i} missing or invalid 'role': {msg!r}")
-            if msg.get("content") is None:
-                raise ValueError(f"Message at index {i} missing 'content' key")
-
-        compiled = env.from_string(template_str)
-        return cast(
-            str,
-            compiled.render(
-                messages=messages,
-                bos_token=bos_token,
-                eos_token=eos_token,
-                add_generation_prompt=add_generation_prompt,
-            ),
-        )
+        return _apply_chat_template(self.model, messages, template, add_generation_prompt)
 
     def get_chat_template(self, template_name: Optional[str] = None) -> str:
-        """
-        Get the chat template string from the loaded model.
-
-        Args:
-            template_name: Optional specific template name to retrieve
-
-        Returns:
-            Template string, or empty string if not found
-        """
-        if template_name:
-            return cast(str, self.model.get_default_chat_template_by_name(template_name))
-        return cast(str, self.model.get_default_chat_template())
+        """Return the chat template string for ``template_name`` (or the model's default)."""
+        return _get_chat_template(self.model, template_name)
 
     # ------------------------------------------------------------------
     # MCP client surface
@@ -1950,13 +1639,7 @@ class LLM:
     # first add_mcp_server() call and torn down in close().
     # ------------------------------------------------------------------
 
-    def _get_or_create_mcp_client(self) -> "McpClient":
-        """Lazily construct the McpClient on first use."""
-        if self._mcp_client is None:
-            from .agents.mcp import McpClient
-
-            self._mcp_client = McpClient()
-        return self._mcp_client
+    # MCP delegations (logic lives in inferna._internal.mcp_facade.MCPFacade).
 
     def add_mcp_server(
         self,
@@ -1974,86 +1657,35 @@ class LLM:
     ) -> None:
         """Attach an MCP server and connect immediately.
 
-        Transport is inferred from which kwargs are set if ``transport`` is
-        omitted: ``command`` -> stdio, ``url`` -> http. Pass ``transport``
-        explicitly to disambiguate (e.g. when both happen to be set).
-
-        Args:
-            name: Logical name for the server. Tools are exposed as
-                ``"<name>/<tool>"`` to disambiguate identically named tools
-                from different servers.
-            command/args/env/cwd: stdio transport options.
-            url/headers: http transport options.
-            transport: Optional ``McpTransportType`` override.
-            request_timeout/shutdown_timeout: optional per-server overrides.
+        Transport is inferred when ``transport`` is omitted: ``command``
+        => stdio, ``url`` => http. Tools are namespaced as
+        ``"<name>/<tool>"`` so identically named tools from different
+        servers stay distinguishable.
         """
-        from .agents.mcp import (
-            McpServerConfig,
-            McpTransportType,
-            DEFAULT_REQUEST_TIMEOUT,
-            DEFAULT_SHUTDOWN_TIMEOUT,
-        )
-
-        if transport is None:
-            if command is not None:
-                transport = McpTransportType.STDIO
-            elif url is not None:
-                transport = McpTransportType.HTTP
-            else:
-                raise ValueError(
-                    "add_mcp_server requires either 'command' (stdio) or 'url' (http), or an explicit 'transport'."
-                )
-
-        config = McpServerConfig(
-            name=name,
-            transport=transport,
+        self._mcp.add_server(
+            name,
             command=command,
             args=args,
             env=env,
             cwd=cwd,
             url=url,
             headers=headers,
-            request_timeout=request_timeout if request_timeout is not None else DEFAULT_REQUEST_TIMEOUT,
-            shutdown_timeout=shutdown_timeout if shutdown_timeout is not None else DEFAULT_SHUTDOWN_TIMEOUT,
+            transport=transport,
+            request_timeout=request_timeout,
+            shutdown_timeout=shutdown_timeout,
         )
-
-        client = self._get_or_create_mcp_client()
-        client.add_server(config)
-        # Connect this single server now rather than deferring to a global
-        # connect_all(): callers expect add_mcp_server() to fail-fast on a
-        # bad config or unreachable endpoint.
-        client._connect_server(config)
-        client._connected = True
 
     def remove_mcp_server(self, name: str) -> None:
         """Disconnect and forget an MCP server by name."""
-        if self._mcp_client is None:
-            return
-        client = self._mcp_client
-        conn = client._connections.pop(name, None)
-        if conn is not None:
-            try:
-                conn.disconnect()
-            except Exception:
-                pass
-        client._servers = [s for s in client._servers if s.name != name]
-        # Drop tools and resources owned by this server.
-        client._tools = {k: v for k, v in client._tools.items() if v.server_name != name}
-        client._resources = {k: v for k, v in client._resources.items() if v.server_name != name}
-        if not client._connections:
-            client._connected = False
+        self._mcp.remove_server(name)
 
     def list_mcp_tools(self) -> List["McpTool"]:
         """Return all discovered MCP tools as ``McpTool`` instances."""
-        if self._mcp_client is None:
-            return []
-        return list(self._mcp_client.get_tools())
+        return self._mcp.list_tools()
 
     def list_mcp_resources(self) -> List["McpResource"]:
         """Return all discovered MCP resources as ``McpResource`` instances."""
-        if self._mcp_client is None:
-            return []
-        return list(self._mcp_client.get_resources())
+        return self._mcp.list_resources()
 
     def call_mcp_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         """Invoke an MCP tool by full ``"server/tool"`` name.
@@ -2061,15 +1693,11 @@ class LLM:
         Useful when the caller wants explicit control over the tool loop
         rather than handing dispatch to ``chat_with_tools``.
         """
-        if self._mcp_client is None:
-            raise RuntimeError("No MCP servers attached. Call add_mcp_server() first.")
-        return self._mcp_client.call_tool(name, arguments)
+        return self._mcp.call_tool(name, arguments)
 
     def read_mcp_resource(self, uri: str) -> str:
         """Read the contents of an MCP resource by URI."""
-        if self._mcp_client is None:
-            raise RuntimeError("No MCP servers attached. Call add_mcp_server() first.")
-        return self._mcp_client.read_resource(uri)
+        return self._mcp.read_resource(uri)
 
     def chat_with_tools(
         self,
@@ -2130,8 +1758,8 @@ class LLM:
                     break
 
         merged_tools: List[Any] = list(tools) if tools else []
-        if use_mcp and self._mcp_client is not None:
-            merged_tools.extend(self._mcp_client.get_tools_for_agent())
+        if use_mcp:
+            merged_tools.extend(self._mcp.get_tools_for_agent())
 
         agent = ReActAgent(
             llm=self,
@@ -2318,113 +1946,7 @@ def apply_chat_template(
     model_params.n_gpu_layers = 0
     model = LlamaModel(model_path, model_params)
 
-    # Get template - use provided or model's default
-    if template:
-        tmpl = model.get_default_chat_template_by_name(template)
-        if not tmpl:
-            # Try as-is (some templates are the actual template string)
-            tmpl = template
-    else:
-        tmpl = model.get_default_chat_template()
-
-    # Tier 1: try vendored jinja2 when no specific template was requested.
-    # This handles models whose embedded template uses Jinja syntax that
-    # llama.cpp's C substring heuristic doesn't recognise (e.g. Gemma 4).
-    if template is None and tmpl:
-        try:
-            prompt = _apply_jinja_template_standalone(model, tmpl, messages, add_generation_prompt)
-            return prompt
-        except _JinjaTemplateError:
-            pass
-        except Exception:
-            pass
-
-    # Tier 2: C API (substring heuristic)
-    if tmpl:
-        chat_messages = [
-            LlamaChatMessage(role=msg.get("role", "user"), content=msg.get("content", "")) for msg in messages
-        ]
-        prompt = model.chat_apply_template(tmpl, chat_messages, add_generation_prompt)
-    else:
-        # Fallback to simple format if no template available
-        logger.debug("No chat template found, using fallback format")
-        prompt = _format_messages_simple(messages)
-
-    return prompt
-
-
-def _apply_jinja_template_standalone(
-    model: "LlamaModel",
-    template_str: str,
-    messages: List[Dict[str, str]],
-    add_generation_prompt: bool = True,
-) -> str:
-    """Render a chat template via vendored jinja2 for the standalone apply_chat_template path."""
-    import json
-    from datetime import datetime
-
-    from inferna._vendor.jinja2 import ext as _jinja2_ext
-    from inferna._vendor.jinja2.exceptions import TemplateError
-    from inferna._vendor.jinja2.sandbox import ImmutableSandboxedEnvironment
-
-    vocab = model.get_vocab()
-    bos_id = vocab.token_bos()
-    eos_id = vocab.token_eos()
-    bos_token = vocab.token_to_piece(bos_id, special=True) if bos_id >= 0 else ""
-    eos_token = vocab.token_to_piece(eos_id, special=True) if eos_id >= 0 else ""
-
-    def raise_exception(message: str) -> str:
-        raise TemplateError(message)
-
-    def tojson_filter(
-        value: Any,
-        ensure_ascii: bool = False,
-        indent: Optional[int] = None,
-        separators: Optional[Tuple[str, str]] = None,
-        sort_keys: bool = False,
-    ) -> str:
-        return json.dumps(value, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
-
-    def strftime_now(fmt: str) -> str:
-        return datetime.now().strftime(fmt)
-
-    env = ImmutableSandboxedEnvironment(
-        trim_blocks=True,
-        lstrip_blocks=True,
-        extensions=[_jinja2_ext.loopcontrols],
-    )
-    env.filters["tojson"] = tojson_filter
-    env.globals["raise_exception"] = raise_exception
-    env.globals["strftime_now"] = strftime_now
-
-    compiled = env.from_string(template_str)
-    return cast(
-        str,
-        compiled.render(
-            messages=messages,
-            bos_token=bos_token,
-            eos_token=eos_token,
-            add_generation_prompt=add_generation_prompt,
-        ),
-    )
-
-
-def _format_messages_simple(messages: List[Dict[str, str]]) -> str:
-    """Simple fallback format when no chat template is available."""
-    prompt_parts = []
-    for msg in messages:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if role == "system":
-            prompt_parts.append(f"System: {content}")
-        elif role == "user":
-            prompt_parts.append(f"User: {content}")
-        elif role == "assistant":
-            prompt_parts.append(f"Assistant: {content}")
-        else:
-            prompt_parts.append(f"{role.capitalize()}: {content}")
-
-    return "\n\n".join(prompt_parts) + "\n\nAssistant:"
+    return _apply_chat_template(model, messages, template, add_generation_prompt)
 
 
 def get_chat_template(model_path: str, template_name: Optional[str] = None) -> str:
@@ -2449,12 +1971,7 @@ def get_chat_template(model_path: str, template_name: Optional[str] = None) -> s
     model_params.n_gpu_layers = 0
     model = LlamaModel(model_path, model_params)
 
-    if template_name:
-        result = model.get_default_chat_template_by_name(template_name)
-    else:
-        result = model.get_default_chat_template()
-
-    return cast(str, result)
+    return _get_chat_template(model, template_name)
 
 
 def simple(
