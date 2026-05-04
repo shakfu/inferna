@@ -465,6 +465,27 @@ config = GenerationConfig(
     top_p=0.95,               # Nucleus sampling
     min_p=0.05,               # Minimum probability threshold
     repeat_penalty=1.0,       # Penalize repetition (1.0 = off)
+    frequency_penalty=0.0,    # OpenAI-style frequency penalty (0.0 = off)
+    presence_penalty=0.0,     # OpenAI-style presence penalty (0.0 = off)
+    penalty_last_n=64,        # Tokens considered by penalty samplers (-1 = full ctx, 0 = off)
+
+    # Mirostat (alternative to top-k/top-p/min-p; replaces that chain tail)
+    mirostat=0,               # 0 = off, 1 = v1, 2 = v2
+    mirostat_tau=5.0,         # Target entropy
+    mirostat_eta=0.1,         # Learning rate
+
+    # Additional truncation samplers
+    typical_p=1.0,            # Locally-typical sampling (1.0 = off)
+    typical_min_keep=1,       # Minimum tokens kept after typical truncation
+    xtc_probability=0.0,      # XTC ("Exclude Top Choices") probability (0.0 = off)
+    xtc_threshold=0.1,        # XTC probability cutoff for top-token removal
+
+    # Dynamic temperature (extends `temperature` when range > 0)
+    dynatemp_range=0.0,       # 0.0 = plain temp; > 0 enables temp_ext
+    dynatemp_exponent=1.0,    # Dynamic temperature exponent
+
+    # Logit bias (None = no bias; OpenAI shape: {token_id: bias})
+    logit_bias=None,
 
     # Model parameters
     n_gpu_layers=-1,          # Layers to offload to GPU (-1 = all)

@@ -11,14 +11,29 @@ import time
 import argparse
 from typing import Any, Callable, Dict, List, Optional
 
+from typing import Mapping
+
 from ..defaults import (
+    DEFAULT_DYNATEMP_EXPONENT,
+    DEFAULT_DYNATEMP_RANGE,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MIN_P,
+    DEFAULT_MIROSTAT,
+    DEFAULT_MIROSTAT_ETA,
+    DEFAULT_MIROSTAT_M,
+    DEFAULT_MIROSTAT_TAU,
     DEFAULT_N_GPU_LAYERS,
+    DEFAULT_PENALTY_FREQ,
+    DEFAULT_PENALTY_LAST_N,
+    DEFAULT_PENALTY_PRESENT,
     DEFAULT_REPEAT_PENALTY,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_K,
     DEFAULT_TOP_P,
+    DEFAULT_TYPICAL_MIN_KEEP,
+    DEFAULT_TYPICAL_P,
+    DEFAULT_XTC_PROBABILITY,
+    DEFAULT_XTC_THRESHOLD,
     LLAMA_DEFAULT_SEED,
 )
 from ..utils.color import green, yellow, END, esc, FG_END
@@ -65,6 +80,19 @@ class Chat:
         top_p: float = DEFAULT_TOP_P,
         min_p: float = DEFAULT_MIN_P,
         repeat_penalty: float = DEFAULT_REPEAT_PENALTY,
+        frequency_penalty: float = DEFAULT_PENALTY_FREQ,
+        presence_penalty: float = DEFAULT_PENALTY_PRESENT,
+        penalty_last_n: int = DEFAULT_PENALTY_LAST_N,
+        mirostat: int = DEFAULT_MIROSTAT,
+        mirostat_tau: float = DEFAULT_MIROSTAT_TAU,
+        mirostat_eta: float = DEFAULT_MIROSTAT_ETA,
+        typical_p: float = DEFAULT_TYPICAL_P,
+        typical_min_keep: int = DEFAULT_TYPICAL_MIN_KEEP,
+        xtc_probability: float = DEFAULT_XTC_PROBABILITY,
+        xtc_threshold: float = DEFAULT_XTC_THRESHOLD,
+        dynatemp_range: float = DEFAULT_DYNATEMP_RANGE,
+        dynatemp_exponent: float = DEFAULT_DYNATEMP_EXPONENT,
+        logit_bias: Optional[Mapping[int, float]] = None,
         seed: int = LLAMA_DEFAULT_SEED,
     ):
         """Initialize the chat with model and parameters"""
@@ -92,13 +120,42 @@ class Chat:
         # Initialize sampler with caller-provided parameters
         sampler_params = LlamaSamplerChainParams()
         self.sampler = LlamaSampler(sampler_params)
-        if repeat_penalty != 1.0:
-            self.sampler.add_penalties(64, repeat_penalty, 0.0, 0.0)
-        self.sampler.add_top_k(top_k)
-        self.sampler.add_top_p(top_p, 1)
-        self.sampler.add_min_p(min_p, 1)
-        self.sampler.add_temp(temperature)
-        self.sampler.add_dist(seed)
+        if logit_bias:
+            self.sampler.add_logit_bias(
+                self.vocab.n_vocab,
+                [(int(tok), float(bias)) for tok, bias in logit_bias.items()],
+            )
+        if (
+            repeat_penalty != 1.0
+            or frequency_penalty != 0.0
+            or presence_penalty != 0.0
+        ):
+            self.sampler.add_penalties(
+                penalty_last_n, repeat_penalty, frequency_penalty, presence_penalty
+            )
+        if mirostat != 0:
+            self.sampler.add_temp(temperature)
+            if mirostat == 1:
+                self.sampler.add_mirostat(
+                    self.vocab.n_vocab, seed, mirostat_tau, mirostat_eta, DEFAULT_MIROSTAT_M
+                )
+            elif mirostat == 2:
+                self.sampler.add_mirostat_v2(seed, mirostat_tau, mirostat_eta)
+            else:
+                raise ValueError(f"mirostat must be 0, 1, or 2, got {mirostat}")
+        else:
+            self.sampler.add_top_k(top_k)
+            if typical_p < 1.0:
+                self.sampler.add_typical(typical_p, typical_min_keep)
+            self.sampler.add_top_p(top_p, 1)
+            self.sampler.add_min_p(min_p, 1)
+            if xtc_probability > 0.0:
+                self.sampler.add_xtc(xtc_probability, xtc_threshold, 1, seed)
+            if dynatemp_range > 0.0:
+                self.sampler.add_temp_ext(temperature, dynatemp_range, dynatemp_exponent)
+            else:
+                self.sampler.add_temp(temperature)
+            self.sampler.add_dist(seed)
 
         # Initialize chat state (simplified - use list of dicts instead of LlamaChatMessage objects)
         self.messages: List[Dict[str, str]] = []

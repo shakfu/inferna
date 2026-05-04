@@ -491,10 +491,23 @@ class GenerationConfig:
     top_p: float = 0.95
     min_p: float = 0.05
     repeat_penalty: float = 1.0
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+    penalty_last_n: int = 64
+    mirostat: int = 0
+    mirostat_tau: float = 5.0
+    mirostat_eta: float = 0.1
+    typical_p: float = 1.0
+    typical_min_keep: int = 1
+    xtc_probability: float = 0.0
+    xtc_threshold: float = 0.1
+    dynatemp_range: float = 0.0
+    dynatemp_exponent: float = 1.0
+    logit_bias: Optional[Dict[int, float]] = None
     n_gpu_layers: int = -1
     n_ctx: Optional[int] = None
-    n_batch: int = 512
-    seed: int = -1
+    n_batch: int = 2048
+    seed: int = 0xFFFFFFFF
     stop_sequences: List[str] = field(default_factory=list)
     add_bos: bool = True
     parse_special: bool = True
@@ -514,13 +527,39 @@ class GenerationConfig:
 
 - `repeat_penalty`: Penalty for repeating tokens (default: 1.0, disabled)
 
+- `frequency_penalty`: OpenAI-style frequency penalty applied to the most recent `penalty_last_n` tokens (default: 0.0, disabled)
+
+- `presence_penalty`: OpenAI-style presence penalty applied to the most recent `penalty_last_n` tokens (default: 0.0, disabled)
+
+- `penalty_last_n`: Number of recent tokens considered by the penalty samplers. `0` = disabled, `-1` = full context window (default: 64)
+
+- `mirostat`: Mirostat sampling mode. `0` = off, `1` = v1, `2` = v2. When non-zero, the top-k/top-p/min-p/dist tail of the chain is replaced with `temp` -> `mirostat[_v2]` (default: 0)
+
+- `mirostat_tau`: Mirostat target entropy (default: 5.0)
+
+- `mirostat_eta`: Mirostat learning rate (default: 0.1)
+
+- `typical_p`: Locally-typical sampling threshold. `1.0` = disabled (default: 1.0)
+
+- `typical_min_keep`: Minimum tokens kept after typical truncation (default: 1)
+
+- `xtc_probability`: Probability of applying XTC ("Exclude Top Choices") truncation. `0.0` = disabled (default: 0.0)
+
+- `xtc_threshold`: Probability cutoff above which top tokens become candidates for XTC removal (default: 0.1)
+
+- `dynatemp_range`: Dynamic temperature range. `0.0` = use plain `temperature`; `> 0` swaps `add_temp` for `add_temp_ext` (default: 0.0)
+
+- `dynatemp_exponent`: Dynamic temperature exponent (default: 1.0)
+
+- `logit_bias`: Optional `{token_id: bias}` map applied to the raw logits before any sampler stage. `None` = no bias. Matches the OpenAI `logit_bias` shape (default: None)
+
 - `n_gpu_layers`: GPU layers to offload (default: -1 = all)
 
 - `n_ctx`: Context window size, None = auto (default: None)
 
-- `n_batch`: Batch size for processing (default: 512)
+- `n_batch`: Batch size for processing (default: 2048)
 
-- `seed`: Random seed, -1 = random (default: -1)
+- `seed`: Random seed (default: `0xFFFFFFFF` sentinel = let llama.cpp pick a random seed)
 
 - `stop_sequences`: Strings that stop generation (default: [])
 

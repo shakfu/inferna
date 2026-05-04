@@ -29,7 +29,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
-from .defaults import DEFAULT_N_GPU_LAYERS
+from .defaults import DEFAULT_N_GPU_LAYERS, DEFAULT_MIROSTAT_M, LLAMA_DEFAULT_SEED
 
 from .llama.llama_cpp import (
     LlamaModel,
@@ -280,14 +280,67 @@ class BatchGenerator:
         sampler_params = LlamaSamplerChainParams()
         sampler = LlamaSampler(sampler_params)
 
+        if config.logit_bias:
+            sampler.add_logit_bias(
+                self.vocab.n_vocab,
+                [(int(tok), float(bias)) for tok, bias in config.logit_bias.items()],
+            )
+
+        if (
+            config.repeat_penalty != 1.0
+            or config.frequency_penalty != 0.0
+            or config.presence_penalty != 0.0
+        ):
+            sampler.add_penalties(
+                config.penalty_last_n,
+                config.repeat_penalty,
+                config.frequency_penalty,
+                config.presence_penalty,
+            )
+
+        seed = config.seed if config.seed != -1 else int(time.time())
+
         if config.temperature == 0.0:
             sampler.add_greedy()
+        elif config.mirostat != 0:
+            sampler.add_temp(config.temperature)
+            mirostat_seed = seed if seed != LLAMA_DEFAULT_SEED else LLAMA_DEFAULT_SEED
+            if config.mirostat == 1:
+                sampler.add_mirostat(
+                    self.vocab.n_vocab,
+                    mirostat_seed,
+                    config.mirostat_tau,
+                    config.mirostat_eta,
+                    DEFAULT_MIROSTAT_M,
+                )
+            else:
+                sampler.add_mirostat_v2(
+                    mirostat_seed,
+                    config.mirostat_tau,
+                    config.mirostat_eta,
+                )
         else:
             sampler.add_min_p(config.min_p, 1)
             sampler.add_top_k(config.top_k)
+            if config.typical_p < 1.0:
+                sampler.add_typical(config.typical_p, config.typical_min_keep)
             sampler.add_top_p(config.top_p, 1)
-            sampler.add_temp(config.temperature)
-            sampler.add_dist(config.seed if config.seed != -1 else int(time.time()))
+            if config.xtc_probability > 0.0:
+                sampler.add_xtc(
+                    config.xtc_probability,
+                    config.xtc_threshold,
+                    1,
+                    seed,
+                )
+            if config.dynatemp_range > 0.0:
+                sampler.add_temp_ext(
+                    config.temperature,
+                    config.dynatemp_range,
+                    config.dynatemp_exponent,
+                )
+            else:
+                sampler.add_temp(config.temperature)
+            sampler.add_dist(seed)
 
         # Process prompts in batch (use pooling if enabled)
         if self.use_pooling:

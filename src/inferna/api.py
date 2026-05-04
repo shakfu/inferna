@@ -75,6 +75,19 @@ from .defaults import (
     DEFAULT_TOP_P,
     DEFAULT_MIN_P,
     DEFAULT_REPEAT_PENALTY,
+    DEFAULT_PENALTY_LAST_N,
+    DEFAULT_PENALTY_FREQ,
+    DEFAULT_PENALTY_PRESENT,
+    DEFAULT_MIROSTAT,
+    DEFAULT_MIROSTAT_TAU,
+    DEFAULT_MIROSTAT_ETA,
+    DEFAULT_MIROSTAT_M,
+    DEFAULT_TYPICAL_P,
+    DEFAULT_TYPICAL_MIN_KEEP,
+    DEFAULT_XTC_PROBABILITY,
+    DEFAULT_XTC_THRESHOLD,
+    DEFAULT_DYNATEMP_RANGE,
+    DEFAULT_DYNATEMP_EXPONENT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_N_GPU_LAYERS,
     DEFAULT_N_BATCH,
@@ -123,7 +136,37 @@ class GenerationConfig:
         top_k: Top-k sampling parameter (see defaults.py)
         top_p: Top-p (nucleus) sampling parameter (see defaults.py)
         min_p: Minimum probability threshold (see defaults.py)
-        repeat_penalty: Penalty for repeating tokens (see defaults.py)
+        repeat_penalty: Penalty for repeating tokens (see defaults.py).
+            1.0 = disabled.
+        frequency_penalty: OpenAI-style frequency penalty applied to the
+            most recent ``penalty_last_n`` tokens (see defaults.py).
+            0.0 = disabled.
+        presence_penalty: OpenAI-style presence penalty applied to the
+            most recent ``penalty_last_n`` tokens (see defaults.py).
+            0.0 = disabled.
+        penalty_last_n: Number of recent tokens considered by the
+            penalty samplers. 0 = disabled, -1 = use full context window
+            (see defaults.py).
+        mirostat: Mirostat sampling mode. 0 = off (use top-k/top-p/min-p),
+            1 = mirostat v1, 2 = mirostat v2. When non-zero, the
+            top-k/top-p/min-p/dist tail of the chain is replaced with
+            ``temp`` -> ``mirostat[_v2]``.
+        mirostat_tau: Mirostat target entropy (see defaults.py).
+        mirostat_eta: Mirostat learning rate (see defaults.py).
+        typical_p: Locally-typical sampling threshold (see defaults.py).
+            1.0 = disabled.
+        typical_min_keep: Minimum tokens kept after typical truncation
+            (see defaults.py).
+        xtc_probability: Probability of applying XTC ("Exclude Top
+            Choices") truncation (see defaults.py). 0.0 = disabled.
+        xtc_threshold: Probability cutoff above which top tokens become
+            candidates for XTC removal (see defaults.py).
+        dynatemp_range: Dynamic temperature range (see defaults.py).
+            0.0 = use plain ``temperature``; > 0 enables ``temp_ext``.
+        dynatemp_exponent: Dynamic temperature exponent (see defaults.py).
+        logit_bias: Optional ``{token_id: bias}`` map applied to the raw
+            logits before any sampler stage. None = no bias. Matches the
+            OpenAI ``logit_bias`` shape.
         n_gpu_layers: Number of layers to offload to GPU (see defaults.py)
         main_gpu: Primary GPU device index for inference (see defaults.py)
         split_mode: How to split model across GPUs (see defaults.py)
@@ -163,6 +206,19 @@ class GenerationConfig:
     top_p: float = DEFAULT_TOP_P
     min_p: float = DEFAULT_MIN_P
     repeat_penalty: float = DEFAULT_REPEAT_PENALTY
+    frequency_penalty: float = DEFAULT_PENALTY_FREQ
+    presence_penalty: float = DEFAULT_PENALTY_PRESENT
+    penalty_last_n: int = DEFAULT_PENALTY_LAST_N
+    mirostat: int = DEFAULT_MIROSTAT
+    mirostat_tau: float = DEFAULT_MIROSTAT_TAU
+    mirostat_eta: float = DEFAULT_MIROSTAT_ETA
+    typical_p: float = DEFAULT_TYPICAL_P
+    typical_min_keep: int = DEFAULT_TYPICAL_MIN_KEEP
+    xtc_probability: float = DEFAULT_XTC_PROBABILITY
+    xtc_threshold: float = DEFAULT_XTC_THRESHOLD
+    dynatemp_range: float = DEFAULT_DYNATEMP_RANGE
+    dynatemp_exponent: float = DEFAULT_DYNATEMP_EXPONENT
+    logit_bias: Optional[Dict[int, float]] = None
     n_gpu_layers: int = DEFAULT_N_GPU_LAYERS
     main_gpu: int = DEFAULT_MAIN_GPU
     split_mode: int = DEFAULT_SPLIT_MODE
@@ -183,6 +239,19 @@ class GenerationConfig:
             "top_p": self.top_p,
             "min_p": self.min_p,
             "repeat_penalty": self.repeat_penalty,
+            "frequency_penalty": self.frequency_penalty,
+            "presence_penalty": self.presence_penalty,
+            "penalty_last_n": self.penalty_last_n,
+            "mirostat": self.mirostat,
+            "mirostat_tau": self.mirostat_tau,
+            "mirostat_eta": self.mirostat_eta,
+            "typical_p": self.typical_p,
+            "typical_min_keep": self.typical_min_keep,
+            "xtc_probability": self.xtc_probability,
+            "xtc_threshold": self.xtc_threshold,
+            "dynatemp_range": self.dynatemp_range,
+            "dynatemp_exponent": self.dynatemp_exponent,
+            "logit_bias": dict(self.logit_bias) if self.logit_bias else None,
             "n_gpu_layers": self.n_gpu_layers,
             "main_gpu": self.main_gpu,
             "split_mode": self.split_mode,
@@ -216,6 +285,61 @@ class GenerationConfig:
 
         if self.repeat_penalty < 0.0:
             errors.append(f"repeat_penalty must be >= 0.0, got {self.repeat_penalty}")
+
+        if self.penalty_last_n < -1:
+            errors.append(
+                f"penalty_last_n must be >= -1 (-1 = full context, 0 = disabled), "
+                f"got {self.penalty_last_n}"
+            )
+
+        if self.mirostat not in (0, 1, 2):
+            errors.append(f"mirostat must be 0, 1, or 2, got {self.mirostat}")
+
+        if self.mirostat_tau <= 0.0:
+            errors.append(f"mirostat_tau must be > 0.0, got {self.mirostat_tau}")
+
+        if self.mirostat_eta <= 0.0:
+            errors.append(f"mirostat_eta must be > 0.0, got {self.mirostat_eta}")
+
+        if not 0.0 <= self.typical_p <= 1.0:
+            errors.append(f"typical_p must be between 0.0 and 1.0, got {self.typical_p}")
+
+        if self.typical_min_keep < 0:
+            errors.append(f"typical_min_keep must be >= 0, got {self.typical_min_keep}")
+
+        if not 0.0 <= self.xtc_probability <= 1.0:
+            errors.append(
+                f"xtc_probability must be between 0.0 and 1.0, got {self.xtc_probability}"
+            )
+
+        if not 0.0 <= self.xtc_threshold <= 1.0:
+            errors.append(
+                f"xtc_threshold must be between 0.0 and 1.0, got {self.xtc_threshold}"
+            )
+
+        if self.dynatemp_range < 0.0:
+            errors.append(f"dynatemp_range must be >= 0.0, got {self.dynatemp_range}")
+
+        if self.dynatemp_exponent <= 0.0:
+            errors.append(
+                f"dynatemp_exponent must be > 0.0, got {self.dynatemp_exponent}"
+            )
+
+        if self.logit_bias is not None:
+            if not isinstance(self.logit_bias, dict):
+                errors.append(
+                    f"logit_bias must be a dict[int, float] or None, got {type(self.logit_bias).__name__}"
+                )
+            else:
+                for k, v in self.logit_bias.items():
+                    if not isinstance(k, int) or isinstance(k, bool):
+                        errors.append(f"logit_bias keys must be int token ids, got {type(k).__name__}")
+                        break
+                    if not isinstance(v, (int, float)) or isinstance(v, bool):
+                        errors.append(
+                            f"logit_bias values must be numeric, got {type(v).__name__}"
+                        )
+                        break
 
         if self.n_gpu_layers < -1:
             errors.append(f"n_gpu_layers must be >= -1 (-1 = offload all), got {self.n_gpu_layers}")
@@ -1228,16 +1352,81 @@ class LLM:
         if grammar is not None:
             sampler.add_grammar(self.vocab, grammar, grammar_root)
 
+        # Logit bias: applied right after grammar so per-token nudges land
+        # on top of the grammar mask but before any truncation/penalty
+        # stage reshapes the distribution.
+        if config.logit_bias:
+            sampler.add_logit_bias(
+                self.vocab.n_vocab,
+                [(int(tok), float(bias)) for tok, bias in config.logit_bias.items()],
+            )
+
+        # Penalties: applied before the sampling tail. Skip the call entirely
+        # when all three knobs are at their disabled values to avoid an
+        # unnecessary chain stage.
+        if (
+            config.repeat_penalty != 1.0
+            or config.frequency_penalty != 0.0
+            or config.presence_penalty != 0.0
+        ):
+            sampler.add_penalties(
+                config.penalty_last_n,
+                config.repeat_penalty,
+                config.frequency_penalty,
+                config.presence_penalty,
+            )
+
         # Add sampling methods based on config
         if config.temperature == 0.0:
-            # Greedy sampling
+            # Greedy sampling: mirostat is incompatible with greedy.
             sampler.add_greedy()
+        elif config.mirostat != 0:
+            # Mirostat replaces top-k/top-p/min-p/dist with a terminal
+            # sampler that samples directly from the temp-shaped logits.
+            sampler.add_temp(config.temperature)
+            seed = config.seed if config.seed != LLAMA_DEFAULT_SEED else LLAMA_DEFAULT_SEED
+            if config.mirostat == 1:
+                sampler.add_mirostat(
+                    self.vocab.n_vocab,
+                    seed,
+                    config.mirostat_tau,
+                    config.mirostat_eta,
+                    DEFAULT_MIROSTAT_M,
+                )
+            else:  # 2
+                sampler.add_mirostat_v2(
+                    seed,
+                    config.mirostat_tau,
+                    config.mirostat_eta,
+                )
         else:
-            # Probabilistic sampling
+            # Probabilistic sampling. Existing min_p/top_k/top_p ordering
+            # preserved for behavioural compat; typical_p slots between
+            # top_k and top_p, xtc after top_p, matching upstream's
+            # default chain layout.
             sampler.add_min_p(config.min_p, 1)
             sampler.add_top_k(config.top_k)
+            if config.typical_p < 1.0:
+                sampler.add_typical(config.typical_p, config.typical_min_keep)
             sampler.add_top_p(config.top_p, 1)
-            sampler.add_temp(config.temperature)
+            if config.xtc_probability > 0.0:
+                xtc_seed = (
+                    config.seed if config.seed != LLAMA_DEFAULT_SEED else LLAMA_DEFAULT_SEED
+                )
+                sampler.add_xtc(
+                    config.xtc_probability,
+                    config.xtc_threshold,
+                    1,
+                    xtc_seed,
+                )
+            if config.dynatemp_range > 0.0:
+                sampler.add_temp_ext(
+                    config.temperature,
+                    config.dynatemp_range,
+                    config.dynatemp_exponent,
+                )
+            else:
+                sampler.add_temp(config.temperature)
 
             # Distribution sampler
             if config.seed != LLAMA_DEFAULT_SEED:

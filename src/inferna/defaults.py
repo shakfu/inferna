@@ -32,6 +32,28 @@ DEFAULT_PENALTY_LAST_N: int = 64  # last n tokens to penalize (common.h default)
 DEFAULT_PENALTY_FREQ: float = 0.0  # frequency penalty, 0.0 = disabled
 DEFAULT_PENALTY_PRESENT: float = 0.0  # presence penalty, 0.0 = disabled
 
+# Mirostat (alternative to top-k/top-p/min-p sampling).
+# When DEFAULT_MIROSTAT is non-zero, the tail of the sampler chain becomes
+# temp -> mirostat[_v2], replacing top-k/top-p/min-p/dist.
+DEFAULT_MIROSTAT: int = 0  # 0 = off, 1 = mirostat v1, 2 = mirostat v2
+DEFAULT_MIROSTAT_TAU: float = 5.0  # target entropy (llama.cpp default)
+DEFAULT_MIROSTAT_ETA: float = 0.1  # learning rate (llama.cpp default)
+DEFAULT_MIROSTAT_M: int = 100  # v1 only: number of words considered
+
+# Locally-typical sampling. 1.0 = disabled (passthrough).
+DEFAULT_TYPICAL_P: float = 1.0
+DEFAULT_TYPICAL_MIN_KEEP: int = 1  # minimum tokens kept after typical truncation
+
+# XTC ("Exclude Top Choices"). probability=0.0 = disabled.
+# When active, with probability `xtc_probability` removes top tokens whose
+# probability is above `xtc_threshold` (keeps at least one).
+DEFAULT_XTC_PROBABILITY: float = 0.0
+DEFAULT_XTC_THRESHOLD: float = 0.1
+
+# Dynamic temperature. range=0.0 collapses to plain temperature.
+DEFAULT_DYNATEMP_RANGE: float = 0.0
+DEFAULT_DYNATEMP_EXPONENT: float = 1.0
+
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
