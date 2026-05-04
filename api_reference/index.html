@@ -4013,13 +4013,26 @@
 <a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>    <span class="n">top_p</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.95</span>
 <a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>    <span class="n">min_p</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.05</span>
 <a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>    <span class="n">repeat_penalty</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span>
-<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>    <span class="n">n_gpu_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
-<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>    <span class="n">n_ctx</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>    <span class="n">n_batch</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">512</span>
-<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>    <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
-<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>    <span class="n">stop_sequences</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>    <span class="n">add_bos</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
-<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>    <span class="n">parse_special</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>    <span class="n">frequency_penalty</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>    <span class="n">presence_penalty</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>    <span class="n">penalty_last_n</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span>
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>    <span class="n">mirostat</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>    <span class="n">mirostat_tau</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">5.0</span>
+<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>    <span class="n">mirostat_eta</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span>
+<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>    <span class="n">typical_p</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span>
+<a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a>    <span class="n">typical_min_keep</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
+<a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a>    <span class="n">xtc_probability</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+<a id="__codelineno-19-18" name="__codelineno-19-18" href="#__codelineno-19-18"></a>    <span class="n">xtc_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span>
+<a id="__codelineno-19-19" name="__codelineno-19-19" href="#__codelineno-19-19"></a>    <span class="n">dynatemp_range</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>
+<a id="__codelineno-19-20" name="__codelineno-19-20" href="#__codelineno-19-20"></a>    <span class="n">dynatemp_exponent</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span>
+<a id="__codelineno-19-21" name="__codelineno-19-21" href="#__codelineno-19-21"></a>    <span class="n">logit_bias</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+<a id="__codelineno-19-22" name="__codelineno-19-22" href="#__codelineno-19-22"></a>    <span class="n">n_gpu_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+<a id="__codelineno-19-23" name="__codelineno-19-23" href="#__codelineno-19-23"></a>    <span class="n">n_ctx</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+<a id="__codelineno-19-24" name="__codelineno-19-24" href="#__codelineno-19-24"></a>    <span class="n">n_batch</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2048</span>
+<a id="__codelineno-19-25" name="__codelineno-19-25" href="#__codelineno-19-25"></a>    <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mh">0xFFFFFFFF</span>
+<a id="__codelineno-19-26" name="__codelineno-19-26" href="#__codelineno-19-26"></a>    <span class="n">stop_sequences</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+<a id="__codelineno-19-27" name="__codelineno-19-27" href="#__codelineno-19-27"></a>    <span class="n">add_bos</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+<a id="__codelineno-19-28" name="__codelineno-19-28" href="#__codelineno-19-28"></a>    <span class="n">parse_special</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
 </code></pre></div>
 <p><strong>Attributes:</strong></p>
 <ul>
@@ -4042,16 +4055,55 @@
 <p><code>repeat_penalty</code>: Penalty for repeating tokens (default: 1.0, disabled)</p>
 </li>
 <li>
+<p><code>frequency_penalty</code>: OpenAI-style frequency penalty applied to the most recent <code>penalty_last_n</code> tokens (default: 0.0, disabled)</p>
+</li>
+<li>
+<p><code>presence_penalty</code>: OpenAI-style presence penalty applied to the most recent <code>penalty_last_n</code> tokens (default: 0.0, disabled)</p>
+</li>
+<li>
+<p><code>penalty_last_n</code>: Number of recent tokens considered by the penalty samplers. <code>0</code> = disabled, <code>-1</code> = full context window (default: 64)</p>
+</li>
+<li>
+<p><code>mirostat</code>: Mirostat sampling mode. <code>0</code> = off, <code>1</code> = v1, <code>2</code> = v2. When non-zero, the top-k/top-p/min-p/dist tail of the chain is replaced with <code>temp</code> -&gt; <code>mirostat[_v2]</code> (default: 0)</p>
+</li>
+<li>
+<p><code>mirostat_tau</code>: Mirostat target entropy (default: 5.0)</p>
+</li>
+<li>
+<p><code>mirostat_eta</code>: Mirostat learning rate (default: 0.1)</p>
+</li>
+<li>
+<p><code>typical_p</code>: Locally-typical sampling threshold. <code>1.0</code> = disabled (default: 1.0)</p>
+</li>
+<li>
+<p><code>typical_min_keep</code>: Minimum tokens kept after typical truncation (default: 1)</p>
+</li>
+<li>
+<p><code>xtc_probability</code>: Probability of applying XTC ("Exclude Top Choices") truncation. <code>0.0</code> = disabled (default: 0.0)</p>
+</li>
+<li>
+<p><code>xtc_threshold</code>: Probability cutoff above which top tokens become candidates for XTC removal (default: 0.1)</p>
+</li>
+<li>
+<p><code>dynatemp_range</code>: Dynamic temperature range. <code>0.0</code> = use plain <code>temperature</code>; <code>&gt; 0</code> swaps <code>add_temp</code> for <code>add_temp_ext</code> (default: 0.0)</p>
+</li>
+<li>
+<p><code>dynatemp_exponent</code>: Dynamic temperature exponent (default: 1.0)</p>
+</li>
+<li>
+<p><code>logit_bias</code>: Optional <code>{token_id: bias}</code> map applied to the raw logits before any sampler stage. <code>None</code> = no bias. Matches the OpenAI <code>logit_bias</code> shape (default: None)</p>
+</li>
+<li>
 <p><code>n_gpu_layers</code>: GPU layers to offload (default: -1 = all)</p>
 </li>
 <li>
 <p><code>n_ctx</code>: Context window size, None = auto (default: None)</p>
 </li>
 <li>
-<p><code>n_batch</code>: Batch size for processing (default: 512)</p>
+<p><code>n_batch</code>: Batch size for processing (default: 2048)</p>
 </li>
 <li>
-<p><code>seed</code>: Random seed, -1 = random (default: -1)</p>
+<p><code>seed</code>: Random seed (default: <code>0xFFFFFFFF</code> sentinel = let llama.cpp pick a random seed)</p>
 </li>
 <li>
 <p><code>stop_sequences</code>: Strings that stop generation (default: [])</p>

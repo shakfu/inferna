@@ -2848,20 +2848,41 @@
 <a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a>    <span class="n">top_p</span><span class="o">=</span><span class="mf">0.95</span><span class="p">,</span>               <span class="c1"># Nucleus sampling</span>
 <a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a>    <span class="n">min_p</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>               <span class="c1"># Minimum probability threshold</span>
 <a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a>    <span class="n">repeat_penalty</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>       <span class="c1"># Penalize repetition (1.0 = off)</span>
-<a id="__codelineno-20-13" name="__codelineno-20-13" href="#__codelineno-20-13"></a>
-<a id="__codelineno-20-14" name="__codelineno-20-14" href="#__codelineno-20-14"></a>    <span class="c1"># Model parameters</span>
-<a id="__codelineno-20-15" name="__codelineno-20-15" href="#__codelineno-20-15"></a>    <span class="n">n_gpu_layers</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>          <span class="c1"># Layers to offload to GPU (-1 = all)</span>
-<a id="__codelineno-20-16" name="__codelineno-20-16" href="#__codelineno-20-16"></a>    <span class="n">n_ctx</span><span class="o">=</span><span class="mi">2048</span><span class="p">,</span>               <span class="c1"># Context window size</span>
-<a id="__codelineno-20-17" name="__codelineno-20-17" href="#__codelineno-20-17"></a>    <span class="n">n_batch</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span>              <span class="c1"># Batch size for processing</span>
-<a id="__codelineno-20-18" name="__codelineno-20-18" href="#__codelineno-20-18"></a>
-<a id="__codelineno-20-19" name="__codelineno-20-19" href="#__codelineno-20-19"></a>    <span class="c1"># Control</span>
-<a id="__codelineno-20-20" name="__codelineno-20-20" href="#__codelineno-20-20"></a>    <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>                  <span class="c1"># Random seed (-1 = random)</span>
-<a id="__codelineno-20-21" name="__codelineno-20-21" href="#__codelineno-20-21"></a>    <span class="n">stop_sequences</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;END&quot;</span><span class="p">],</span>   <span class="c1"># Stop generation at these strings</span>
-<a id="__codelineno-20-22" name="__codelineno-20-22" href="#__codelineno-20-22"></a>
-<a id="__codelineno-20-23" name="__codelineno-20-23" href="#__codelineno-20-23"></a>    <span class="c1"># Tokenization</span>
-<a id="__codelineno-20-24" name="__codelineno-20-24" href="#__codelineno-20-24"></a>    <span class="n">add_bos</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>             <span class="c1"># Add beginning-of-sequence token</span>
-<a id="__codelineno-20-25" name="__codelineno-20-25" href="#__codelineno-20-25"></a>    <span class="n">parse_special</span><span class="o">=</span><span class="kc">True</span>        <span class="c1"># Parse special tokens</span>
-<a id="__codelineno-20-26" name="__codelineno-20-26" href="#__codelineno-20-26"></a><span class="p">)</span>
+<a id="__codelineno-20-13" name="__codelineno-20-13" href="#__codelineno-20-13"></a>    <span class="n">frequency_penalty</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>    <span class="c1"># OpenAI-style frequency penalty (0.0 = off)</span>
+<a id="__codelineno-20-14" name="__codelineno-20-14" href="#__codelineno-20-14"></a>    <span class="n">presence_penalty</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>     <span class="c1"># OpenAI-style presence penalty (0.0 = off)</span>
+<a id="__codelineno-20-15" name="__codelineno-20-15" href="#__codelineno-20-15"></a>    <span class="n">penalty_last_n</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span>        <span class="c1"># Tokens considered by penalty samplers (-1 = full ctx, 0 = off)</span>
+<a id="__codelineno-20-16" name="__codelineno-20-16" href="#__codelineno-20-16"></a>
+<a id="__codelineno-20-17" name="__codelineno-20-17" href="#__codelineno-20-17"></a>    <span class="c1"># Mirostat (alternative to top-k/top-p/min-p; replaces that chain tail)</span>
+<a id="__codelineno-20-18" name="__codelineno-20-18" href="#__codelineno-20-18"></a>    <span class="n">mirostat</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>               <span class="c1"># 0 = off, 1 = v1, 2 = v2</span>
+<a id="__codelineno-20-19" name="__codelineno-20-19" href="#__codelineno-20-19"></a>    <span class="n">mirostat_tau</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span>         <span class="c1"># Target entropy</span>
+<a id="__codelineno-20-20" name="__codelineno-20-20" href="#__codelineno-20-20"></a>    <span class="n">mirostat_eta</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>         <span class="c1"># Learning rate</span>
+<a id="__codelineno-20-21" name="__codelineno-20-21" href="#__codelineno-20-21"></a>
+<a id="__codelineno-20-22" name="__codelineno-20-22" href="#__codelineno-20-22"></a>    <span class="c1"># Additional truncation samplers</span>
+<a id="__codelineno-20-23" name="__codelineno-20-23" href="#__codelineno-20-23"></a>    <span class="n">typical_p</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>            <span class="c1"># Locally-typical sampling (1.0 = off)</span>
+<a id="__codelineno-20-24" name="__codelineno-20-24" href="#__codelineno-20-24"></a>    <span class="n">typical_min_keep</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>       <span class="c1"># Minimum tokens kept after typical truncation</span>
+<a id="__codelineno-20-25" name="__codelineno-20-25" href="#__codelineno-20-25"></a>    <span class="n">xtc_probability</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>      <span class="c1"># XTC (&quot;Exclude Top Choices&quot;) probability (0.0 = off)</span>
+<a id="__codelineno-20-26" name="__codelineno-20-26" href="#__codelineno-20-26"></a>    <span class="n">xtc_threshold</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>        <span class="c1"># XTC probability cutoff for top-token removal</span>
+<a id="__codelineno-20-27" name="__codelineno-20-27" href="#__codelineno-20-27"></a>
+<a id="__codelineno-20-28" name="__codelineno-20-28" href="#__codelineno-20-28"></a>    <span class="c1"># Dynamic temperature (extends `temperature` when range &gt; 0)</span>
+<a id="__codelineno-20-29" name="__codelineno-20-29" href="#__codelineno-20-29"></a>    <span class="n">dynatemp_range</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>       <span class="c1"># 0.0 = plain temp; &gt; 0 enables temp_ext</span>
+<a id="__codelineno-20-30" name="__codelineno-20-30" href="#__codelineno-20-30"></a>    <span class="n">dynatemp_exponent</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>    <span class="c1"># Dynamic temperature exponent</span>
+<a id="__codelineno-20-31" name="__codelineno-20-31" href="#__codelineno-20-31"></a>
+<a id="__codelineno-20-32" name="__codelineno-20-32" href="#__codelineno-20-32"></a>    <span class="c1"># Logit bias (None = no bias; OpenAI shape: {token_id: bias})</span>
+<a id="__codelineno-20-33" name="__codelineno-20-33" href="#__codelineno-20-33"></a>    <span class="n">logit_bias</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<a id="__codelineno-20-34" name="__codelineno-20-34" href="#__codelineno-20-34"></a>
+<a id="__codelineno-20-35" name="__codelineno-20-35" href="#__codelineno-20-35"></a>    <span class="c1"># Model parameters</span>
+<a id="__codelineno-20-36" name="__codelineno-20-36" href="#__codelineno-20-36"></a>    <span class="n">n_gpu_layers</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>          <span class="c1"># Layers to offload to GPU (-1 = all)</span>
+<a id="__codelineno-20-37" name="__codelineno-20-37" href="#__codelineno-20-37"></a>    <span class="n">n_ctx</span><span class="o">=</span><span class="mi">2048</span><span class="p">,</span>               <span class="c1"># Context window size</span>
+<a id="__codelineno-20-38" name="__codelineno-20-38" href="#__codelineno-20-38"></a>    <span class="n">n_batch</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span>              <span class="c1"># Batch size for processing</span>
+<a id="__codelineno-20-39" name="__codelineno-20-39" href="#__codelineno-20-39"></a>
+<a id="__codelineno-20-40" name="__codelineno-20-40" href="#__codelineno-20-40"></a>    <span class="c1"># Control</span>
+<a id="__codelineno-20-41" name="__codelineno-20-41" href="#__codelineno-20-41"></a>    <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>                  <span class="c1"># Random seed (-1 = random)</span>
+<a id="__codelineno-20-42" name="__codelineno-20-42" href="#__codelineno-20-42"></a>    <span class="n">stop_sequences</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;END&quot;</span><span class="p">],</span>   <span class="c1"># Stop generation at these strings</span>
+<a id="__codelineno-20-43" name="__codelineno-20-43" href="#__codelineno-20-43"></a>
+<a id="__codelineno-20-44" name="__codelineno-20-44" href="#__codelineno-20-44"></a>    <span class="c1"># Tokenization</span>
+<a id="__codelineno-20-45" name="__codelineno-20-45" href="#__codelineno-20-45"></a>    <span class="n">add_bos</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>             <span class="c1"># Add beginning-of-sequence token</span>
+<a id="__codelineno-20-46" name="__codelineno-20-46" href="#__codelineno-20-46"></a>    <span class="n">parse_special</span><span class="o">=</span><span class="kc">True</span>        <span class="c1"># Parse special tokens</span>
+<a id="__codelineno-20-47" name="__codelineno-20-47" href="#__codelineno-20-47"></a><span class="p">)</span>
 </code></pre></div>
 <h3 id="speculative-decoding">Speculative Decoding<a class="headerlink" href="#speculative-decoding" title="Permanent link">&para;</a></h3>
 <p>2-3x speedup with compatible models:</p>
