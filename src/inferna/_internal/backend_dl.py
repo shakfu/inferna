@@ -92,8 +92,8 @@ def _is_backend_candidate(fname: str, siblings: frozenset[str] = frozenset()) ->
     return True
 
 
-def _scan_dir(dirpath: str, results: list[bytes]) -> None:
-    """Append encoded paths of ggml backend candidates in *dirpath*."""
+def _scan_dir(dirpath: str, results: list[str]) -> None:
+    """Append paths of ggml backend candidates in *dirpath*."""
     try:
         entries = os.listdir(dirpath)
     except OSError:
@@ -101,15 +101,15 @@ def _scan_dir(dirpath: str, results: list[bytes]) -> None:
     siblings = frozenset(entries)
     for fname in entries:
         if _is_backend_candidate(fname, siblings):
-            results.append(os.path.join(dirpath, fname).encode())
+            results.append(os.path.join(dirpath, fname))
 
 
-def libs_to_load(site_dir: str) -> list[bytes]:
-    """Return encoded paths of ggml backend libs to load, or ``[]`` if
-    already called.
+def libs_to_load(site_dir: str) -> list[str]:
+    """Return paths of ggml backend libs to load, or ``[]`` if already
+    called.
 
     Scans platform-appropriate wheel repair directories for files
-    matching ``[lib]ggml-*.[so|dll]``.  Returns each path as ``bytes``
+    matching ``[lib]ggml-*.[so|dll]``.  Returns each path as ``str``
     ready for ``ggml_backend_load()``.  Subsequent calls return ``[]``
     so backends are only registered once across all modules sharing the
     same ggml registry.
@@ -123,7 +123,7 @@ def libs_to_load(site_dir: str) -> list[bytes]:
         return []
     _libs_loaded = True
 
-    results: list[bytes] = []
+    results: list[str] = []
     # auditwheel (Linux) / delvewheel (Windows)
     for libs_dir in glob.glob(os.path.join(site_dir, "inferna*.libs")):
         _scan_dir(libs_dir, results)

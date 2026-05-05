@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux GPU wheels (CUDA, Vulkan, ROCm, SYCL): `python -m inferna chat` raised `RuntimeError: std::bad_cast` from `ggml_backend_load_all()`. Root cause: `inferna._internal.backend_dl.libs_to_load` returned `list[bytes]` (paths produced via `os.path.join(...).encode()`), and the C++ side in `src/inferna/common/backend_loader.hpp` cast each entry to `std::string` via `nb::cast<std::string>`. nanobind's `std::string` caster (`nanobind/stl/string.h`) only accepts `PyUnicode`, so the cast failed, and `nb::cast_error` is aliased to `std::bad_cast` in `nanobind/nb_error.h`. The bytes loop is only entered when wheel-repair tools relocate ggml backend libs to `inferna*.libs/` (auditwheel/delvewheel) — macOS dev and delocate-built wheels never tripped it because the `.dylibs/` scan typically returns empty. `libs_to_load` now returns `list[str]`; the C++ caller is unchanged.
+
+- Linux GPU wheels: `python -m inferna.sd txt2img` aborted with `GGML_ASSERT(backend) failed` (exit 134) inside `new_sd_ctx`. `SDContext.__init__` (`src/inferna/sd/_sd_native.cpp`) and the SD CLI both went straight to `new_sd_ctx` without registering ggml backends, so the registry was empty when sd.cpp tried to allocate tensors. macOS Metal hides this via ggml's static-init backend registration; CUDA/Vulkan/ROCm/SYCL are always dlopened lazily and need an explicit `ggml_backend_load_all()`. `SDContextW` now calls `inferna::load_all_backends("inferna.sd._sd_native")` before `new_sd_ctx`, mirroring `LLM.__init__`'s behaviour. The call is idempotent (process-wide guard in `backend_dl._libs_loaded` plus ggml's own dedup of `ggml_backend_load_all_from_path`), so existing call sites that pre-load backends are unaffected.
+
 ## [0.1.3]
 
 ### Added

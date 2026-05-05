@@ -212,6 +212,12 @@ struct SDContextW {
             }
         }
 
+        // Ensure ggml backends are registered before new_sd_ctx, which
+        // asserts on an empty backend registry. Idempotent: a process-wide
+        // guard in inferna._internal.backend_dl skips repeat scans, and
+        // ggml_backend_load_all_from_path itself dedupes registrations.
+        inferna::load_all_backends("inferna.sd._sd_native");
+
         ctx = new_sd_ctx(&params.p);
         if (!ctx) {
             throw std::runtime_error(
