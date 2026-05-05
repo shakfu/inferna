@@ -64,6 +64,13 @@ class ServerConfig:
     embedding: bool = False
     n_parallel: int = 1  # Number of parallel slots
 
+    # When True, the embedded server mounts the browser webui (the
+    # llama.cpp SPA, rebranded) at /, /bundle.{css,js}, /loading.html,
+    # /props, /slots, /metrics. When False (default), those routes 404
+    # and only the OpenAI-compatible API and /health are served.
+    # Ignored by PythonServer, which never serves the webui.
+    serve_webui: bool = False
+
     # Embedding configuration (used when embedding=True)
     embedding_model_path: Optional[str] = None  # defaults to model_path if None
     embedding_n_ctx: int = 512

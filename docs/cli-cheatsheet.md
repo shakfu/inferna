@@ -216,13 +216,14 @@ At least one document source (`-f`/`-d`) **or** an existing `--db` is required.
 
 ## inferna server
 
-Start an OpenAI-compatible HTTP server.
+Start an OpenAI-compatible HTTP server. **API only by default** — pass `-w`/`--webui` to also mount the browser chat UI at `GET /`.
 
 **Also**: `python -m inferna.llama.server`
 
 ```bash
-inferna server -m models/llama.gguf
-inferna server -m models/llama.gguf --port 9090 --server-type python
+inferna server -m models/llama.gguf                                   # API only
+inferna server -m models/llama.gguf -w                                # API + browser UI at http://127.0.0.1:8080/
+inferna server -m models/llama.gguf --port 9090 --server-type python  # pure-Python backend (no webui)
 inferna server -m models/llama.gguf --model-alias my-llama --n-parallel 4
 ```
 
@@ -234,11 +235,12 @@ inferna server -m models/llama.gguf --model-alias my-llama --n-parallel 4
 | `--ctx-size` | int | 2048 | Context window size |
 | `--gpu-layers` | int | -1 | GPU layers to offload (-1 = all) |
 | `--n-parallel` | int | 1 | Number of parallel processing slots |
-| `--model-alias` | string | (filename stem) | Identifier shown in the web UI's "Model" field and `/v1/models[].id` |
-| `--mongoose-log-level` | int | 1 | Mongoose internal log verbosity (0=none, 1=errors, 2=info, 3=debug, 4=verbose). Default silences routine I/O chatter; raise to 3 to debug HTTP-level issues |
-| `--server-type` | choice | embedded | Server implementation: `python` or `embedded` |
+| `--model-alias` | string | (filename stem) | Identifier shown in `/v1/models[].id` (and the web UI's "Model" field when `-w` is set) |
+| `--log-level` | int | 1 | HTTP-layer log verbosity (0=none, 1=errors, 2=info, 3=debug, 4=verbose). Default silences routine I/O chatter; raise to 3 to debug HTTP-level issues |
+| `--server-type` | choice | embedded | Server implementation: `embedded` (in-process Mongoose, C) or `python` (pure-Python `http.server`). `python` never serves the webui regardless of `-w` |
+| `-w, --webui` | flag | off | Mount the browser webui at `/`, plus the supporting routes `/bundle.{css,js}`, `/loading.html`, `/props`, `/slots`, `/metrics`. Embedded backend only |
 
-The embedded server (default) serves a chat web UI at `GET /`. See [Server Usage Examples](server_usage_examples.md) for the full endpoint surface and SSE streaming details.
+See [Server Usage Examples](server_usage_examples.md) for the full endpoint surface and SSE streaming details.
 
 ---
 

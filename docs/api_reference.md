@@ -1293,7 +1293,7 @@ Three OpenAI-compatible server implementations.
 
 ### Embedded Server (C/Mongoose) — recommended
 
-Mongoose-backed HTTP server with built-in chat web UI and SSE streaming. Uses Python worker threads for token generation so streamed tokens flush to the wire as they're produced. Configured via `ServerConfig`.
+Mongoose-backed HTTP server with SSE streaming. Uses Python worker threads for token generation so streamed tokens flush to the wire as they're produced. Configured via `ServerConfig`. The browser webui is **opt-in** via `serve_webui=True` (default `False`); without it, only the OpenAI-compatible API and `/health` are served.
 
 ```python
 from inferna.llama.server.python import ServerConfig
@@ -1307,7 +1307,8 @@ server = start_embedded_server(
     n_ctx=2048,
     n_gpu_layers=-1,
     n_parallel=2,
-    model_alias="my-llama",  # shown in the web UI's Model field
+    model_alias="my-llama",  # exposed via /v1/models[].id (and the webui's Model field if enabled)
+    serve_webui=True,        # mount the browser UI at GET /
 )
 # Server is now accepting requests; point a browser at http://127.0.0.1:8080/
 # for the chat UI, or use any OpenAI-compatible client against /v1/...
@@ -1326,6 +1327,7 @@ config = ServerConfig(
     n_parallel=2,
     embedding=True,                      # enables /v1/embeddings
     embedding_model_path="models/bge-small-en-v1.5-q8_0.gguf",
+    serve_webui=False,                   # default — API only, no browser UI
 )
 
 with EmbeddedServer(config) as server:

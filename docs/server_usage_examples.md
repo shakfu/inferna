@@ -1,6 +1,16 @@
 # Inferna Server Usage Examples
 
-Inferna ships an embedded OpenAI-compatible HTTP server with a built-in chat web UI (a rebrand of llama.cpp's reference webui), plus a pure-Python fallback for environments without the compiled mongoose extension.
+Inferna ships an embedded OpenAI-compatible HTTP server with an optional built-in chat web UI (a rebrand of llama.cpp's reference webui), plus a pure-Python fallback for environments without the compiled mongoose extension.
+
+A single subcommand, `inferna server`, drives all three configurations:
+
+| Invocation | Backend | Webui routes | API routes |
+|---|---|---|---|
+| `inferna server` | embedded | 404 | served |
+| `inferna server -w` (`--webui`) | embedded | served | served |
+| `inferna server --server-type python` | python | n/a (never served) | served |
+
+The webui is opt-in. Library callers control it via `ServerConfig(serve_webui=True)`; the dataclass default is `False` to match the CLI default.
 
 ## Server Types
 
@@ -8,29 +18,37 @@ Inferna ships an embedded OpenAI-compatible HTTP server with a built-in chat web
 
 - C networking via the [Mongoose](https://mongoose.ws/) library, bound to Python through nanobind
 - Single-threaded poll loop on the main thread; per-stream worker threads for concurrent token generation
-- Serves the upstream [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui) web UI at `GET /` (gzipped at build time, served with `Content-Encoding: gzip`)
+- Mounts the upstream [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui) web UI at `GET /` when `serve_webui=True` (gzipped at build time, served with `Content-Encoding: gzip`)
+- When `serve_webui=False` (the default), webui routes (`/`, `/index.html`, `/bundle.{css,js}`, `/loading.html`, `/props`, `/slots`, `/metrics`) return 404 — the OpenAI-compatible API and `/health` remain available
 - Compiled as part of the standard `make build`
 
 ### 2. Python Server (`PythonServer`)
 
 - Pure Python HTTP server (stdlib `http.server`)
 - No compiled mongoose dependency
+- Never serves the webui (the static asset routes simply do not exist in this backend)
 - Useful for development and environments where the embedded extension can't be loaded
 
 ## Basic Usage
 
-### Start the Embedded Server (default)
+### Start the API server (no webui)
 
 ```bash
-python -m inferna.llama.server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf
+inferna server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf
+```
+
+### Start the API server with the browser UI
+
+```bash
+inferna server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf -w
 ```
 
 Open http://127.0.0.1:8080/ in a browser to use the chat UI.
 
-### Use the Python Server
+### Use the Python Server (no webui, no native extension)
 
 ```bash
-python -m inferna.llama.server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf --server-type python
+inferna server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf --server-type python
 ```
 
 ## CLI Flags
@@ -44,8 +62,9 @@ python -m inferna.llama.server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf --serve
 | `--gpu-layers` | `-1` | GPU layers to offload (-1 = all) |
 | `--n-parallel` | `1` | Number of concurrent processing slots |
 | `--model-alias` | (filename stem) | Identifier shown in the UI's "Model" field and `/v1/models[].id`. Defaults to the model filename without extension. |
-| `--mongoose-log-level` | `1` (errors only) | Mongoose internal log verbosity. `0`=none, `1`=errors only (default), `2`=info, `3`=debug (every accept/read/write/close — useful for HTTP-level debugging), `4`=verbose |
+| `--log-level` | `1` (errors only) | HTTP-layer log verbosity. `0`=none, `1`=errors only (default), `2`=info, `3`=debug (every accept/read/write/close — useful for HTTP-level debugging), `4`=verbose |
 | `--server-type` | `embedded` | `embedded` or `python` |
+| `-w, --webui` | off | Mount the browser webui on the embedded backend. No effect on `--server-type=python` |
 
 ## Advanced Configuration
 
@@ -70,10 +89,10 @@ python -m inferna.llama.server \
     --model-alias my-llama
 ```
 
-### Verbose mongoose tracing for HTTP debugging
+### Verbose HTTP-layer tracing for debugging
 
 ```bash
-python -m inferna.llama.server -m models/llama.gguf --mongoose-log-level 3
+python -m inferna.llama.server -m models/llama.gguf --log-level 3
 ```
 
 ## Logging
@@ -88,7 +107,7 @@ INFO:inferna.llama.server.embedded.access:stream-done conn=14a82e4f0 model=Llama
 
 Streaming chat completions emit two lines: one when the dispatcher returns (covers headers + the role-only opener), and a second `stream-done` (or `stream-cancel` if the client dropped) when the SSE stream finishes, with the cumulative byte count and end-to-end timing.
 
-Mongoose's built-in tracer is silenced by default — raise it with `--mongoose-log-level 3` if you need to see the underlying connection events.
+The HTTP-layer tracer is silenced by default — raise it with `--log-level 3` if you need to see the underlying connection events.
 
 ## Web UI
 

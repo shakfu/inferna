@@ -143,9 +143,9 @@ PY_VER_MINOR = sys.version_info.minor
 # LLAMACPP_VERSION=master) if you need to test against a newer revision.
 # (Previously gated behind a STABLE_BUILD flag whose two branches carried
 # identical values — the flag was a no-op.)
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b8931")
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b9025")
 WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.8.4")
-SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-587-b8bdffc")
+SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-593-3d6064b")
 SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "0.9.95")
 if PLATFORM == "Darwin":
     # Source of truth: matches pyproject.toml [tool.cibuildwheel.macos]
@@ -1246,22 +1246,21 @@ class LlamaCppBuilder(GgmlBuilder):
                     f"required webui asset missing: {in_path}. LLAMACPP_VERSION={self.version} may not include it."
                 )
 
-        # Brand-string rewrites applied to bundle.js before gzipping. The
-        # upstream bundle hard-codes "llama.cpp" in three places: the page
-        # title (default + active-conversation suffix) and the
-        # connection-init status toast. We do exact-substring substitution
-        # — the bundle ships without source maps, so length-changing
-        # replacements are safe.
+        # Brand-string rewrites applied to bundle.js before gzipping. As of
+        # upstream b9025 the bundle centralizes the brand in an APP_NAME
+        # constant referenced by the navbar/empty-state <h1>s and the
+        # default document title. The active-conversation title suffix and
+        # the connection-init toast still hard-code "llama.cpp" verbatim.
+        # Exact-substring substitution — bundle ships without source maps,
+        # so length-changing replacements are safe.
         brand_subs: dict[str, dict[bytes, bytes]] = {
             "bundle.js": {
-                # Tab title — default and active-conversation suffix.
-                b'"llama.cpp - AI Chat Interface"': b'"inferna"',
+                # Central brand constant — drives <h1> hero + default title.
+                b'APP_NAME="llama.cpp"': b'APP_NAME="inferna"',
+                # Active-conversation tab title suffix.
                 b"} - llama.cpp`": b"} - inferna`",
                 # Connection-init status toast.
                 b"Initializing connection to llama.cpp server": (b"Initializing connection to inferna server"),
-                # Visible <h1> headings (empty-state hero + navbar brand).
-                # Both upstream <h1>s contain exactly ">llama.cpp</h1>".
-                b">llama.cpp</h1>": b">inferna</h1>",
             },
         }
 

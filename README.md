@@ -21,7 +21,7 @@ How inferna differs from cyllama:
 | **Minimum Python** | 3.12 | 3.10 |
 | **Release cadence** | tracks major upstream releases of `llama.cpp` / `stable-diffusion.cpp` | tracks bleeding-edge `llama.cpp` / `stable-diffusion.cpp`, updated frequently |
 | **Release lineage** | `0.1.0` corresponds to cyllama `0.2.14` | -- |
-| **Embedded web UI** | ships a chat webui (rebrand of llama.cpp's reference [llama-server webui](https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui)) at `GET /` on `EmbeddedServer`, with SSE streaming | API-only |
+| **Embedded web UI** | ships an opt-in chat webui (rebrand of llama.cpp's reference [llama-server webui](https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui)) — mount with `inferna server -w` or `ServerConfig(serve_webui=True)`; SSE streaming | API-only |
 
 ## Features
 
@@ -43,7 +43,7 @@ How inferna differs from cyllama:
 
 - Image/Video generation -- stable-diffusion.cpp handles image, image-edit and video models.
 
-- OpenAI-compatible servers -- EmbeddedServer (C/Mongoose) with built-in chat web UI and SSE streaming, plus a pure-Python fallback (PythonServer); both expose chat-completions and embeddings endpoints
+- OpenAI-compatible servers -- EmbeddedServer (C/Mongoose) with SSE streaming and an opt-in chat web UI (`-w`/`serve_webui=True`), plus a pure-Python fallback (PythonServer); both expose chat-completions and embeddings endpoints
 
 - Framework integrations -- OpenAI API client, LangChain LLM interface
 
@@ -134,7 +134,8 @@ inferna rag -m models/llama.gguf -e models/bge-small.gguf -d docs/ -p "How do I 
 inferna rag -m models/llama.gguf -e models/bge-small.gguf -f file.md   # interactive mode
 inferna rag -m models/llama.gguf -e models/bge-small.gguf -d docs/ --db docs.sqlite -p "..."  # index to persistent DB
 inferna rag -m models/llama.gguf -e models/bge-small.gguf --db docs.sqlite -p "..."           # reuse existing DB, no re-indexing
-inferna server -m models/llama.gguf --port 8080         # then open http://127.0.0.1:8080/ for the chat UI
+inferna server -m models/llama.gguf --port 8080         # OpenAI-compatible API only
+inferna server -m models/llama.gguf --port 8080 -w      # API + browser chat UI at http://127.0.0.1:8080/
 inferna transcribe -m models/ggml-base.en.bin audio.wav
 inferna tts -m models/tts.gguf -p "Hello world"
 inferna sd txt2img --model models/sd.gguf --prompt "a sunset"

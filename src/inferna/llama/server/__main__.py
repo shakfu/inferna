@@ -7,7 +7,7 @@ from .python import ServerConfig, PythonServer
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Llama.cpp Server")
+    parser = argparse.ArgumentParser(description="inferna API server (OpenAI-compatible)")
     parser.add_argument("-m", "--model", required=True, help="Path to model file")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
@@ -21,12 +21,12 @@ def main() -> int:
         "Defaults to the model file's basename without extension.",
     )
     parser.add_argument(
-        "--mongoose-log-level",
+        "--log-level",
         type=int,
         default=None,
         choices=[0, 1, 2, 3, 4],
-        help="Mongoose internal log verbosity. 0=none, 1=errors only (inferna default), "
-        "2=info, 3=debug (mongoose's default — every accept/read/write/close), 4=verbose. "
+        help="HTTP-layer log verbosity. 0=none, 1=errors only (default), "
+        "2=info, 3=debug (every accept/read/write/close), 4=verbose. "
         "Most users want this off; set to 3 to debug HTTP-level issues.",
     )
     parser.add_argument(
@@ -34,6 +34,16 @@ def main() -> int:
         choices=["python", "embedded"],
         default="embedded",
         help="Server implementation to use: python (pure Python) or embedded (high-performance C). Default: embedded",
+    )
+    parser.add_argument(
+        "-w",
+        "--webui",
+        dest="serve_webui",
+        action="store_true",
+        default=False,
+        help="Enable the browser webui at http://host:port/ (embedded server only; "
+        "no effect on --server-type=python which never serves the webui). "
+        "Without this flag, only the OpenAI-compatible API and /health are served.",
     )
 
     args = parser.parse_args()
@@ -49,6 +59,7 @@ def main() -> int:
         n_gpu_layers=args.gpu_layers,
         n_parallel=args.n_parallel,
         model_alias=model_alias,
+        serve_webui=args.serve_webui,
     )
 
     if args.server_type == "embedded":
@@ -58,8 +69,8 @@ def main() -> int:
             print("Starting embedded server (high-performance C implementation)")
 
             server = EmbeddedServer(config)
-            if args.mongoose_log_level is not None:
-                server.set_mongoose_log_level(args.mongoose_log_level)
+            if args.log_level is not None:
+                server.set_mongoose_log_level(args.log_level)
 
             if not server.start():
                 print("Failed to start embedded server")

@@ -972,7 +972,7 @@ def main() -> int:
 
     # -- delegation commands ----------------------------------------------
     # add_help=False so --help passes through to the delegate's own parser
-    subparsers.add_parser("server", help="Start OpenAI-compatible API server", add_help=False)
+    subparsers.add_parser("server", help="Start OpenAI-compatible API server (use -w/--webui to also serve the browser UI)", add_help=False)
     subparsers.add_parser("transcribe", help="Speech-to-text transcription", add_help=False)
     subparsers.add_parser("tts", help="Text-to-speech synthesis", add_help=False)
     subparsers.add_parser("sd", help="Stable Diffusion image generation", add_help=False)

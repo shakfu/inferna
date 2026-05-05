@@ -504,28 +504,29 @@ class EmbeddedServer:
         path = uri.split("?", 1)[0]
         try:
             if method == "GET":
-                if path == "/" or path == "/index.html":
-                    self._handle_webui_asset(conn, "index.html")
-                elif path == "/bundle.css":
-                    self._handle_webui_asset(conn, "bundle.css")
-                elif path == "/bundle.js":
-                    self._handle_webui_asset(conn, "bundle.js")
-                elif path == "/loading.html":
-                    self._handle_webui_asset(conn, "loading.html")
-                elif path == "/health":
+                webui = self._config.serve_webui
+                if path == "/health":
                     conn.send_json({"status": "ok"})
-                elif path == "/props":
+                elif path == "/v1/models":
+                    self._handle_models(conn)
+                elif webui and (path == "/" or path == "/index.html"):
+                    self._handle_webui_asset(conn, "index.html")
+                elif webui and path == "/bundle.css":
+                    self._handle_webui_asset(conn, "bundle.css")
+                elif webui and path == "/bundle.js":
+                    self._handle_webui_asset(conn, "bundle.js")
+                elif webui and path == "/loading.html":
+                    self._handle_webui_asset(conn, "loading.html")
+                elif webui and path == "/props":
                     self._handle_props(conn)
-                elif path == "/slots":
+                elif webui and path == "/slots":
                     self._handle_slots(conn)
-                elif path == "/metrics":
+                elif webui and path == "/metrics":
                     # Prometheus scrape endpoint. The webui calls this but
                     # tolerates an empty exposition; we return 200 with no
                     # series rather than a 404 (which would log noise).
                     if conn._mgr is not None:
                         conn._mgr.send_reply(conn._conn_id, 200, "Content-Type: text/plain; version=0.0.4\r\n", "")
-                elif path == "/v1/models":
-                    self._handle_models(conn)
                 else:
                     conn.send_error(404, "Not Found")
             elif method == "POST":

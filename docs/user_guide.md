@@ -149,7 +149,8 @@ inferna rag -m models/llama.gguf -e models/bge-small.gguf \
 ### Other Commands
 
 ```bash
-inferna server -m models/llama.gguf    # OpenAI-compatible server
+inferna server -m models/llama.gguf       # OpenAI-compatible API server
+inferna server -m models/llama.gguf -w    # ...plus browser chat UI at http://127.0.0.1:8080/
 inferna transcribe -m models/ggml-base.en.bin audio.wav
 inferna tts -m models/tts.gguf -p "Hello world"
 inferna sd txt2img --model models/sd.gguf --prompt "a sunset"
