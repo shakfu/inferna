@@ -627,7 +627,20 @@ set_target_properties(_llama_native PROPERTIES
     INSTALL_RPATH "${_LLAMA_NATIVE_RPATH}"
 )
 if(WITH_DYLIB)
-    target_link_libraries(_llama_native PRIVATE ${DYLIBS} ${SYSTEM_LIBS})
+    # Wrap DYLIBS with --no-as-needed/--as-needed on Linux so the backend
+    # libs (ggml-cuda, ggml-vulkan, ...) are retained as NEEDED entries
+    # even though no symbols from them are directly referenced (ggml uses
+    # dlopen to load backends at runtime). manylinux2014's old toolchain
+    # defaults to --no-as-needed so CI wheels work without this; Ubuntu's
+    # default --as-needed silently strips the entries, leaving auditwheel
+    # nothing to chase and producing wheels missing the backend libs.
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(_llama_native PRIVATE
+            -Wl,--no-as-needed ${DYLIBS} -Wl,--as-needed
+            ${SYSTEM_LIBS})
+    else()
+        target_link_libraries(_llama_native PRIVATE ${DYLIBS} ${SYSTEM_LIBS})
+    endif()
 elseif(UNIX AND NOT APPLE)
     set(_GGML_LIBS ${LIB_GGML} ${LIB_GGML_BASE} ${LIB_GGML_CPU})
     if(GGML_METAL)
@@ -738,12 +751,23 @@ if(WITH_WHISPER)
     )
 
     if(WITH_DYLIB)
-        target_link_libraries(_whisper_native PRIVATE
-            ${LIB_WHISPER}
-            ${LIB_WHISPER_COMMON}
-            ${DYLIBS}
-            ${SYSTEM_LIBS}
-        )
+        # See _llama_native: --no-as-needed retains backend libs (ggml-cuda
+        # etc.) in NEEDED so auditwheel/delocate can chase and bundle them.
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(_whisper_native PRIVATE
+                ${LIB_WHISPER}
+                ${LIB_WHISPER_COMMON}
+                -Wl,--no-as-needed ${DYLIBS} -Wl,--as-needed
+                ${SYSTEM_LIBS}
+            )
+        else()
+            target_link_libraries(_whisper_native PRIVATE
+                ${LIB_WHISPER}
+                ${LIB_WHISPER_COMMON}
+                ${DYLIBS}
+                ${SYSTEM_LIBS}
+            )
+        endif()
         set_target_properties(_whisper_native PROPERTIES
             BUILD_RPATH "${LLAMACPP_DYLIB_DIR};${WHISPERCPP_LIB}"
             INSTALL_RPATH "${LLAMACPP_DYLIB_DIR};${WHISPERCPP_LIB}"
@@ -826,13 +850,22 @@ if(WITH_STABLEDIFFUSION)
 
 
     if(WITH_DYLIB AND NOT SD_USE_VENDORED_GGML)
-        # Dynamic: link libstable-diffusion.a statically, reuse llama.cpp's ggml dylibs
+        # Dynamic: link libstable-diffusion.a statically, reuse llama.cpp's ggml dylibs.
+        # See _llama_native: --no-as-needed retains backend libs in NEEDED.
         target_link_directories(_sd_native PRIVATE "${SDCPP_LIB}" ${COMMON_LINK_DIRS})
-        target_link_libraries(_sd_native PRIVATE
-            "${LIB_SD}"
-            ${DYLIBS}
-            ${SYSTEM_LIBS}
-        )
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(_sd_native PRIVATE
+                "${LIB_SD}"
+                -Wl,--no-as-needed ${DYLIBS} -Wl,--as-needed
+                ${SYSTEM_LIBS}
+            )
+        else()
+            target_link_libraries(_sd_native PRIVATE
+                "${LIB_SD}"
+                ${DYLIBS}
+                ${SYSTEM_LIBS}
+            )
+        endif()
 
         set_target_properties(_sd_native PROPERTIES
             BUILD_RPATH "${LLAMACPP_DYLIB_DIR};${SDCPP_LIB}"

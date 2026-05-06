@@ -252,6 +252,9 @@ download-all: $(MODEL) $(MODEL_RAG) $(MODEL_LLAVA)
 .PHONY: wheel-cpu wheel-metal wheel-cuda wheel-vulkan wheel-sycl wheel-hip wheel-opencl
 .PHONY: wheel-cpu-dynamic wheel-metal-dynamic wheel-cuda-dynamic wheel-vulkan-dynamic
 .PHONY: wheel-sycl-dynamic wheel-hip-dynamic wheel-opencl-dynamic
+.PHONY: wheel-metal-abi3-dynamic wheel-cuda-abi3-dynamic wheel-vulkan-abi3-dynamic
+.PHONY: wheel-sycl-abi3-dynamic wheel-hip-abi3-dynamic wheel-opencl-abi3-dynamic
+.PHONY: wheel-repair
 
 show-backends:
 	@echo "Current backend configuration:"
@@ -346,30 +349,147 @@ wheel-opencl:
 wheel-cpu-dynamic:
 	@$(_CPU_ONLY) WITH_DYLIB=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@$(_CPU_ONLY) WITH_DYLIB=1 uv build --wheel
+	@$(MAKE) wheel-repair BACKEND=cpu
 
 wheel-metal-dynamic:
 	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
+	@$(MAKE) wheel-repair BACKEND=metal
 
 wheel-cuda-dynamic:
 	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} uv build --wheel
+	@$(MAKE) wheel-repair BACKEND=cuda
 
 wheel-vulkan-dynamic:
 	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
+	@$(MAKE) wheel-repair BACKEND=vulkan
 
 wheel-sycl-dynamic:
 	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
+	@$(MAKE) wheel-repair BACKEND=sycl
 
 wheel-hip-dynamic:
 	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
+	@$(MAKE) wheel-repair BACKEND=hip
 
 wheel-opencl-dynamic:
 	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
+	@$(MAKE) wheel-repair BACKEND=opencl
+
+# ABI3 + dynamic + GPU backend: stable-ABI wheels (cp312-abi3) with dlopen'd
+# ggml backends. Combines wheel-abi3's cmake/py-api flags with the matching
+# wheel-<backend>-dynamic deps build.
+_ABI3_FLAGS := --config-setting=cmake.define.INFERNA_ABI3=ON --config-setting=wheel.py-api=cp312
+
+wheel-metal-abi3-dynamic:
+	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
+	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
+	@$(MAKE) wheel-repair BACKEND=metal
+
+wheel-cuda-abi3-dynamic:
+	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
+	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} uv build --wheel $(_ABI3_FLAGS)
+	@$(MAKE) wheel-repair BACKEND=cuda
+
+wheel-vulkan-abi3-dynamic:
+	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
+	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
+	@$(MAKE) wheel-repair BACKEND=vulkan
+
+wheel-sycl-abi3-dynamic:
+	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
+	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
+	@$(MAKE) wheel-repair BACKEND=sycl
+
+wheel-hip-abi3-dynamic:
+	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
+	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
+	@$(MAKE) wheel-repair BACKEND=hip
+
+wheel-opencl-abi3-dynamic:
+	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
+	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
+	@$(MAKE) wheel-repair BACKEND=opencl
+
+# =============================================================================
+# Wheel repair
+# =============================================================================
+#
+# Per-backend `--exclude` lists mirroring CI (.github/workflows/_gpu-build-*.yml
+# and build-gpu-wheels.yml). Excluded libs are vendor/driver-provided runtimes
+# the wheel must NOT bundle — the user's installed GPU driver supplies them at
+# load time, and bundling them would either break ABI or duplicate the driver.
+#
+# Linux (auditwheel) — keep in sync with CIBW_REPAIR_WHEEL_COMMAND_LINUX.
+_EXC_LINUX_cpu     :=
+_EXC_LINUX_cuda    := --exclude libcuda.so.1 --exclude libcudart.so.12 --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libgomp.so.1
+_EXC_LINUX_vulkan  := --exclude libvulkan.so.1 --exclude libgomp.so.1
+_EXC_LINUX_hip     := --exclude libamdhip64.so.6 --exclude libhipblas.so.2 --exclude librocblas.so.4 --exclude libhsa-runtime64.so.1 --exclude librocsolver.so.0 --exclude libhipblaslt.so.0 --exclude libamd_comgr.so.2 --exclude librocprofiler-register.so.0 --exclude libgomp.so.1
+_EXC_LINUX_sycl    := --exclude libsycl.so.8 --exclude libOpenCL.so.1 --exclude libsvml.so --exclude libimf.so --exclude libintlc.so.5 --exclude libtbb.so.12 --exclude libgomp.so.1
+_EXC_LINUX_opencl  := --exclude libOpenCL.so.1 --exclude libgomp.so.1
+_EXC_LINUX_metal   :=
+#
+# macOS (delocate) — baseline excludes libssl/libcrypto (matches
+# pyproject.toml [tool.cibuildwheel.macos]); Vulkan adds libvulkan +
+# libMoltenVK (CIBW_REPAIR_WHEEL_COMMAND_MACOS in _gpu-build-vulkan-macos-intel.yml).
+_EXC_DARWIN_BASE   := --exclude libssl --exclude libcrypto
+_EXC_DARWIN_cpu    := $(_EXC_DARWIN_BASE)
+_EXC_DARWIN_metal  := $(_EXC_DARWIN_BASE)
+_EXC_DARWIN_vulkan := $(_EXC_DARWIN_BASE) --exclude libvulkan --exclude libMoltenVK
+_EXC_DARWIN_cuda   := $(_EXC_DARWIN_BASE)
+_EXC_DARWIN_hip    := $(_EXC_DARWIN_BASE)
+_EXC_DARWIN_sycl   := $(_EXC_DARWIN_BASE)
+_EXC_DARWIN_opencl := $(_EXC_DARWIN_BASE)
+
+# Resolve excludes from $(BACKEND). When BACKEND is unset (manual `make
+# wheel-repair`), no excludes are applied — the resulting wheel is fat
+# but functional for local testing.
+BACKEND ?=
+_EXCLUDES_LINUX  := $(_EXC_LINUX_$(BACKEND))
+_EXCLUDES_DARWIN := $(_EXC_DARWIN_$(BACKEND))
+
+# Help auditwheel/delocate find the dynamic libs that the extensions link
+# against. Build artefacts in thirdparty/.../dynamic carry rpath, but
+# adding LD_LIBRARY_PATH/DYLD_LIBRARY_PATH is a safety net (and matches
+# what the GPU CI workflows do).
+_DYNLIB_DIRS := $(THIRDPARTY)/llama.cpp/dynamic:$(THIRDPARTY)/sd.cpp/dynamic:$(THIRDPARTY)/whisper.cpp/dynamic
+
+# Repair the most recently built unrepaired wheel in dist/ — bundles the
+# shared-library deps (ggml backends, llama, sd, etc.) into the wheel via
+# auditwheel (Linux), delocate (macOS), or delvewheel (Windows). Mirrors the
+# repair-wheel-command from pyproject.toml's [tool.cibuildwheel.*] tables and
+# the per-backend CIBW_REPAIR_WHEEL_COMMAND_<PLAT> overrides in
+# .github/workflows/, so direct `uv build --wheel` runs produce a wheel
+# equivalent to a CI-built one.
+#
+# Each `wheel-<backend>-dynamic` and `wheel-<backend>-abi3-dynamic` target
+# chains `$(MAKE) wheel-repair BACKEND=<backend>` so the build-and-repair
+# flow is one `make` invocation. Standalone `make wheel-repair` (no BACKEND)
+# still works for ad-hoc repair of a wheel sitting in dist/.
+wheel-repair:
+ifeq ($(UNAME_S),Linux)
+	@for whl in dist/*-linux_*.whl; do \
+		[ -e "$$whl" ] || { echo "wheel-repair: no unrepaired linux wheel in dist/"; exit 0; }; \
+		LD_LIBRARY_PATH=$(_DYNLIB_DIRS):$$LD_LIBRARY_PATH \
+			uvx auditwheel repair -w dist $(_EXCLUDES_LINUX) "$$whl" && rm -f "$$whl"; \
+	done
+else ifeq ($(UNAME_S),Darwin)
+	@for whl in dist/*.whl; do \
+		[ -e "$$whl" ] || { echo "wheel-repair: no wheel in dist/"; exit 0; }; \
+		DYLD_LIBRARY_PATH=$(_DYNLIB_DIRS):$$DYLD_LIBRARY_PATH \
+			uvx --from delocate delocate-wheel -v -w dist $(_EXCLUDES_DARWIN) "$$whl"; \
+	done
+else
+	@for whl in dist/*.whl; do \
+		[ -e "$$whl" ] || { echo "wheel-repair: no wheel in dist/"; exit 0; }; \
+		uvx delvewheel repair -w dist "$$whl"; \
+	done
+endif
 
 # =============================================================================
 # CLI and server tests
