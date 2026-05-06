@@ -1015,4 +1015,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main() or 0)
+    from inferna._internal.cli_exit import cli_runtime
+
+    with cli_runtime():
+        sys.exit(main() or 0)
