@@ -1,8 +1,10 @@
 """Fast-exit context manager for inferna CLI entrypoints.
 
 Skips Python interpreter finalization on the way out, which avoids
-segfaults in CUDA/Vulkan backend static destructors during ``dlclose``
-at shutdown. Library users who import inferna are unaffected — only
+segfaults in ggml GPU backend static destructors during ``dlclose`` at
+shutdown. The issue is not driver-specific — it reproduces across CUDA,
+Vulkan, and (by the same dlopen/dlclose teardown pattern) is expected on
+ROCm and SYCL too. Library users who import inferna are unaffected — only
 the ``python -m inferna ...`` style entrypoints opt in.
 """
 
