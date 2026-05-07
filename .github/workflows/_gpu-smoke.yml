@@ -155,6 +155,134 @@ jobs:
           fi
           pip install "${{ steps.find-wheel.outputs.wheel }}"
 
+      # ----- GPU runtime install (per-backend) -----
+      # Dynamic-link wheels exclude the GPU runtime libs (libcudart, libhipblas,
+      # libsycl, ...) via auditwheel/delvewheel `--exclude` / `--no-dll`.
+      # Stock GitHub runners have no GPU toolkit installed, so `import inferna`
+      # would otherwise fail with `ImportError: libX.so.N`. We install the
+      # minimum runtime DSOs/DLLs here, before the import smoke step.
+
+      # CUDA Linux: cudart + cublas come from PyPI nvidia-* wheels; expose
+      # their lib dirs on LD_LIBRARY_PATH for subsequent steps.
+      - name: Install CUDA runtime libs (CUDA Linux)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'cuda'
+        shell: bash
+        run: |
+          source smoke-venv/bin/activate
+          pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
+          PURELIB=$(python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
+          CUDART_DIR="$PURELIB/nvidia/cuda_runtime/lib"
+          CUBLAS_DIR="$PURELIB/nvidia/cublas/lib"
+          ls "$CUDART_DIR" "$CUBLAS_DIR"
+          echo "LD_LIBRARY_PATH=$CUDART_DIR:$CUBLAS_DIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+
+      # CUDA Windows: install cudart + cublas redist DLLs via Jimver. The
+      # action sets CUDA_PATH but its PATH export is sometimes flaky, so we
+      # also append `%CUDA_PATH%\bin` to $GITHUB_PATH explicitly and dump the
+      # bin contents for diagnostics — we need cudart64_12.dll, cublas64_12.dll
+      # and cublasLt64_12.dll all visible by the time the DLL link test runs.
+      - name: Install CUDA Toolkit (CUDA Windows)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'cuda-windows'
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: '12.4.0'
+          method: network
+          sub-packages: '["cudart", "cublas"]'
+
+      - name: Verify CUDA runtime DLLs (CUDA Windows)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'cuda-windows'
+        shell: bash
+        run: |
+          echo "CUDA_PATH=$CUDA_PATH"
+          ls -la "$CUDA_PATH/bin" || true
+          # Re-export bin dir to $GITHUB_PATH for subsequent steps; idempotent
+          # if Jimver already added it.
+          echo "$CUDA_PATH\\bin" >> "$GITHUB_PATH"
+          # Sanity check the three DLLs the wheel needs.
+          for dll in cudart64_12.dll cublas64_12.dll cublasLt64_12.dll; do
+            if [ ! -f "$CUDA_PATH/bin/$dll" ]; then
+              echo "::error::Missing $dll under $CUDA_PATH/bin"; exit 1
+            fi
+          done
+
+      # Vulkan Windows: ggml-vulkan.dll links against the Vulkan loader
+      # (vulkan-1.dll), normally shipped with the GPU driver. windows-latest
+      # has no driver, so install just the runtime/loader via chocolatey.
+      - name: Install Vulkan runtime (Vulkan Windows)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'vulkan-windows'
+        shell: pwsh
+        run: |
+          choco install vulkan-runtime --confirm --no-progress
+
+      # Vulkan macOS Intel: the dylib's NEEDED is `@rpath/libvulkan.1.dylib`.
+      # macos-15-intel ships neither the loader nor MoltenVK; install via
+      # Homebrew (Intel prefix is /usr/local, which the dyld error already
+      # showed as one of the searched rpath fallbacks).
+      - name: Install Vulkan loader (Vulkan macOS Intel)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'vulkan-macos-intel'
+        shell: bash
+        run: |
+          brew update
+          brew install vulkan-loader molten-vk
+          ls -la /usr/local/lib/libvulkan*.dylib || true
+
+      # ROCm Linux: install hip + rocBLAS / hipBLAS runtimes from AMD's apt
+      # repo. We deliberately avoid the full `rocm-libs` meta-package — it
+      # pulls in several GB of dev headers we don't need for an import test.
+      - name: Install ROCm runtime libs (ROCm Linux)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'rocm'
+        shell: bash
+        run: |
+          sudo mkdir -p --mode=0755 /etc/apt/keyrings
+          wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/rocm.gpg
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.2 jammy main" \
+            | sudo tee /etc/apt/sources.list.d/rocm.list
+          printf 'Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600\n' \
+            | sudo tee /etc/apt/preferences.d/rocm-pin-600
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            hip-runtime-amd \
+            hipblas \
+            rocblas \
+            hipblaslt \
+            rocsolver \
+            comgr \
+            rocprofiler-register
+          # The wheel's NEEDED entries reference unversioned soname suffixes
+          # (libamdhip64.so.6 etc.); ROCm packages install those symlinks under
+          # /opt/rocm/lib. Expose that on LD_LIBRARY_PATH for subsequent steps.
+          echo "LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+
+      # SYCL Linux: oneAPI runtime install was previously after the import
+      # step, which dies first with `ImportError: libsycl.so.8`. Run it here
+      # and locate libsycl/libOpenCL so we can prepend their dirs to
+      # LD_LIBRARY_PATH.
+      - name: Install Intel oneAPI runtime (SYCL Linux)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'sycl'
+        shell: bash
+        run: |
+          wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+            | sudo gpg --dearmor -o /usr/share/keyrings/oneapi-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
+            | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            intel-oneapi-runtime-opencl \
+            intel-oneapi-runtime-dpcpp-cpp \
+            intel-oneapi-runtime-mkl \
+            intel-oneapi-runtime-tbb \
+            ocl-icd-libopencl1
+          # oneAPI runtimes land under /opt/intel/oneapi/redist/lib (and
+          # arch-specific subdirs). Find the dir holding libsycl.so.8 and put
+          # it on LD_LIBRARY_PATH for subsequent steps.
+          SYCL_LIB_DIR=$(dirname "$(find /opt/intel -name 'libsycl.so.8' | head -1)")
+          if [ -z "$SYCL_LIB_DIR" ]; then
+            echo "::error::libsycl.so.8 not found after oneAPI install"; exit 1
+          fi
+          echo "Found libsycl.so.8 in: $SYCL_LIB_DIR"
+          echo "LD_LIBRARY_PATH=$SYCL_LIB_DIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+
       # Windows-only: link-test every bundled ggml-*.dll. Catches the bug
       # class where delvewheel-bundled siblings are unreachable because
       # the libs dir is not on PATH.
@@ -210,21 +338,6 @@ jobs:
             source smoke-venv/bin/activate
           fi
           python -m inferna info
-
-      # SYCL-specific: install Intel OpenCL CPU runtime so the SYCL
-      # dispatch stack has a compliant device on a GPU-less runner.
-      - name: Install Intel OpenCL CPU runtime
-        if: steps.check.outputs.skip != 'true' && matrix.backend == 'sycl'
-        continue-on-error: true
-        run: |
-          wget -qO - https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
-            | sudo gpg --dearmor -o /usr/share/keyrings/oneapi-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
-            | sudo tee /etc/apt/sources.list.d/oneAPI.list
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            intel-oneapi-runtime-opencl \
-            intel-oneapi-runtime-dpcpp-cpp
 
       - name: Cache test model
         if: steps.check.outputs.skip != 'true'
