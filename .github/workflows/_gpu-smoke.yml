@@ -162,8 +162,19 @@ jobs:
       # would otherwise fail with `ImportError: libX.so.N`. We install the
       # minimum runtime DSOs/DLLs here, before the import smoke step.
 
-      # CUDA Linux: cudart + cublas come from PyPI nvidia-* wheels; expose
-      # their lib dirs on LD_LIBRARY_PATH for subsequent steps.
+      # CUDA Linux: cudart + cublas come from PyPI nvidia-* wheels. ggml-cuda.so
+      # also has a NEEDED on libcuda.so.1 (the userspace driver lib). Stock
+      # ubuntu-latest has no NVIDIA driver, so we grab the stub from the CUDA
+      # toolkit (Jimver) and symlink it as libcuda.so.1. Stub is enough for
+      # dlopen/import; the CPU-fallback test passes n_gpu_layers=0.
+      - name: Install CUDA Toolkit stubs (CUDA Linux)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'cuda'
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: '12.4.0'
+          method: network
+          sub-packages: '["cudart"]'
+
       - name: Install CUDA runtime libs (CUDA Linux)
         if: steps.check.outputs.skip != 'true' && matrix.backend == 'cuda'
         shell: bash
@@ -174,7 +185,17 @@ jobs:
           CUDART_DIR="$PURELIB/nvidia/cuda_runtime/lib"
           CUBLAS_DIR="$PURELIB/nvidia/cublas/lib"
           ls "$CUDART_DIR" "$CUBLAS_DIR"
-          echo "LD_LIBRARY_PATH=$CUDART_DIR:$CUBLAS_DIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          # Locate the libcuda.so stub from the CUDA toolkit and expose it as
+          # libcuda.so.1 in a dedicated directory we add to LD_LIBRARY_PATH.
+          STUB_SRC=$(find "$CUDA_PATH" -name 'libcuda.so' -path '*/stubs/*' | head -1)
+          if [ -z "$STUB_SRC" ]; then
+            echo "::error::libcuda.so stub not found under $CUDA_PATH"; exit 1
+          fi
+          STUB_DIR="$HOME/cuda-stubs"
+          mkdir -p "$STUB_DIR"
+          ln -sf "$STUB_SRC" "$STUB_DIR/libcuda.so.1"
+          echo "Stub: $STUB_SRC -> $STUB_DIR/libcuda.so.1"
+          echo "LD_LIBRARY_PATH=$CUDART_DIR:$CUBLAS_DIR:$STUB_DIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
       # CUDA Windows: install cudart + cublas redist DLLs via Jimver. The
       # action sets CUDA_PATH but its PATH export is sometimes flaky, so we
@@ -207,12 +228,27 @@ jobs:
 
       # Vulkan Windows: ggml-vulkan.dll links against the Vulkan loader
       # (vulkan-1.dll), normally shipped with the GPU driver. windows-latest
-      # has no driver, so install just the runtime/loader via chocolatey.
-      - name: Install Vulkan runtime (Vulkan Windows)
+      # has no driver, so download the loader DLL straight from LunarG. The
+      # `vulkan-runtime` chocolatey package was removed from the community
+      # repo, so we no longer rely on it.
+      - name: Install Vulkan loader (Vulkan Windows)
         if: steps.check.outputs.skip != 'true' && matrix.backend == 'vulkan-windows'
-        shell: pwsh
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.3.290.0
+          cache: true
+
+      - name: Verify Vulkan loader (Vulkan Windows)
+        if: steps.check.outputs.skip != 'true' && matrix.backend == 'vulkan-windows'
+        shell: bash
         run: |
-          choco install vulkan-runtime --confirm --no-progress
+          echo "VULKAN_SDK=$VULKAN_SDK"
+          # The SDK ships vulkan-1.dll under Bin/. Add Bin to PATH and
+          # GITHUB_PATH so subsequent steps (and ctypes via add_dll_directory)
+          # can resolve it.
+          ls -la "$VULKAN_SDK/Bin/vulkan-1.dll"
+          echo "$VULKAN_SDK\\Bin" >> "$GITHUB_PATH"
+          echo "VULKAN_SDK_BIN=$VULKAN_SDK\\Bin" >> "$GITHUB_ENV"
 
       # Vulkan macOS Intel: the dylib's NEEDED is `@rpath/libvulkan.1.dylib`.
       # macos-15-intel ships neither the loader nor MoltenVK; install via
@@ -267,19 +303,26 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
             | sudo tee /etc/apt/sources.list.d/oneAPI.list
           sudo apt-get update
+          # Pin to the same oneAPI release used by the build job
+          # (intel-oneapi-dpcpp-cpp-2025.3 — see _gpu-build-sycl.yml). Newer
+          # runtimes ship a different libsycl soname (libsycl.so.9+), but the
+          # wheel is linked against libsycl.so.8 from the 2025.3 release.
           sudo apt-get install -y --no-install-recommends \
-            intel-oneapi-runtime-opencl \
-            intel-oneapi-runtime-dpcpp-cpp \
-            intel-oneapi-runtime-mkl \
-            intel-oneapi-runtime-tbb \
+            intel-oneapi-runtime-opencl-2025.3 \
+            intel-oneapi-runtime-dpcpp-cpp-2025.3 \
+            intel-oneapi-runtime-mkl-2025.3 \
+            intel-oneapi-runtime-tbb-2022.3 \
             ocl-icd-libopencl1
           # oneAPI runtimes land under /opt/intel/oneapi/redist/lib (and
           # arch-specific subdirs). Find the dir holding libsycl.so.8 and put
           # it on LD_LIBRARY_PATH for subsequent steps.
-          SYCL_LIB_DIR=$(dirname "$(find /opt/intel -name 'libsycl.so.8' | head -1)")
-          if [ -z "$SYCL_LIB_DIR" ]; then
-            echo "::error::libsycl.so.8 not found after oneAPI install"; exit 1
+          SYCL_LIB=$(find /opt/intel -name 'libsycl.so.8' | head -1)
+          if [ -z "$SYCL_LIB" ]; then
+            echo "::error::libsycl.so.8 not found after oneAPI install"
+            find /opt/intel -name 'libsycl.so*' || true
+            exit 1
           fi
+          SYCL_LIB_DIR=$(dirname "$SYCL_LIB")
           echo "Found libsycl.so.8 in: $SYCL_LIB_DIR"
           echo "LD_LIBRARY_PATH=$SYCL_LIB_DIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
@@ -289,11 +332,38 @@ jobs:
       - name: Smoke test - DLL link (Windows)
         if: steps.check.outputs.skip != 'true' && runner.os == 'Windows'
         shell: bash
+        env:
+          CUDA_BIN: ${{ env.CUDA_PATH && format('{0}\bin', env.CUDA_PATH) || '' }}
         run: |
           source smoke-venv/Scripts/activate
           python -c "
           import ctypes, glob, os, site, sys
+          # Python 3.8+ on Windows ignores PATH for DLL deps of ctypes-loaded
+          # libs; explicitly register the CUDA bin dir (and any inferna*.libs
+          # dirs) so ggml-cuda.dll can resolve cudart64_12.dll/cublas64_12.dll.
+          extra_dirs = []
+          cuda_bin = os.environ.get('CUDA_BIN') or (
+              os.path.join(os.environ['CUDA_PATH'], 'bin')
+              if os.environ.get('CUDA_PATH') else None
+          )
+          if cuda_bin and os.path.isdir(cuda_bin):
+              extra_dirs.append(cuda_bin)
+          vulkan_bin = os.environ.get('VULKAN_SDK_BIN') or (
+              os.path.join(os.environ['VULKAN_SDK'], 'Bin')
+              if os.environ.get('VULKAN_SDK') else None
+          )
+          if vulkan_bin and os.path.isdir(vulkan_bin):
+              extra_dirs.append(vulkan_bin)
           failed = []
+          for sp in site.getsitepackages():
+              for libs in glob.glob(os.path.join(sp, 'inferna*.libs')):
+                  extra_dirs.append(libs)
+          for d in extra_dirs:
+              try:
+                  os.add_dll_directory(d)
+                  print(f'add_dll_directory: {d}')
+              except OSError as e:
+                  print(f'WARN add_dll_directory failed for {d}: {e}')
           for sp in site.getsitepackages():
               for libs in glob.glob(os.path.join(sp, 'inferna*.libs')):
                   for dll in sorted(glob.glob(os.path.join(libs, 'ggml-*.dll'))):
