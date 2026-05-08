@@ -2798,6 +2798,137 @@ class Application(ShellCmd, metaclass=MetaCommander):
             self.log.info(f"patched {patched} files, repacked wheel in {out_dir}")
 
     # ------------------------------------------------------------------------
+    # wheel_repair
+
+    @option(
+        "--backend",
+        default="",
+        help="GPU backend (cuda, vulkan, hip, sycl, opencl, cpu, metal); selects per-backend excludes",
+    )
+    @option(
+        "wheel",
+        nargs="?",
+        default=None,
+        help="wheel file or directory containing wheels (default: dist/)",
+    )
+    def do_wheel_repair(self, args: argparse.Namespace) -> None:
+        """repair built wheel(s), bundling shared-library deps
+
+        Runs auditwheel (Linux), delocate (macOS), or delvewheel (Windows) to
+        bundle the ggml/llama/sd/whisper shared libs into the wheel. Mirrors
+        the per-backend exclude lists in .github/workflows/_gpu-build-*.yml,
+        so a local `uv build --wheel` + `manage.py wheel_repair --backend
+        <b>` produces a wheel equivalent to a CI-built one.
+        """
+        # Per-backend excludes — keep in sync with CIBW_REPAIR_WHEEL_COMMAND_*
+        # in pyproject.toml and .github/workflows/_gpu-build-*.yml.
+        excludes_linux: dict[str, list[str]] = {
+            "": [],
+            "cpu": [],
+            "cuda": [
+                "libcuda.so.1", "libcudart.so.12", "libcublas.so.12",
+                "libcublasLt.so.12", "libgomp.so.1",
+            ],
+            "vulkan": ["libvulkan.so.1", "libgomp.so.1"],
+            "hip": [
+                "libamdhip64.so.6", "libhipblas.so.2", "librocblas.so.4",
+                "libhsa-runtime64.so.1", "librocsolver.so.0", "libhipblaslt.so.0",
+                "libamd_comgr.so.2", "librocprofiler-register.so.0", "libgomp.so.1",
+            ],
+            "sycl": [
+                "libsycl.so.8", "libOpenCL.so.1", "libsvml.so", "libimf.so",
+                "libintlc.so.5", "libtbb.so.12", "libgomp.so.1",
+            ],
+            "opencl": ["libOpenCL.so.1", "libgomp.so.1"],
+            "metal": [],
+        }
+        darwin_base = ["libssl", "libcrypto"]
+        excludes_darwin: dict[str, list[str]] = {
+            "": darwin_base,
+            "cpu": darwin_base,
+            "metal": darwin_base,
+            "vulkan": darwin_base + ["libvulkan", "libMoltenVK"],
+            "cuda": darwin_base,
+            "hip": darwin_base,
+            "sycl": darwin_base,
+            "opencl": darwin_base,
+        }
+        # Windows: --include forces a backend DLL into the wheel; --no-dll
+        # excludes vendor/driver runtimes the user's GPU driver provides.
+        win_includes: dict[str, list[str]] = {
+            "cuda": ["ggml-cuda.dll"],
+            "vulkan": ["ggml-vulkan.dll"],
+        }
+        win_excludes: dict[str, list[str]] = {
+            "cuda": ["nvcuda.dll", "cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
+        }
+
+        backend = args.backend or ""
+
+        if args.wheel:
+            target = Path(args.wheel).resolve()
+        else:
+            target = self.project.dist
+        if target.is_dir():
+            # auditwheel writes manylinux_*.whl alongside the original
+            # linux_*.whl; only re-process the unrepaired one.
+            pattern = "*-linux_*.whl" if PLATFORM == "Linux" else "*.whl"
+            wheels = sorted(target.glob(pattern))
+        elif target.is_file():
+            wheels = [target]
+        else:
+            self.log.error(f"wheel path not found: {target}")
+            sys.exit(1)
+        if not wheels:
+            self.log.info(f"wheel_repair: no wheel to repair in {target}")
+            return
+
+        dist = self.project.dist
+        dynlib = [
+            self.project.thirdparty / "llama.cpp" / "dynamic",
+            self.project.thirdparty / "stable-diffusion.cpp" / "dynamic",
+            self.project.thirdparty / "whisper.cpp" / "dynamic",
+        ]
+        existing = [str(d) for d in dynlib if d.is_dir()]
+
+        if PLATFORM == "Linux":
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(existing + [env.get("LD_LIBRARY_PATH", "")])
+            for whl in wheels:
+                cmd = ["uvx", "auditwheel", "repair", "-w", str(dist)]
+                for exc in excludes_linux.get(backend, []):
+                    cmd += ["--exclude", exc]
+                cmd.append(str(whl))
+                self.log.info(" ".join(cmd))
+                subprocess.check_call(cmd, env=env)
+                whl.unlink()
+        elif PLATFORM == "Darwin":
+            env = os.environ.copy()
+            env["DYLD_LIBRARY_PATH"] = os.pathsep.join(existing + [env.get("DYLD_LIBRARY_PATH", "")])
+            for whl in wheels:
+                cmd = ["uvx", "--from", "delocate", "delocate-wheel", "-v", "-w", str(dist)]
+                for exc in excludes_darwin.get(backend, darwin_base):
+                    cmd += ["--exclude", exc]
+                cmd.append(str(whl))
+                self.log.info(" ".join(cmd))
+                subprocess.check_call(cmd, env=env)
+        elif PLATFORM == "Windows":
+            for whl in wheels:
+                cmd = ["uvx", "delvewheel", "repair", "-w", str(dist)]
+                if existing:
+                    cmd += ["--add-path", ";".join(existing)]
+                for inc in win_includes.get(backend, []):
+                    cmd += ["--include", inc]
+                for exc in win_excludes.get(backend, []):
+                    cmd += ["--no-dll", exc]
+                cmd.append(str(whl))
+                self.log.info(" ".join(cmd))
+                subprocess.check_call(cmd)
+        else:
+            self.log.error(f"unsupported platform: {PLATFORM}")
+            sys.exit(1)
+
+    # ------------------------------------------------------------------------
     # wheel
 
     @opt("--release", "-r", "build and release all wheels")
