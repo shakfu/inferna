@@ -28,6 +28,8 @@
 
 - [ ] **Reusable `workflow_call` smoke-test** -- inferna's wheel-find + venv + import + inference block is duplicated across all three workflow files with minor variations. Wrap `scripts/run_wheel_test.py` in `.github/workflows/_smoke-test.yml` with `on: workflow_call` (inputs: `artifact-name`, `runs-on`, `run-inference`) and delete ~200 lines of duplication
 
+- [ ] **Use `manage.py wheel_repair` in `CIBW_REPAIR_WHEEL_COMMAND_*`** -- the per-backend `--exclude` / `--include` / `--no-dll` lists are now duplicated between `scripts/manage.py do_wheel_repair` and 8+ workflow YAMLs (`_gpu-build-{cuda,rocm,sycl,vulkan-linux,vulkan-macos-intel,cuda-windows,vulkan-windows}.yml`). Replace each `CIBW_REPAIR_WHEEL_COMMAND_<PLAT>` block with `python {project}/scripts/manage.py wheel_repair --backend <b> --dest-dir {dest_dir} {wheel}` so manage.py is the single source of truth and exclude-list drift is impossible. Prerequisite: add `--dest-dir` arg to `do_wheel_repair` (currently writes to `dist/` only). Leave `CIBW_BEFORE_BUILD` and the cibuildwheel orchestration untouched -- cibuildwheel still owns the Python matrix, manylinux containers, and macOS arch handling.
+
 ### Wheel Coverage (additional backend variants)
 
 Gap analysis vs. llama.cpp b8893 release assets. Ordered by effort/payoff.

@@ -2929,6 +2929,77 @@ class Application(ShellCmd, metaclass=MetaCommander):
             sys.exit(1)
 
     # ------------------------------------------------------------------------
+    # wheel_build
+
+    @opt("--abi3", "-3", "build cp312 stable-ABI wheel")
+    @opt("--dynamic", "-d", "build dynamic variant (dlopen'd ggml backends; runs wheel_repair after)")
+    @option(
+        "--backend",
+        required=True,
+        choices=["cpu", "metal", "cuda", "vulkan", "sycl", "hip", "opencl"],
+        help="GPU backend",
+    )
+    def do_wheel_build(self, args: argparse.Namespace) -> None:
+        """build a per-backend wheel: deps + uv build [+ repair if --dynamic]
+
+        Replaces the per-backend wheel-* Makefile targets so Windows users
+        without `make` can build wheels directly. Sets the same GGML_*,
+        WITH_DYLIB, SD_USE_VENDORED_GGML, CMAKE_CUDA_ARCHITECTURES env-var
+        contract that the Makefile recipes used.
+        """
+        # Per-backend GGML_* flags. cpu sets all backends to 0 explicitly so
+        # that platform defaults (e.g. GGML_METAL=1 on macOS) don't leak in.
+        backend_env: dict[str, dict[str, str]] = {
+            "cpu": {
+                "GGML_METAL": "0", "GGML_CUDA": "0", "GGML_VULKAN": "0",
+                "GGML_HIP": "0", "GGML_SYCL": "0", "GGML_OPENCL": "0",
+            },
+            "metal":  {"GGML_METAL": "1"},
+            "cuda":   {"GGML_CUDA": "1"},
+            "vulkan": {"GGML_VULKAN": "1"},
+            "sycl":   {"GGML_SYCL": "1"},
+            "hip":    {"GGML_HIP": "1"},
+            "opencl": {"GGML_OPENCL": "1"},
+        }
+
+        extra: dict[str, str] = dict(backend_env[args.backend])
+        # Match Makefile's `$${CMAKE_CUDA_ARCHITECTURES:-native}` — preserve
+        # caller's value if set, else default to native.
+        if args.backend == "cuda":
+            extra["CMAKE_CUDA_ARCHITECTURES"] = os.environ.get("CMAKE_CUDA_ARCHITECTURES", "native")
+        if args.dynamic:
+            extra["WITH_DYLIB"] = "1"
+            # cpu-dynamic Makefile target intentionally omits this; preserve
+            # that asymmetry.
+            if args.backend != "cpu":
+                extra["SD_USE_VENDORED_GGML"] = "0"
+
+        env = os.environ.copy()
+        env.update(extra)
+        env_str = " ".join(f"{k}={v}" for k, v in extra.items())
+
+        # Step 1: build third-party deps with the right backend flags.
+        deps_cmd = [PYTHON, "scripts/manage.py", "build", "--all", "--deps-only"]
+        if args.dynamic:
+            deps_cmd.append("--dynamic")
+        self.log.info(f"{env_str} {' '.join(deps_cmd)}")
+        subprocess.check_call(deps_cmd, env=env)
+
+        # Step 2: build the wheel.
+        uv_cmd = ["uv", "build", "--wheel"]
+        if args.abi3:
+            uv_cmd += [
+                "--config-setting=cmake.define.INFERNA_ABI3=ON",
+                "--config-setting=wheel.py-api=cp312",
+            ]
+        self.log.info(f"{env_str} {' '.join(uv_cmd)}")
+        subprocess.check_call(uv_cmd, env=env)
+
+        # Step 3: bundle shared-library deps into the wheel (dynamic only).
+        if args.dynamic:
+            self.do_wheel_repair(argparse.Namespace(backend=args.backend, wheel=None))
+
+    # ------------------------------------------------------------------------
     # wheel
 
     @opt("--release", "-r", "build and release all wheels")

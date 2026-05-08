@@ -312,109 +312,33 @@ build-hip-dynamic: clean
 build-opencl-dynamic: clean
 	@GGML_OPENCL=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic
 
-# Static wheel builds. Each target rebuilds the third-party deps with the
-# matching backend flag before running uv build, so the wheel is guaranteed
-# not to ship dylibs from a stale prior backend (e.g. Metal libs in a wheel
-# claiming CUDA support).
-wheel-cpu:
-	@$(_CPU_ONLY) $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
-	@$(_CPU_ONLY) uv build --wheel
+# Per-backend wheel targets. Thin wrappers around `manage.py wheel_build`,
+# which owns the env-var contract (GGML_*, WITH_DYLIB, SD_USE_VENDORED_GGML,
+# CMAKE_CUDA_ARCHITECTURES) and the deps-build / uv-build / wheel-repair
+# pipeline. Windows users without `make` can invoke manage.py directly:
+#     python scripts/manage.py wheel_build --backend cuda --dynamic --abi3
+wheel-cpu:    ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend cpu
+wheel-metal:  ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend metal
+wheel-cuda:   ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend cuda
+wheel-vulkan: ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend vulkan
+wheel-sycl:   ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend sycl
+wheel-hip:    ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend hip
+wheel-opencl: ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend opencl
 
-wheel-metal:
-	@GGML_METAL=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
-	@GGML_METAL=1 uv build --wheel
+wheel-cpu-dynamic:    ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend cpu    --dynamic
+wheel-metal-dynamic:  ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend metal  --dynamic
+wheel-cuda-dynamic:   ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend cuda   --dynamic
+wheel-vulkan-dynamic: ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend vulkan --dynamic
+wheel-sycl-dynamic:   ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend sycl   --dynamic
+wheel-hip-dynamic:    ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend hip    --dynamic
+wheel-opencl-dynamic: ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend opencl --dynamic
 
-wheel-cuda:
-	@GGML_CUDA=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
-	@GGML_CUDA=1 uv build --wheel
-
-wheel-vulkan:
-	@GGML_VULKAN=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
-	@GGML_VULKAN=1 uv build --wheel
-
-wheel-sycl:
-	@GGML_SYCL=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
-	@GGML_SYCL=1 uv build --wheel
-
-wheel-hip:
-	@GGML_HIP=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
-	@GGML_HIP=1 uv build --wheel
-
-wheel-opencl:
-	@GGML_OPENCL=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --deps-only
-	@GGML_OPENCL=1 uv build --wheel
-
-# Dynamic wheel builds — same rule as static, plus --dynamic on the
-# manage.py invocation.
-wheel-cpu-dynamic:
-	@$(_CPU_ONLY) WITH_DYLIB=1 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@$(_CPU_ONLY) WITH_DYLIB=1 uv build --wheel
-	@$(MAKE) wheel-repair BACKEND=cpu
-
-wheel-metal-dynamic:
-	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
-	@$(MAKE) wheel-repair BACKEND=metal
-
-wheel-cuda-dynamic:
-	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} uv build --wheel
-	@$(MAKE) wheel-repair BACKEND=cuda
-
-wheel-vulkan-dynamic:
-	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
-	@$(MAKE) wheel-repair BACKEND=vulkan
-
-wheel-sycl-dynamic:
-	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
-	@$(MAKE) wheel-repair BACKEND=sycl
-
-wheel-hip-dynamic:
-	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
-	@$(MAKE) wheel-repair BACKEND=hip
-
-wheel-opencl-dynamic:
-	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel
-	@$(MAKE) wheel-repair BACKEND=opencl
-
-# ABI3 + dynamic + GPU backend: stable-ABI wheels (cp312-abi3) with dlopen'd
-# ggml backends. Combines wheel-abi3's cmake/py-api flags with the matching
-# wheel-<backend>-dynamic deps build.
-_ABI3_FLAGS := --config-setting=cmake.define.INFERNA_ABI3=ON --config-setting=wheel.py-api=cp312
-
-wheel-metal-dynamic-abi3:
-	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
-	@$(MAKE) wheel-repair BACKEND=metal
-
-wheel-cuda-dynamic-abi3:
-	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} uv build --wheel $(_ABI3_FLAGS)
-	@$(MAKE) wheel-repair BACKEND=cuda
-
-wheel-vulkan-dynamic-abi3:
-	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
-	@$(MAKE) wheel-repair BACKEND=vulkan
-
-wheel-sycl-dynamic-abi3:
-	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
-	@$(MAKE) wheel-repair BACKEND=sycl
-
-wheel-hip-dynamic-abi3:
-	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
-	@$(MAKE) wheel-repair BACKEND=hip
-
-wheel-opencl-dynamic-abi3:
-	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
-	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
-	@$(MAKE) wheel-repair BACKEND=opencl
+wheel-metal-dynamic-abi3:  ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend metal  --dynamic --abi3
+wheel-cuda-dynamic-abi3:   ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend cuda   --dynamic --abi3
+wheel-vulkan-dynamic-abi3: ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend vulkan --dynamic --abi3
+wheel-sycl-dynamic-abi3:   ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend sycl   --dynamic --abi3
+wheel-hip-dynamic-abi3:    ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend hip    --dynamic --abi3
+wheel-opencl-dynamic-abi3: ; @$(SYSTEM_PYTHON) scripts/manage.py wheel_build --backend opencl --dynamic --abi3
 
 # =============================================================================
 # Wheel repair
