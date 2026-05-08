@@ -3166,7 +3166,29 @@ class Application(ShellCmd, metaclass=MetaCommander):
         ]
         existing = [str(d) for d in dynlib if d.is_dir()]
 
+        # Use cibuildwheel's per-build Python (sys.executable when invoked
+        # from CIBW_REPAIR_WHEEL_COMMAND_*) for all three repair tools, so
+        # we don't depend on uvx being preinstalled on the runner. Each tool
+        # is pip-installed into that interpreter and invoked via its
+        # entry-point script (resolved next to sys.executable so we don't
+        # rely on PATH or on a tool's internal module layout).
+        py_dir = Path(sys.executable).parent
+        scripts_dir = py_dir / "Scripts" if PLATFORM == "Windows" else py_dir
+
+        def _install(pkg: str) -> None:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--quiet", pkg]
+            )
+
+        def _script(name: str) -> str:
+            exe = scripts_dir / (f"{name}.exe" if PLATFORM == "Windows" else name)
+            if not exe.exists():
+                self.log.error(f"entry-point script not found: {exe}")
+                sys.exit(1)
+            return str(exe)
+
         if PLATFORM == "Linux":
+            _install("auditwheel")
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = os.pathsep.join(existing + [env.get("LD_LIBRARY_PATH", "")])
             # GPU backends on manylinux_2_28 pull in SDK libs (CUDA/Vulkan/
@@ -3176,7 +3198,7 @@ class Application(ShellCmd, metaclass=MetaCommander):
             # them. CPU/metal builds keep auditwheel's default detection.
             gpu_backends = {"cuda", "vulkan", "hip", "sycl", "opencl"}
             for whl in wheels:
-                cmd = ["uvx", "auditwheel", "repair", "-w", str(dist)]
+                cmd = [_script("auditwheel"), "repair", "-w", str(dist)]
                 if backend in gpu_backends:
                     cmd += ["--plat", "manylinux_2_35_x86_64"]
                 for exc in excludes_linux.get(backend, []):
@@ -3187,10 +3209,11 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 if not explicit_wheel:
                     whl.unlink()
         elif PLATFORM == "Darwin":
+            _install("delocate")
             env = os.environ.copy()
             env["DYLD_LIBRARY_PATH"] = os.pathsep.join(existing + [env.get("DYLD_LIBRARY_PATH", "")])
             for whl in wheels:
-                cmd = ["uvx", "--from", "delocate", "delocate-wheel", "-v", "-w", str(dist)]
+                cmd = [_script("delocate-wheel"), "-v", "-w", str(dist)]
                 for exc in excludes_darwin.get(backend, darwin_base):
                     cmd += ["--exclude", exc]
                 cmd.append(str(whl))
@@ -3202,8 +3225,9 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 # loads on Apple Silicon and Intel Homebrew alike.
                 self.do_fix_macos_vulkan_wheel(argparse.Namespace(wheel=str(dist)))
         elif PLATFORM == "Windows":
+            _install("delvewheel")
             for whl in wheels:
-                cmd = ["uvx", "delvewheel", "repair", "-w", str(dist)]
+                cmd = [_script("delvewheel"), "repair", "-w", str(dist)]
                 if existing:
                     cmd += ["--add-path", ";".join(existing)]
                 for inc in win_includes.get(backend, []):
