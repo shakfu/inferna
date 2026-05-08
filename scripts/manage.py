@@ -2798,6 +2798,270 @@ class Application(ShellCmd, metaclass=MetaCommander):
             self.log.info(f"patched {patched} files, repacked wheel in {out_dir}")
 
     # ------------------------------------------------------------------------
+    # cibw_before_build
+
+    @option("--rename", required=True, help="target package name (e.g. inferna-cuda12)")
+    @opt("--build-deps", "-b", "build thirdparty deps via manage.py build (Win/macOS only; Linux does this in CIBW_BEFORE_ALL)")
+    @opt("--dynamic", "-d", "build dynamic variant (passes --dynamic to manage.py build)")
+    def do_cibw_before_build(self, args: argparse.Namespace) -> None:
+        """CIBW_BEFORE_BUILD entry point: rename pyproject + (optionally) build deps + write build_config.
+
+        Replaces the duplicated `ci_rename_package + manage.py build + write_build_config`
+        sequence in CIBW_BEFORE_BUILD_* across all backend workflows. On Linux, deps are
+        built in CIBW_BEFORE_ALL, so omit --build-deps; on Windows/macOS pass --build-deps
+        (and --dynamic if applicable) to perform the deps build here.
+        """
+        project_root = self.project.cwd
+        rename_script = project_root / "scripts" / "ci_rename_package.py"
+        subprocess.check_call([PYTHON, str(rename_script), args.rename], cwd=str(project_root))
+        if args.build_deps:
+            cmd = [PYTHON, str(project_root / "scripts" / "manage.py"),
+                   "build", "--all", "--deps-only", "--no-sd-examples"]
+            if args.dynamic:
+                cmd.append("--dynamic")
+            self.log.info(" ".join(cmd))
+            subprocess.check_call(cmd, cwd=str(project_root))
+        self.do_write_build_config(argparse.Namespace())
+
+    # ------------------------------------------------------------------------
+    # ci_before_all
+    #
+    # Backend-specific bootstrap that runs inside the manylinux container at
+    # CIBW_BEFORE_ALL_LINUX time. Centralizing here makes the per-backend
+    # package lists, repo URLs, and SDK versions a single source of truth.
+
+    # Per-backend OS package install recipes. Keys: 'pkg_mgr' (yum/dnf),
+    # 'pre_cmds' (run before package install, e.g. add repo), 'packages',
+    # 'post_cmds' (run after install, e.g. symlink toolchain dirs).
+    _CI_LINUX_RECIPES: dict[str, dict[str, Any]] = {
+        "cuda": {
+            "pkg_mgr": "yum",
+            "pre_cmds": [
+                ["yum", "install", "-y", "git", "yum-utils", "epel-release"],
+                ["yum", "install", "-y", "ccache"],
+                ["yum-config-manager", "--add-repo",
+                 "https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo"],
+            ],
+            "packages": ["cuda-nvcc-12-4", "cuda-cudart-devel-12-4",
+                         "cuda-driver-devel-12-4", "libcublas-devel-12-4"],
+            "post_cmds": [
+                ["bash", "-c", "ln -s /usr/local/cuda-12.4 /usr/local/cuda"],
+            ],
+        },
+        "hip": {
+            "pkg_mgr": "dnf",
+            "pre_cmds": [
+                ["dnf", "install", "-y", "git", "epel-release"],
+                ["dnf", "install", "-y", "ccache"],
+                ["dnf", "install", "-y",
+                 "https://repo.radeon.com/amdgpu-install/6.3.3/rhel/8.10/amdgpu-install-6.3.60303-1.el8.noarch.rpm"],
+            ],
+            "packages": ["rocm-hip-runtime-devel", "hipblas-devel", "rocblas-devel", "libstdc++-static"],
+            "post_cmds": [
+                ["bash", "-c", "ls -d /opt/rocm-* | head -1 | xargs -I{} ln -sf {} /opt/rocm"],
+                ["bash", "-c", "ln -sf /usr/lib/gcc/x86_64-redhat-linux/8/libstdc++.a /opt/rocm/lib/libstdc++.a"],
+            ],
+        },
+        "sycl": {
+            "pkg_mgr": "dnf",
+            "pre_cmds": [
+                ["dnf", "install", "-y", "git", "epel-release"],
+                ["dnf", "install", "-y", "ccache"],
+                ["bash", "-c", "rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"],
+                ["dnf", "config-manager", "--add-repo", "https://yum.repos.intel.com/oneapi"],
+            ],
+            "packages": ["intel-oneapi-dpcpp-cpp-2025.3", "intel-oneapi-mkl-devel-2025.3"],
+            "post_cmds": [],
+        },
+        "vulkan": {
+            "pkg_mgr": "dnf",
+            "pre_cmds": [
+                ["dnf", "install", "-y", "git", "epel-release"],
+                ["dnf", "install", "-y", "ccache"],
+            ],
+            "packages": ["vulkan-headers", "vulkan-loader-devel"],
+            "post_cmds": [],  # shaderc is built from source post-cache-check
+        },
+    }
+
+    # Per-backend env vars layered on top of the common ccache + GGML_NATIVE=OFF
+    # block when invoking `manage.py build --all --deps-only`.
+    _CI_LINUX_BUILD_ENV: dict[str, dict[str, str]] = {
+        "cuda": {
+            "GGML_CUDA": "1",
+            "GGML_METAL": "0",
+            "CMAKE_CUDA_COMPILER_LAUNCHER": "ccache",
+            "CMAKE_CUDA_ARCHITECTURES": "75",
+        },
+        "hip": {
+            "GGML_HIP": "1",
+            "GGML_METAL": "0",
+            "CMAKE_HIP_COMPILER_LAUNCHER": "ccache",
+            "CMAKE_HIP_ARCHITECTURES": "gfx90a;gfx942;gfx1100",
+            "HIP_PATH": "/opt/rocm",
+            "LIBRARY_PATH": "/usr/lib/gcc/x86_64-redhat-linux/8",
+        },
+        "sycl": {
+            "GGML_SYCL": "1",
+            "GGML_METAL": "0",
+            "CC": "icx",
+            "CXX": "icpx",
+        },
+        "vulkan": {
+            "GGML_VULKAN": "1",
+            "GGML_METAL": "0",
+        },
+    }
+
+    # PATH prefix segments per backend (prepended to $PATH before invoking the build).
+    _CI_LINUX_PATH_PREFIX: dict[str, list[str]] = {
+        "cuda": ["/usr/local/cuda/bin"],
+        "hip": ["/opt/rocm/bin"],
+        "sycl": [],
+        "vulkan": [],
+    }
+
+    @option("--backend", required=True, choices=["cuda", "hip", "sycl", "vulkan"])
+    @opt("--dynamic", "-d", "build dynamic variant (passes --dynamic to manage.py build)")
+    def do_ci_before_all(self, args: argparse.Namespace) -> None:
+        """CIBW_BEFORE_ALL_LINUX entry point: install backend SDK + build thirdparty deps.
+
+        Mirrors the previous inline shell in .github/workflows/_gpu-build-*.yml.
+        Runs inside the manylinux container; expects the project tree mounted at
+        the current working directory (cibuildwheel uses /project).
+        """
+        if args.backend not in self._CI_LINUX_RECIPES:
+            self.log.error(f"unknown backend: {args.backend}")
+            sys.exit(1)
+        recipe = self._CI_LINUX_RECIPES[args.backend]
+
+        project_root = self.project.cwd
+        sentinel = project_root / "thirdparty" / ".deps-complete"
+
+        # 1. Install OS packages (always run; cheap on cache hit because the
+        #    package manager is a no-op for already-installed packages).
+        for cmd in recipe["pre_cmds"]:
+            self.log.info(" ".join(cmd))
+            subprocess.check_call(cmd)
+        pkg_install = [recipe["pkg_mgr"], "install", "-y", *recipe["packages"]]
+        self.log.info(" ".join(pkg_install))
+        subprocess.check_call(pkg_install)
+        for cmd in recipe["post_cmds"]:
+            self.log.info(" ".join(cmd))
+            subprocess.check_call(cmd)
+
+        # 2. Skip the heavy thirdparty build if cached from a prior CI run.
+        if sentinel.exists():
+            self.log.info(f"deps-complete sentinel present at {sentinel}, skipping build")
+            return
+
+        # 3. Backend-specific extra setup that must happen before the build but
+        #    after the cache-check (Vulkan: build shaderc from source).
+        if args.backend == "vulkan":
+            self._ci_build_shaderc()
+
+        # 4. Locate the cibuildwheel-shipped Python and install build tools.
+        ci_pythons = sorted(Path("/opt/python").glob("cp3*/bin"))
+        if not ci_pythons:
+            self.log.error("no /opt/python/cp3*/bin found in manylinux container")
+            sys.exit(1)
+        ci_python_bin = ci_pythons[0]
+        ci_python = str(ci_python_bin / "python")
+        ci_pip = str(ci_python_bin / "pip")
+        subprocess.check_call([ci_pip, "install", "cmake", "ninja"])
+
+        # 5. Compose the build env (sourcing oneAPI for SYCL).
+        env = os.environ.copy()
+        if args.backend == "sycl":
+            env = self._source_bash_env("/opt/intel/oneapi/setvars.sh", env)
+        for k, v in self._CI_LINUX_BUILD_ENV[args.backend].items():
+            env[k] = v
+        env["GGML_NATIVE"] = "OFF"
+        env["CCACHE_DIR"] = str(project_root / ".ccache")
+        env["CCACHE_DEPEND"] = "1"
+        env["CMAKE_C_COMPILER_LAUNCHER"] = "ccache"
+        env["CMAKE_CXX_COMPILER_LAUNCHER"] = "ccache"
+        env["SD_USE_VENDORED_GGML"] = "0" if args.dynamic else "1"
+        path_prefix = self._CI_LINUX_PATH_PREFIX[args.backend] + [str(ci_python_bin)]
+        env["PATH"] = os.pathsep.join(path_prefix + [env.get("PATH", "")])
+
+        # 6. Build thirdparty deps (calls manage.py build under the cibw python).
+        cmd = [ci_python, str(project_root / "scripts" / "manage.py"),
+               "build", "--all", "--deps-only", "--no-sd-examples"]
+        if args.dynamic:
+            cmd.append("--dynamic")
+        self.log.info(" ".join(cmd))
+        subprocess.check_call(cmd, cwd=str(project_root), env=env)
+
+        # 7. Mark the cache so reruns of this job (e.g. retries after wheel
+        #    failure) skip the deps build.
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.touch()
+        self.log.info(f"wrote sentinel {sentinel}")
+
+    @staticmethod
+    def _source_bash_env(script: str, base_env: dict[str, str]) -> dict[str, str]:
+        """Run `source <script>` in bash and return the resulting env dict.
+
+        Used for Intel oneAPI's setvars.sh, which sets PATH/LD_LIBRARY_PATH/
+        CMAKE_PREFIX_PATH/etc. via shell-only logic that can't be replicated
+        by setting individual env vars from Python.
+        """
+        out = subprocess.check_output(
+            ["bash", "-c", f"source {script} >/dev/null 2>&1 && env -0"],
+            env=base_env,
+        )
+        env: dict[str, str] = {}
+        for entry in out.split(b"\0"):
+            if not entry:
+                continue
+            try:
+                k, v = entry.decode().split("=", 1)
+            except ValueError:
+                continue
+            env[k] = v
+        return env
+
+    def _ci_build_shaderc(self) -> None:
+        """Build glslc + spirv-headers from source (Vulkan dep not in distro).
+
+        manylinux_2_28 ships vulkan-headers/vulkan-loader-devel but no glslc;
+        upstream shaderc is the canonical source. Mirrors the inline shell
+        previously embedded in _gpu-build-vulkan-linux.yml.
+        """
+        shaderc_src = Path("/tmp/shaderc")
+        spirv_build = Path("/tmp/spirv-headers-build")
+        try:
+            subprocess.check_call(
+                ["git", "clone", "--depth", "1", "https://github.com/google/shaderc.git", str(shaderc_src)]
+            )
+            subprocess.check_call(["python3", "utils/git-sync-deps"], cwd=str(shaderc_src))
+            subprocess.check_call([
+                "cmake", "-S", ".", "-B", "build",
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DSHADERC_SKIP_TESTS=ON",
+                "-DSHADERC_SKIP_EXAMPLES=ON",
+                "-DSHADERC_SKIP_COPYRIGHT_CHECK=ON",
+            ], cwd=str(shaderc_src))
+            subprocess.check_call(
+                ["cmake", "--build", "build", "--target", "glslc_exe", "--parallel", "4"],
+                cwd=str(shaderc_src),
+            )
+            shutil.copy(shaderc_src / "build" / "glslc" / "glslc", "/usr/local/bin/glslc")
+            subprocess.check_call([
+                "cmake",
+                "-S", str(shaderc_src / "third_party" / "spirv-headers"),
+                "-B", str(spirv_build),
+                "-DCMAKE_INSTALL_PREFIX=/usr/local",
+                "-DSPIRV_HEADERS_SKIP_EXAMPLES=ON",
+                "-DSPIRV_HEADERS_SKIP_INSTALL=OFF",
+            ])
+            subprocess.check_call(["cmake", "--install", str(spirv_build)])
+        finally:
+            shutil.rmtree(shaderc_src, ignore_errors=True)
+            shutil.rmtree(spirv_build, ignore_errors=True)
+
+    # ------------------------------------------------------------------------
     # wheel_repair
 
     @option(
@@ -2905,8 +3169,16 @@ class Application(ShellCmd, metaclass=MetaCommander):
         if PLATFORM == "Linux":
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = os.pathsep.join(existing + [env.get("LD_LIBRARY_PATH", "")])
+            # GPU backends on manylinux_2_28 pull in SDK libs (CUDA/Vulkan/
+            # ROCm/oneAPI) whose binaries reference glibc symbols newer than
+            # 2.28 (e.g. shaderc-built glslc, CUDA runtime libs). Override
+            # the auto-detected plat to manylinux_2_35 so auditwheel accepts
+            # them. CPU/metal builds keep auditwheel's default detection.
+            gpu_backends = {"cuda", "vulkan", "hip", "sycl", "opencl"}
             for whl in wheels:
                 cmd = ["uvx", "auditwheel", "repair", "-w", str(dist)]
+                if backend in gpu_backends:
+                    cmd += ["--plat", "manylinux_2_35_x86_64"]
                 for exc in excludes_linux.get(backend, []):
                     cmd += ["--exclude", exc]
                 cmd.append(str(whl))

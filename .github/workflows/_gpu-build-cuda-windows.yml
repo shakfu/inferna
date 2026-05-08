@@ -103,13 +103,9 @@ jobs:
         env:
           CIBW_ARCHS_WINDOWS: AMD64
           CIBW_BEFORE_BUILD_WINDOWS: >
-            pip install delvewheel &&
-            python -c "import os; t=open('pyproject.toml').read(); open('pyproject.toml','w').write(t.replace('name = \"inferna\"','name = \"inferna-cuda12\"',1))" &&
-            python -c "t=open('pyproject.toml').read(); assert 'name = \"inferna-cuda12\"' in t, 'rename failed'" &&
             cd {project} &&
-            python scripts/manage.py build --all --deps-only --no-sd-examples
-            ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }} &&
-            python scripts/manage.py write_build_config
+            python scripts/manage.py cibw_before_build --rename inferna-cuda12 --build-deps
+            ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }}
           CIBW_ENVIRONMENT_WINDOWS: >
             GGML_CUDA=1
             GGML_METAL=0
