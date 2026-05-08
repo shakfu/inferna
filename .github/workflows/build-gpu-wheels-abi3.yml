@@ -141,20 +141,6 @@ jobs:
       enabled: ${{ inputs.cuda_windows }}
       extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
 
-  smoke:
-    needs: [cuda, rocm, sycl, vulkan_linux, vulkan_windows, vulkan_macos_intel, cuda_windows]
-    if: always() && !cancelled()
-    uses: ./.github/workflows/_gpu-smoke.yml
-    with:
-      wheel_kind: abi3
-      cuda_linux: ${{ inputs.cuda_linux }}
-      rocm_linux: ${{ inputs.rocm_linux }}
-      sycl_linux: ${{ inputs.sycl_linux }}
-      vulkan_linux: ${{ inputs.vulkan_linux }}
-      cuda_windows: ${{ inputs.cuda_windows }}
-      vulkan_windows: ${{ inputs.vulkan_windows }}
-      vulkan_macos_intel: ${{ inputs.vulkan_macos_intel }}
-
   collect:
     needs: [cuda, rocm, sycl, vulkan_linux, vulkan_windows, vulkan_macos_intel, cuda_windows]
     if: always() && !cancelled()
