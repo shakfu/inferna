@@ -2802,7 +2802,11 @@ class Application(ShellCmd, metaclass=MetaCommander):
     # cibw_before_build
 
     @option("--rename", required=True, help="target package name (e.g. inferna-cuda12)")
-    @opt("--build-deps", "-b", "build thirdparty deps via manage.py build (Win/macOS only; Linux does this in CIBW_BEFORE_ALL)")
+    @opt(
+        "--build-deps",
+        "-b",
+        "build thirdparty deps via manage.py build (Win/macOS only; Linux does this in CIBW_BEFORE_ALL)",
+    )
     @opt("--dynamic", "-d", "build dynamic variant (passes --dynamic to manage.py build)")
     def do_cibw_before_build(self, args: argparse.Namespace) -> None:
         """CIBW_BEFORE_BUILD entry point: rename pyproject + (optionally) build deps + write build_config.
@@ -2816,8 +2820,14 @@ class Application(ShellCmd, metaclass=MetaCommander):
         rename_script = project_root / "scripts" / "ci_rename_package.py"
         subprocess.check_call([PYTHON, str(rename_script), args.rename], cwd=str(project_root))
         if args.build_deps:
-            cmd = [PYTHON, str(project_root / "scripts" / "manage.py"),
-                   "build", "--all", "--deps-only", "--no-sd-examples"]
+            cmd = [
+                PYTHON,
+                str(project_root / "scripts" / "manage.py"),
+                "build",
+                "--all",
+                "--deps-only",
+                "--no-sd-examples",
+            ]
             if args.dynamic:
                 cmd.append("--dynamic")
             self.log.info(" ".join(cmd))
@@ -2840,11 +2850,13 @@ class Application(ShellCmd, metaclass=MetaCommander):
             "pre_cmds": [
                 ["yum", "install", "-y", "git", "yum-utils", "epel-release"],
                 ["yum", "install", "-y", "ccache"],
-                ["yum-config-manager", "--add-repo",
-                 "https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo"],
+                [
+                    "yum-config-manager",
+                    "--add-repo",
+                    "https://developer.download.nvidia.com/compute/cuda/repos/rhel7/x86_64/cuda-rhel7.repo",
+                ],
             ],
-            "packages": ["cuda-nvcc-12-4", "cuda-cudart-devel-12-4",
-                         "cuda-driver-devel-12-4", "libcublas-devel-12-4"],
+            "packages": ["cuda-nvcc-12-4", "cuda-cudart-devel-12-4", "cuda-driver-devel-12-4", "libcublas-devel-12-4"],
             "post_cmds": [
                 ["bash", "-c", "ln -s /usr/local/cuda-12.4 /usr/local/cuda"],
             ],
@@ -2854,8 +2866,12 @@ class Application(ShellCmd, metaclass=MetaCommander):
             "pre_cmds": [
                 ["dnf", "install", "-y", "git", "epel-release"],
                 ["dnf", "install", "-y", "ccache"],
-                ["dnf", "install", "-y",
-                 "https://repo.radeon.com/amdgpu-install/6.3.3/rhel/8.10/amdgpu-install-6.3.60303-1.el8.noarch.rpm"],
+                [
+                    "dnf",
+                    "install",
+                    "-y",
+                    "https://repo.radeon.com/amdgpu-install/6.3.3/rhel/8.10/amdgpu-install-6.3.60303-1.el8.noarch.rpm",
+                ],
             ],
             "packages": ["rocm-hip-runtime-devel", "hipblas-devel", "rocblas-devel", "libstdc++-static"],
             "post_cmds": [
@@ -2868,7 +2884,11 @@ class Application(ShellCmd, metaclass=MetaCommander):
             "pre_cmds": [
                 ["dnf", "install", "-y", "git", "epel-release"],
                 ["dnf", "install", "-y", "ccache"],
-                ["bash", "-c", "rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"],
+                [
+                    "bash",
+                    "-c",
+                    "rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB",
+                ],
                 ["dnf", "config-manager", "--add-repo", "https://yum.repos.intel.com/oneapi"],
             ],
             "packages": ["intel-oneapi-dpcpp-cpp-2025.3", "intel-oneapi-mkl-devel-2025.3"],
@@ -2987,8 +3007,14 @@ class Application(ShellCmd, metaclass=MetaCommander):
         env["PATH"] = os.pathsep.join(path_prefix + [env.get("PATH", "")])
 
         # 6. Build thirdparty deps (calls manage.py build under the cibw python).
-        cmd = [ci_python, str(project_root / "scripts" / "manage.py"),
-               "build", "--all", "--deps-only", "--no-sd-examples"]
+        cmd = [
+            ci_python,
+            str(project_root / "scripts" / "manage.py"),
+            "build",
+            "--all",
+            "--deps-only",
+            "--no-sd-examples",
+        ]
         if args.dynamic:
             cmd.append("--dynamic")
         self.log.info(" ".join(cmd))
@@ -3037,26 +3063,37 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 ["git", "clone", "--depth", "1", "https://github.com/google/shaderc.git", str(shaderc_src)]
             )
             subprocess.check_call(["python3", "utils/git-sync-deps"], cwd=str(shaderc_src))
-            subprocess.check_call([
-                "cmake", "-S", ".", "-B", "build",
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DSHADERC_SKIP_TESTS=ON",
-                "-DSHADERC_SKIP_EXAMPLES=ON",
-                "-DSHADERC_SKIP_COPYRIGHT_CHECK=ON",
-            ], cwd=str(shaderc_src))
+            subprocess.check_call(
+                [
+                    "cmake",
+                    "-S",
+                    ".",
+                    "-B",
+                    "build",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DSHADERC_SKIP_TESTS=ON",
+                    "-DSHADERC_SKIP_EXAMPLES=ON",
+                    "-DSHADERC_SKIP_COPYRIGHT_CHECK=ON",
+                ],
+                cwd=str(shaderc_src),
+            )
             subprocess.check_call(
                 ["cmake", "--build", "build", "--target", "glslc_exe", "--parallel", "4"],
                 cwd=str(shaderc_src),
             )
             shutil.copy(shaderc_src / "build" / "glslc" / "glslc", "/usr/local/bin/glslc")
-            subprocess.check_call([
-                "cmake",
-                "-S", str(shaderc_src / "third_party" / "spirv-headers"),
-                "-B", str(spirv_build),
-                "-DCMAKE_INSTALL_PREFIX=/usr/local",
-                "-DSPIRV_HEADERS_SKIP_EXAMPLES=ON",
-                "-DSPIRV_HEADERS_SKIP_INSTALL=OFF",
-            ])
+            subprocess.check_call(
+                [
+                    "cmake",
+                    "-S",
+                    str(shaderc_src / "third_party" / "spirv-headers"),
+                    "-B",
+                    str(spirv_build),
+                    "-DCMAKE_INSTALL_PREFIX=/usr/local",
+                    "-DSPIRV_HEADERS_SKIP_EXAMPLES=ON",
+                    "-DSPIRV_HEADERS_SKIP_INSTALL=OFF",
+                ]
+            )
             subprocess.check_call(["cmake", "--install", str(spirv_build)])
         finally:
             shutil.rmtree(shaderc_src, ignore_errors=True)
@@ -3096,18 +3133,32 @@ class Application(ShellCmd, metaclass=MetaCommander):
             "": [],
             "cpu": [],
             "cuda": [
-                "libcuda.so.1", "libcudart.so.12", "libcublas.so.12",
-                "libcublasLt.so.12", "libgomp.so.1",
+                "libcuda.so.1",
+                "libcudart.so.12",
+                "libcublas.so.12",
+                "libcublasLt.so.12",
+                "libgomp.so.1",
             ],
             "vulkan": ["libvulkan.so.1", "libgomp.so.1"],
             "hip": [
-                "libamdhip64.so.6", "libhipblas.so.2", "librocblas.so.4",
-                "libhsa-runtime64.so.1", "librocsolver.so.0", "libhipblaslt.so.0",
-                "libamd_comgr.so.2", "librocprofiler-register.so.0", "libgomp.so.1",
+                "libamdhip64.so.6",
+                "libhipblas.so.2",
+                "librocblas.so.4",
+                "libhsa-runtime64.so.1",
+                "librocsolver.so.0",
+                "libhipblaslt.so.0",
+                "libamd_comgr.so.2",
+                "librocprofiler-register.so.0",
+                "libgomp.so.1",
             ],
             "sycl": [
-                "libsycl.so.8", "libOpenCL.so.1", "libsvml.so", "libimf.so",
-                "libintlc.so.5", "libtbb.so.12", "libgomp.so.1",
+                "libsycl.so.8",
+                "libOpenCL.so.1",
+                "libsvml.so",
+                "libimf.so",
+                "libintlc.so.5",
+                "libtbb.so.12",
+                "libgomp.so.1",
             ],
             "opencl": ["libOpenCL.so.1", "libgomp.so.1"],
             "metal": [],
@@ -3180,9 +3231,7 @@ class Application(ShellCmd, metaclass=MetaCommander):
         scripts_dir = Path(sysconfig.get_path("scripts"))
 
         def _install(*pkgs: str) -> None:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "--quiet", *pkgs]
-            )
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", *pkgs])
 
         def _script(name: str) -> str:
             exe = scripts_dir / (f"{name}.exe" if PLATFORM == "Windows" else name)
@@ -3273,14 +3322,18 @@ class Application(ShellCmd, metaclass=MetaCommander):
         # that platform defaults (e.g. GGML_METAL=1 on macOS) don't leak in.
         backend_env: dict[str, dict[str, str]] = {
             "cpu": {
-                "GGML_METAL": "0", "GGML_CUDA": "0", "GGML_VULKAN": "0",
-                "GGML_HIP": "0", "GGML_SYCL": "0", "GGML_OPENCL": "0",
+                "GGML_METAL": "0",
+                "GGML_CUDA": "0",
+                "GGML_VULKAN": "0",
+                "GGML_HIP": "0",
+                "GGML_SYCL": "0",
+                "GGML_OPENCL": "0",
             },
-            "metal":  {"GGML_METAL": "1"},
-            "cuda":   {"GGML_CUDA": "1"},
+            "metal": {"GGML_METAL": "1"},
+            "cuda": {"GGML_CUDA": "1"},
             "vulkan": {"GGML_VULKAN": "1"},
-            "sycl":   {"GGML_SYCL": "1"},
-            "hip":    {"GGML_HIP": "1"},
+            "sycl": {"GGML_SYCL": "1"},
+            "hip": {"GGML_HIP": "1"},
             "opencl": {"GGML_OPENCL": "1"},
         }
 

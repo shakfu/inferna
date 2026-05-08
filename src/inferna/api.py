@@ -287,10 +287,7 @@ class GenerationConfig:
             errors.append(f"repeat_penalty must be >= 0.0, got {self.repeat_penalty}")
 
         if self.penalty_last_n < -1:
-            errors.append(
-                f"penalty_last_n must be >= -1 (-1 = full context, 0 = disabled), "
-                f"got {self.penalty_last_n}"
-            )
+            errors.append(f"penalty_last_n must be >= -1 (-1 = full context, 0 = disabled), got {self.penalty_last_n}")
 
         if self.mirostat not in (0, 1, 2):
             errors.append(f"mirostat must be 0, 1, or 2, got {self.mirostat}")
@@ -308,37 +305,27 @@ class GenerationConfig:
             errors.append(f"typical_min_keep must be >= 0, got {self.typical_min_keep}")
 
         if not 0.0 <= self.xtc_probability <= 1.0:
-            errors.append(
-                f"xtc_probability must be between 0.0 and 1.0, got {self.xtc_probability}"
-            )
+            errors.append(f"xtc_probability must be between 0.0 and 1.0, got {self.xtc_probability}")
 
         if not 0.0 <= self.xtc_threshold <= 1.0:
-            errors.append(
-                f"xtc_threshold must be between 0.0 and 1.0, got {self.xtc_threshold}"
-            )
+            errors.append(f"xtc_threshold must be between 0.0 and 1.0, got {self.xtc_threshold}")
 
         if self.dynatemp_range < 0.0:
             errors.append(f"dynatemp_range must be >= 0.0, got {self.dynatemp_range}")
 
         if self.dynatemp_exponent <= 0.0:
-            errors.append(
-                f"dynatemp_exponent must be > 0.0, got {self.dynatemp_exponent}"
-            )
+            errors.append(f"dynatemp_exponent must be > 0.0, got {self.dynatemp_exponent}")
 
         if self.logit_bias is not None:
             if not isinstance(self.logit_bias, dict):
-                errors.append(
-                    f"logit_bias must be a dict[int, float] or None, got {type(self.logit_bias).__name__}"
-                )
+                errors.append(f"logit_bias must be a dict[int, float] or None, got {type(self.logit_bias).__name__}")
             else:
                 for k, v in self.logit_bias.items():
                     if not isinstance(k, int) or isinstance(k, bool):
                         errors.append(f"logit_bias keys must be int token ids, got {type(k).__name__}")
                         break
                     if not isinstance(v, (int, float)) or isinstance(v, bool):
-                        errors.append(
-                            f"logit_bias values must be numeric, got {type(v).__name__}"
-                        )
+                        errors.append(f"logit_bias values must be numeric, got {type(v).__name__}")
                         break
 
         if self.n_gpu_layers < -1:
@@ -1364,11 +1351,7 @@ class LLM:
         # Penalties: applied before the sampling tail. Skip the call entirely
         # when all three knobs are at their disabled values to avoid an
         # unnecessary chain stage.
-        if (
-            config.repeat_penalty != 1.0
-            or config.frequency_penalty != 0.0
-            or config.presence_penalty != 0.0
-        ):
+        if config.repeat_penalty != 1.0 or config.frequency_penalty != 0.0 or config.presence_penalty != 0.0:
             sampler.add_penalties(
                 config.penalty_last_n,
                 config.repeat_penalty,
@@ -1410,9 +1393,7 @@ class LLM:
                 sampler.add_typical(config.typical_p, config.typical_min_keep)
             sampler.add_top_p(config.top_p, 1)
             if config.xtc_probability > 0.0:
-                xtc_seed = (
-                    config.seed if config.seed != LLAMA_DEFAULT_SEED else LLAMA_DEFAULT_SEED
-                )
+                xtc_seed = config.seed if config.seed != LLAMA_DEFAULT_SEED else LLAMA_DEFAULT_SEED
                 sampler.add_xtc(
                     config.xtc_probability,
                     config.xtc_threshold,

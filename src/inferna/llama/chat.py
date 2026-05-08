@@ -125,20 +125,12 @@ class Chat:
                 self.vocab.n_vocab,
                 [(int(tok), float(bias)) for tok, bias in logit_bias.items()],
             )
-        if (
-            repeat_penalty != 1.0
-            or frequency_penalty != 0.0
-            or presence_penalty != 0.0
-        ):
-            self.sampler.add_penalties(
-                penalty_last_n, repeat_penalty, frequency_penalty, presence_penalty
-            )
+        if repeat_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0:
+            self.sampler.add_penalties(penalty_last_n, repeat_penalty, frequency_penalty, presence_penalty)
         if mirostat != 0:
             self.sampler.add_temp(temperature)
             if mirostat == 1:
-                self.sampler.add_mirostat(
-                    self.vocab.n_vocab, seed, mirostat_tau, mirostat_eta, DEFAULT_MIROSTAT_M
-                )
+                self.sampler.add_mirostat(self.vocab.n_vocab, seed, mirostat_tau, mirostat_eta, DEFAULT_MIROSTAT_M)
             elif mirostat == 2:
                 self.sampler.add_mirostat_v2(seed, mirostat_tau, mirostat_eta)
             else:

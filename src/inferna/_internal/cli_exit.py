@@ -13,11 +13,12 @@ from __future__ import annotations
 import os
 import sys
 import traceback
+from collections.abc import Iterator
 from contextlib import contextmanager
 
 
 @contextmanager
-def cli_runtime():
+def cli_runtime() -> Iterator[None]:
     """Wrap a CLI ``main()`` call; flush stdio and ``os._exit`` on the way out.
 
     Usage:

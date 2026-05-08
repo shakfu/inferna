@@ -286,11 +286,7 @@ class BatchGenerator:
                 [(int(tok), float(bias)) for tok, bias in config.logit_bias.items()],
             )
 
-        if (
-            config.repeat_penalty != 1.0
-            or config.frequency_penalty != 0.0
-            or config.presence_penalty != 0.0
-        ):
+        if config.repeat_penalty != 1.0 or config.frequency_penalty != 0.0 or config.presence_penalty != 0.0:
             sampler.add_penalties(
                 config.penalty_last_n,
                 config.repeat_penalty,
