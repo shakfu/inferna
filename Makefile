@@ -252,8 +252,8 @@ download-all: $(MODEL) $(MODEL_RAG) $(MODEL_LLAVA)
 .PHONY: wheel-cpu wheel-metal wheel-cuda wheel-vulkan wheel-sycl wheel-hip wheel-opencl
 .PHONY: wheel-cpu-dynamic wheel-metal-dynamic wheel-cuda-dynamic wheel-vulkan-dynamic
 .PHONY: wheel-sycl-dynamic wheel-hip-dynamic wheel-opencl-dynamic
-.PHONY: wheel-metal-abi3-dynamic wheel-cuda-abi3-dynamic wheel-vulkan-abi3-dynamic
-.PHONY: wheel-sycl-abi3-dynamic wheel-hip-abi3-dynamic wheel-opencl-abi3-dynamic
+.PHONY: wheel-metal-dynamic-abi3 wheel-cuda-dynamic-abi3 wheel-vulkan-dynamic-abi3
+.PHONY: wheel-sycl-dynamic-abi3 wheel-hip-dynamic-abi3 wheel-opencl-dynamic-abi3
 .PHONY: wheel-repair
 
 show-backends:
@@ -386,32 +386,32 @@ wheel-opencl-dynamic:
 # wheel-<backend>-dynamic deps build.
 _ABI3_FLAGS := --config-setting=cmake.define.INFERNA_ABI3=ON --config-setting=wheel.py-api=cp312
 
-wheel-metal-abi3-dynamic:
+wheel-metal-dynamic-abi3:
 	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_METAL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
 	@$(MAKE) wheel-repair BACKEND=metal
 
-wheel-cuda-abi3-dynamic:
+wheel-cuda-dynamic-abi3:
 	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_CUDA=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 CMAKE_CUDA_ARCHITECTURES=$${CMAKE_CUDA_ARCHITECTURES:-native} uv build --wheel $(_ABI3_FLAGS)
 	@$(MAKE) wheel-repair BACKEND=cuda
 
-wheel-vulkan-abi3-dynamic:
+wheel-vulkan-dynamic-abi3:
 	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_VULKAN=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
 	@$(MAKE) wheel-repair BACKEND=vulkan
 
-wheel-sycl-abi3-dynamic:
+wheel-sycl-dynamic-abi3:
 	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_SYCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
 	@$(MAKE) wheel-repair BACKEND=sycl
 
-wheel-hip-abi3-dynamic:
+wheel-hip-dynamic-abi3:
 	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_HIP=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
 	@$(MAKE) wheel-repair BACKEND=hip
 
-wheel-opencl-abi3-dynamic:
+wheel-opencl-dynamic-abi3:
 	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 $(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic --deps-only
 	@GGML_OPENCL=1 WITH_DYLIB=1 SD_USE_VENDORED_GGML=0 uv build --wheel $(_ABI3_FLAGS)
 	@$(MAKE) wheel-repair BACKEND=opencl
@@ -467,7 +467,7 @@ _DYNLIB_DIRS := $(THIRDPARTY)/llama.cpp/dynamic:$(THIRDPARTY)/sd.cpp/dynamic:$(T
 # .github/workflows/, so direct `uv build --wheel` runs produce a wheel
 # equivalent to a CI-built one.
 #
-# Each `wheel-<backend>-dynamic` and `wheel-<backend>-abi3-dynamic` target
+# Each `wheel-<backend>-dynamic` and `wheel-<backend>-dynamic-abi3` target
 # chains `$(MAKE) wheel-repair BACKEND=<backend>` so the build-and-repair
 # flow is one `make` invocation. Standalone `make wheel-repair` (no BACKEND)
 # still works for ad-hoc repair of a wheel sitting in dist/.
