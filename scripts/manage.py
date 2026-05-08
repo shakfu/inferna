@@ -77,6 +77,7 @@ import tempfile
 import stat
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import zipfile
 from fnmatch import fnmatch
@@ -3172,12 +3173,15 @@ class Application(ShellCmd, metaclass=MetaCommander):
         # is pip-installed into that interpreter and invoked via its
         # entry-point script (resolved next to sys.executable so we don't
         # rely on PATH or on a tool's internal module layout).
-        py_dir = Path(sys.executable).parent
-        scripts_dir = py_dir / "Scripts" if PLATFORM == "Windows" else py_dir
+        # sysconfig handles both layouts: venv (python in Scripts/ on
+        # Windows, scripts in same dir) vs system install (python in root,
+        # scripts in Scripts/). Path(sys.executable).parent + "/Scripts"
+        # double-appends inside a Windows venv.
+        scripts_dir = Path(sysconfig.get_path("scripts"))
 
-        def _install(pkg: str) -> None:
+        def _install(*pkgs: str) -> None:
             subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "--quiet", pkg]
+                [sys.executable, "-m", "pip", "install", "--quiet", *pkgs]
             )
 
         def _script(name: str) -> str:
@@ -3209,7 +3213,12 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 if not explicit_wheel:
                     whl.unlink()
         elif PLATFORM == "Darwin":
-            _install("delocate")
+            # `wheel` is needed by do_fix_macos_vulkan_wheel (python -m wheel
+            # pack) for the vulkan repack step; cibw's venv doesn't ship it.
+            if backend == "vulkan":
+                _install("delocate", "wheel")
+            else:
+                _install("delocate")
             env = os.environ.copy()
             env["DYLD_LIBRARY_PATH"] = os.pathsep.join(existing + [env.get("DYLD_LIBRARY_PATH", "")])
             for whl in wheels:
