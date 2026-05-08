@@ -122,10 +122,7 @@ jobs:
             ${{ inputs.extra_cibw_env }}
           CIBW_TEST_COMMAND: ""
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: >
-            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
-            --exclude libvulkan
-            --exclude libMoltenVK &&
-            python {project}/scripts/manage.py fix_macos_vulkan_wheel {dest_dir}
+            python {project}/scripts/manage.py wheel_repair --backend vulkan --dest-dir {dest_dir} {wheel}
 
       - name: List built wheels
         run: ls -lah wheelhouse/

@@ -120,11 +120,7 @@ jobs:
             ${{ inputs.extra_cibw_env }}
           CIBW_TEST_COMMAND: ""
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >
-            delvewheel repair -w {dest_dir} {wheel}
-            --add-path {project}\thirdparty\llama.cpp\dynamic
-            --add-path {project}\thirdparty\whisper.cpp\dynamic
-            --add-path {project}\thirdparty\stable-diffusion.cpp\dynamic
-            --include ggml-vulkan.dll
+            python {project}\scripts\manage.py wheel_repair --backend vulkan --dest-dir {dest_dir} {wheel}
 
       - name: List built wheels
         shell: bash

@@ -146,15 +146,7 @@ jobs:
             ${{ inputs.extra_cibw_env }}
           CIBW_TEST_COMMAND: ""
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
-            test -d {project}/thirdparty/llama.cpp/dynamic || { echo "ERROR: dynamic lib dir missing: {project}/thirdparty/llama.cpp/dynamic"; exit 1; } &&
-            LD_LIBRARY_PATH={project}/thirdparty/llama.cpp/dynamic:$LD_LIBRARY_PATH
-            auditwheel repair -w {dest_dir} {wheel}
-            --plat manylinux_2_35_x86_64
-            --exclude libcuda.so.1
-            --exclude libcudart.so.12
-            --exclude libcublas.so.12
-            --exclude libcublasLt.so.12
-            --exclude libgomp.so.1
+            python {project}/scripts/manage.py wheel_repair --backend cuda --dest-dir {dest_dir} {wheel}
 
       - name: List built wheels
         run: ls -lah wheelhouse/

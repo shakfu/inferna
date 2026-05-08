@@ -2806,6 +2806,11 @@ class Application(ShellCmd, metaclass=MetaCommander):
         help="GPU backend (cuda, vulkan, hip, sycl, opencl, cpu, metal); selects per-backend excludes",
     )
     @option(
+        "--dest-dir",
+        default=None,
+        help="output directory for repaired wheels (default: project dist/)",
+    )
+    @option(
         "wheel",
         nargs="?",
         default=None,
@@ -2865,8 +2870,10 @@ class Application(ShellCmd, metaclass=MetaCommander):
 
         backend = args.backend or ""
 
+        explicit_wheel = False
         if args.wheel:
             target = Path(args.wheel).resolve()
+            explicit_wheel = target.is_file()
         else:
             target = self.project.dist
         if target.is_dir():
@@ -2883,7 +2890,11 @@ class Application(ShellCmd, metaclass=MetaCommander):
             self.log.info(f"wheel_repair: no wheel to repair in {target}")
             return
 
-        dist = self.project.dist
+        if args.dest_dir:
+            dist = Path(args.dest_dir).resolve()
+            dist.mkdir(parents=True, exist_ok=True)
+        else:
+            dist = self.project.dist
         dynlib = [
             self.project.thirdparty / "llama.cpp" / "dynamic",
             self.project.thirdparty / "stable-diffusion.cpp" / "dynamic",
@@ -2901,7 +2912,8 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 cmd.append(str(whl))
                 self.log.info(" ".join(cmd))
                 subprocess.check_call(cmd, env=env)
-                whl.unlink()
+                if not explicit_wheel:
+                    whl.unlink()
         elif PLATFORM == "Darwin":
             env = os.environ.copy()
             env["DYLD_LIBRARY_PATH"] = os.pathsep.join(existing + [env.get("DYLD_LIBRARY_PATH", "")])
@@ -2912,6 +2924,11 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 cmd.append(str(whl))
                 self.log.info(" ".join(cmd))
                 subprocess.check_call(cmd, env=env)
+            if backend == "vulkan":
+                # delocate's --exclude libvulkan leaves the hardcoded Homebrew
+                # libvulkan path intact; rewrite it to @rpath so the wheel
+                # loads on Apple Silicon and Intel Homebrew alike.
+                self.do_fix_macos_vulkan_wheel(argparse.Namespace(wheel=str(dist)))
         elif PLATFORM == "Windows":
             for whl in wheels:
                 cmd = ["uvx", "delvewheel", "repair", "-w", str(dist)]
@@ -2997,7 +3014,7 @@ class Application(ShellCmd, metaclass=MetaCommander):
 
         # Step 3: bundle shared-library deps into the wheel (dynamic only).
         if args.dynamic:
-            self.do_wheel_repair(argparse.Namespace(backend=args.backend, wheel=None))
+            self.do_wheel_repair(argparse.Namespace(backend=args.backend, wheel=None, dest_dir=None))
 
     # ------------------------------------------------------------------------
     # wheel

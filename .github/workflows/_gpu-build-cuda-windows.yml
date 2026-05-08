@@ -120,15 +120,7 @@ jobs:
             ${{ inputs.extra_cibw_env }}
           CIBW_TEST_COMMAND: ""
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >
-            delvewheel repair -w {dest_dir} {wheel}
-            --add-path {project}\thirdparty\llama.cpp\dynamic
-            --add-path {project}\thirdparty\whisper.cpp\dynamic
-            --add-path {project}\thirdparty\stable-diffusion.cpp\dynamic
-            --include ggml-cuda.dll
-            --no-dll nvcuda.dll
-            --no-dll cudart64_12.dll
-            --no-dll cublas64_12.dll
-            --no-dll cublasLt64_12.dll
+            python {project}\scripts\manage.py wheel_repair --backend cuda --dest-dir {dest_dir} {wheel}
 
       - name: List built wheels
         shell: bash

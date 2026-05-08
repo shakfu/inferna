@@ -150,19 +150,7 @@ jobs:
             ${{ inputs.extra_cibw_env }}
           CIBW_TEST_COMMAND: ""
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
-            test -d {project}/thirdparty/llama.cpp/dynamic || { echo "ERROR: dynamic lib dir missing: {project}/thirdparty/llama.cpp/dynamic"; exit 1; } &&
-            LD_LIBRARY_PATH={project}/thirdparty/llama.cpp/dynamic:$LD_LIBRARY_PATH
-            auditwheel repair -w {dest_dir} {wheel}
-            --plat manylinux_2_35_x86_64
-            --exclude libamdhip64.so.6
-            --exclude libhipblas.so.2
-            --exclude librocblas.so.4
-            --exclude libhsa-runtime64.so.1
-            --exclude librocsolver.so.0
-            --exclude libhipblaslt.so.0
-            --exclude libamd_comgr.so.2
-            --exclude librocprofiler-register.so.0
-            --exclude libgomp.so.1
+            python {project}/scripts/manage.py wheel_repair --backend hip --dest-dir {dest_dir} {wheel}
 
       - name: List built wheels
         run: ls -lah wheelhouse/
