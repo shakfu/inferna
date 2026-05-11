@@ -35,7 +35,7 @@ How inferna differs from cyllama:
 
 - Speculative decoding -- accelerate generation with draft models
 
-- Agent framework -- ReActAgent, ConstrainedAgent, ContractAgent with tool calling
+- Agent framework -- ReActAgent, ConstrainedAgent, ContractAgent with tool calling; multi-agent composition (`agent_as_tool`, `TieredAgentTeam`); JSON-Schema constraints on tool args via `Annotated[]` markers; per-tool timeouts and coercion
 
 - RAG -- retrieval-augmented generation with local embeddings and [sqlite-vector](https://github.com/sqliteai/sqlite-vector)
 
@@ -329,13 +329,42 @@ agent = ContractAgent(
     llm=llm,
     tools=[divide],
     policy=ContractPolicy.ENFORCE,
-    task_precondition=lambda task: len(task) > 10,
-    answer_postcondition=lambda ans: len(ans) > 0,
+    task_preconditions=[lambda task: len(task) > 10],
+    answer_postconditions=[lambda ans: len(ans) > 0],
 )
 result = agent.run("What is 100 divided by 4?")
 ```
 
-See [Agents Overview](docs/agents_overview.md) for detailed agent documentation.
+**Schema constraints via `Annotated[]`** -- attach JSON-Schema bounds directly to type hints (`Ge`, `Le`, `MultipleOf`, `MinLen`, `MaxLen`, `Pattern`); the dispatch layer enforces them before the tool runs:
+
+```python
+from typing import Annotated, Literal
+from inferna.agents import tool, Ge, Le, Pattern
+
+@tool
+def fetch(
+    table: Annotated[str, Pattern(r"^[a-z_]+$")],
+    limit: Annotated[int, Ge(1), Le(1000)],
+    mode: Literal["preview", "full"] = "preview",
+) -> list[dict]: ...
+```
+
+**Multi-agent composition** -- wrap any agent as a tool for supervisor / worker setups; pair smaller worker LLMs with a larger planner via `TieredAgentTeam`:
+
+```python
+from inferna.agents import agent_as_tool, AgentRole, TieredAgentTeam
+
+team = TieredAgentTeam(
+    supervisor=ReActAgent(llm=LLM("models/strong.gguf"), tools=[]),
+    workers=[
+        AgentRole("researcher", researcher, "Find facts."),
+        AgentRole("coder", coder, "Modify code."),
+    ],
+)
+result = team.run("Refactor X using technique Y.")
+```
+
+See [Agents Overview](docs/agents_overview.md) for detailed agent documentation, plus [Contract Recipes](docs/agents/contracts.md) for nine worked patterns of when to use schema vs contracts.
 
 ### Speech Recognition
 
