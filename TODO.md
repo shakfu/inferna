@@ -18,6 +18,16 @@
 
 - [ ] MCP server (`inferna/mcp/`): expose local inference (`complete`, `chat`, `embed`, `transcribe`, `generate_image`) as MCP tools and model listing as resources. Two transports: stdio entrypoint for subprocess clients (Claude Desktop), and Streamable-HTTP routes mounted on `EmbeddedServer` (`src/inferna/llama/server/embedded.pyx`) for Claude Code / remote clients. Reuse `agents/jsonrpc.py` framing and the high-level API in `src/inferna/api.py` -- no new heavy deps. (Client side already shipped: `LLM.add_mcp_server()` in `src/inferna/api.py:1378` wraps `agents/mcp.py` for non-agent callers.)
 
+## Agent framework
+
+These three items are the residue of cyllama's `AGENT_TOOL_REVIEW.md` after every concrete proposal landed or was explicitly dropped. Both repos share the agent layer byte-identical modulo `s/cyllama/inferna/g`; any work landed here should be ported (or vice-versa). Each has a clear trigger; none is urgent.
+
+- [ ] **Stop-pattern migration in `_extract_answer`** -- `src/inferna/agents/react.py` keeps a hand-maintained list of ~24 hallucination stop-patterns (code blocks, `Note:`, `Let's`, `def `, `class `, etc.) and post-processes generated text against them. The principled fix is to extend `GenerationConfig.stop_sequences` for the answer-extraction generation step instead; the default config already wires `stop_sequences` for `Observation:` patterns (`react.py:200-206`) and `LLM.__call__` honors them. Sketch: `cfg = replace(self.generation_config, stop_sequences=self.generation_config.stop_sequences + [...])` for the answer turn only; the regex strip becomes a fallback for models that ignore stop sequences. Trigger: refactor the next time the stop-pattern list grows from a new model-specific failure mode -- accreting another regex is the wrong response.
+
+- [ ] **MCP SSE transport** -- `src/inferna/agents/mcp.py` implements `McpStdioConnection` (line 148) and `McpHttpConnection` (line 271) but `McpTransportType.SSE` (line 38) is reserved-but-unwired. A symmetric `McpSseConnection` would slot in next to the HTTP one, dispatched from `McpClient._connect_server` (line 400). Bulk of the cost is an integration test harness with a real SSE-speaking MCP server; the protocol class itself is small. If/when this lands, remember to extend `tests/test_llama_cpp_surface.py` if any new sampler symbols become load-bearing (the nanobind shim drift concern). Trigger: an MCP server you want to use exposes SSE-only. The ecosystem is mostly stdio/HTTP today, so this is unlikely soon.
+
+- [ ] **ACP protocol-version negotiation** -- `src/inferna/agents/acp.py` hardcodes `ACP_PROTOCOL_VERSION = "2025-01-01"` (line 53) and embeds it directly in initialize responses (line 480). The module is marked experimental for this and other reasons, so the warning currently buys time -- but if ACP graduates from POC to a genuinely-used integration point, parameterize on the client's announced version (negotiate during initialize). Trigger: an ACP client surfaces with a different version. (A reference-client conformance test was also flagged but doesn't belong in a TODO until a harness target exists.)
+
 ## CI / Workflows
 
 ### Medium Priority
