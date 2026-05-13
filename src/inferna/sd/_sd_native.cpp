@@ -91,8 +91,22 @@ struct SDContextParamsW {
     std::optional<std::string> photo_maker_path_s;
     std::optional<std::string> tensor_type_rules_s;
 
+    // Owning storage for the embeddings array. Strings must outlive new_sd_ctx().
+    std::vector<std::pair<std::string, std::string>> embeddings_owned;  // (name, path)
+    std::vector<sd_embedding_t> embeddings_buf;
+
     SDContextParamsW() {
         sd_ctx_params_init(&p);
+    }
+
+    void sync_embeddings() {
+        embeddings_buf.clear();
+        embeddings_buf.reserve(embeddings_owned.size());
+        for (auto& kv : embeddings_owned) {
+            embeddings_buf.push_back(sd_embedding_t{kv.first.c_str(), kv.second.c_str()});
+        }
+        p.embeddings = embeddings_buf.empty() ? nullptr : embeddings_buf.data();
+        p.embedding_count = (uint32_t) embeddings_buf.size();
     }
 };
 
@@ -218,6 +232,7 @@ struct SDContextW {
         // ggml_backend_load_all_from_path itself dedupes registrations.
         inferna::load_all_backends("inferna.sd._sd_native");
 
+        params.sync_embeddings();
         ctx = new_sd_ctx(&params.p);
         if (!ctx) {
             throw std::runtime_error(
@@ -583,6 +598,28 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDContextParamsW, bool, p.chroma_use_t5_mask, "chroma_use_t5_mask")
         SD_PARAM_VAL(SDContextParamsW, int,  p.chroma_t5_mask_pad, "chroma_t5_mask_pad")
         SD_PARAM_VAL(SDContextParamsW, bool, p.qwen_image_zero_cond_t, "qwen_image_zero_cond_t")
+        SD_PARAM_VAL(SDContextParamsW, float, p.max_vram, "max_vram")
+        .def_prop_rw("embeddings",
+            [](SDContextParamsW& s) {
+                nb::list out;
+                for (auto& kv : s.embeddings_owned) {
+                    out.append(nb::make_tuple(kv.first, kv.second));
+                }
+                return out;
+            },
+            [](SDContextParamsW& s, nb::iterable v) {
+                s.embeddings_owned.clear();
+                for (nb::handle item : v) {
+                    auto seq = nb::cast<nb::sequence>(nb::borrow(item));
+                    if (nb::len(seq) != 2) {
+                        throw std::runtime_error("embeddings entries must be (name, path) pairs");
+                    }
+                    auto name = nb::cast<std::string>(seq[0]);
+                    auto path = nb::cast<std::string>(seq[1]);
+                    s.embeddings_owned.emplace_back(std::move(name), std::move(path));
+                }
+                s.sync_embeddings();
+            })
         .def("__str__", [](SDContextParamsW& s){
             char* str = sd_ctx_params_to_str(&s.p);
             std::string out = str ? std::string(str) : std::string("SDContextParams()");

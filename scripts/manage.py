@@ -144,9 +144,9 @@ PY_VER_MINOR = sys.version_info.minor
 # LLAMACPP_VERSION=master) if you need to test against a newer revision.
 # (Previously gated behind a STABLE_BUILD flag whose two branches carried
 # identical values — the flag was a no-op.)
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b9025")
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b9119")
 WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.8.4")
-SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-593-3d6064b")
+SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-596-90e87bc")
 SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "0.9.95")
 if PLATFORM == "Darwin":
     # Source of truth: matches pyproject.toml [tool.cibuildwheel.macos]
