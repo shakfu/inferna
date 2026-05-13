@@ -6,10 +6,11 @@ This module provides a Python implementation of the chat example using the infer
 """
 
 import logging
+import os
 import sys
 import time
 import argparse
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from typing import Mapping
 
@@ -36,7 +37,7 @@ from ..defaults import (
     DEFAULT_XTC_THRESHOLD,
     LLAMA_DEFAULT_SEED,
 )
-from ..utils.color import green, yellow, END, esc, FG_END
+from ..utils.color import green, white, magenta, grey, cyan, red, bold, END, esc, FG_END
 
 from .llama_cpp import (
     LlamaModel,
@@ -57,6 +58,21 @@ except ImportError:  # pragma: no cover
     _JinjaTemplateError = type("_JinjaTemplateError", (Exception,), {})
 
 logger = logging.getLogger(__name__)
+
+
+SLASH_COMMANDS: Tuple[Tuple[str, str], ...] = (
+    ("/help", "show this help message"),
+    ("/exit", "exit the chat"),
+    ("/agent", "/agent <task> - run a ReAct agent"),
+    ("/agent-strict", "/agent-strict <task> - run a constrained agent"),
+    ("/agent-contract", "/agent-contract <task> - run a contract agent"),
+    ("/agent-plan", "/agent-plan <task> - run a plan-then-act agent"),
+    ("/agent-reflect", "/agent-reflect <task> - run a reflect-and-revise agent"),
+)
+
+SLASH_COMMAND_NAMES: Tuple[str, ...] = tuple(name for name, _ in SLASH_COMMANDS)
+
+FILE_ARG_COMMANDS: Tuple[str, ...] = ()
 
 
 def print_usage() -> None:
@@ -165,6 +181,119 @@ class Chat:
         self.total_generated_tokens = 0
         self.total_prompt_time = 0.0
         self.total_generation_time = 0.0
+
+        # Lazily-constructed high-level LLM for /agent* commands.
+        # Built on first /agent use so users who never invoke agents
+        # don't pay for a second model handle.
+        self._agent_llm: Any = None
+
+    def _get_agent_llm(self) -> Any:
+        """Lazily build a high-level :class:`inferna.api.LLM` for agent calls.
+
+        Reused across /agent invocations within the same chat session.
+        Constructed with the same model + ctx + ngl the Chat was given.
+        """
+        if self._agent_llm is None:
+            from ..api import GenerationConfig, LLM
+
+            self._agent_llm = LLM(
+                self.model_path,
+                config=GenerationConfig(
+                    n_ctx=self.n_ctx,
+                    n_gpu_layers=self.ngl,
+                    max_tokens=self.max_tokens,
+                ),
+                verbose=False,
+            )
+        return self._agent_llm
+
+    @staticmethod
+    def _render_agent_event(ev: Any) -> None:
+        """Print a single :class:`AgentEvent` to stdout with type-appropriate color.
+
+        ANSWER events print without color (matching normal chat output).
+        Trace events (THOUGHT/ACTION/OBSERVATION/...) print in dim color
+        prefixed with the event type and optional ``source`` tag.
+        """
+        from ..agents.types import EventType
+
+        etype = ev.type
+        content = ev.content or ""
+        source = (ev.metadata or {}).get("source")
+        tag = f"[{etype.value}{' ' + source if source else ''}]"
+
+        if etype == EventType.ANSWER:
+            # Final answer prints uncolored. Composed-agent answers
+            # tag themselves with source="final"; intermediate
+            # planner/worker answers also flow here but are equally
+            # legible without extra styling.
+            if source and source != "final":
+                print(grey(tag), content)
+            else:
+                print(content)
+            return
+
+        if etype == EventType.ERROR:
+            print(red(f"{tag} {content}"), file=sys.stderr)
+            return
+
+        if etype == EventType.THOUGHT:
+            print(cyan(tag), grey(content))
+            return
+        if etype == EventType.ACTION:
+            print(magenta(tag), content)
+            return
+        if etype == EventType.OBSERVATION:
+            print(grey(f"{tag} {content}"))
+            return
+
+        # CONTRACT_CHECK / CONTRACT_VIOLATION / future types: render
+        # as a generic trace line so we never silently drop events.
+        print(grey(f"{tag} {content}"))
+
+    def _run_agent_command(self, kind: str, task: str) -> None:
+        """Execute one /agent* slash command.
+
+        Streams events from :func:`inferna.agents.stream_agent`,
+        rendering each via :meth:`_render_agent_event`. The final
+        answer is appended to the chat history so subsequent turns
+        can reference it.
+        """
+        from ..agents import stream_agent
+        from ..agents.types import EventType
+
+        if not task.strip():
+            print(f"usage: /agent{('-' + kind) if kind != 'react' else ''} <task>")
+            return
+
+        llm = self._get_agent_llm()
+        # Echo the task as a user message in the transcript so chat
+        # history reflects what the agent was asked to do.
+        self.messages.append({"role": "user", "content": task})
+
+        final_answer = ""
+        try:
+            for ev in stream_agent(kind, llm, task):
+                self._render_agent_event(ev)
+                if ev.type == EventType.ANSWER:
+                    src = (ev.metadata or {}).get("source")
+                    # For composed kinds (plan/reflect) only the
+                    # "final" answer is the canonical reply. For
+                    # simple kinds there's no source tag, so any
+                    # ANSWER is the final.
+                    if src in (None, "final"):
+                        final_answer = ev.content or ""
+        except KeyboardInterrupt:
+            print(FG_END)
+            return
+        except Exception as e:  # noqa: BLE001
+            print(red(f"agent error: {e}"), file=sys.stderr)
+            # Roll back the user echo so a bad command doesn't poison history.
+            self.messages.pop()
+            return
+
+        if final_answer:
+            self.messages.append({"role": "assistant", "content": final_answer})
 
     def _apply_template(
         self,
@@ -299,6 +428,17 @@ class Chat:
             print(f"  {key:<{key_width}} | {val:>{val_width}}", file=sys.stderr)
         print(line, file=sys.stderr)
 
+    def print_banner(self) -> None:
+        """Print startup banner with model info and available commands."""
+        from .. import __version__
+
+        print(f"build      : inferna v{__version__}")
+        print(f"model      : {os.path.basename(self.model_path)}")
+        print("modalities : text")
+        print()
+        print(f"type {cyan('/help')} to list available commands, or {cyan('/exit')} to quit")
+        print()
+
     def chat_loop(self, stream: bool = True, stats: bool = False) -> None:
         """Main chat loop.
 
@@ -313,31 +453,78 @@ class Chat:
         # search, etc.). Gracefully no-ops on platforms without
         # readline. Uses a separate history file from `inferna rag` so
         # the two REPLs don't pollute each other.
-        from .._internal.readline import setup_history, history_path_for
+        from .._internal.readline import setup_history, history_path_for, setup_completer
 
         setup_history(history_path_for("chat"))
+        restore_completer = setup_completer(SLASH_COMMAND_NAMES, FILE_ARG_COMMANDS)
+
+        self.print_banner()
 
         try:
             while True:
-                # Get user input
-                print(green("> "), end="")
+                # Get user input. Bold-bright prompt; esc(1,32) carries
+                # the bold+green attributes into typed input itself.
+                print(bold(green("> ")) + esc(1, 32), end="", flush=True)
                 try:
-                    user_input = input().strip()
+                    raw = input()
                 except (EOFError, KeyboardInterrupt):
+                    print(esc(22, 39))
                     break
+                print(esc(22, 39), end="", flush=True)
 
+                user_input = raw.strip()
                 if not user_input:
-                    break
+                    continue
+
+                # Slash-command dispatch
+                if user_input.startswith("/"):
+                    parts = user_input.split(None, 1)
+                    cmd = parts[0]
+                    arg = parts[1] if len(parts) > 1 else ""
+
+                    if cmd == "/help":
+                        width = max(len(name) for name, _ in SLASH_COMMANDS)
+                        print("available commands:")
+                        for name, desc in SLASH_COMMANDS:
+                            print(f"  {cyan(name.ljust(width))}  {desc}")
+                        continue
+                    if cmd == "/exit":
+                        break
+
+                    # /agent and /agent-* family
+                    if cmd == "/agent" or cmd.startswith("/agent-"):
+                        agent_kind_map = {
+                            "/agent": "react",
+                            "/agent-strict": "constrained",
+                            "/agent-contract": "contract",
+                            "/agent-plan": "plan",
+                            "/agent-reflect": "reflect",
+                        }
+                        agent_kind = agent_kind_map.get(cmd)
+                        if agent_kind is None:
+                            print(f"unknown agent command: {cmd}")
+                            continue
+                        self._run_agent_command(agent_kind, arg)
+                        continue
+
+                    print(f"unknown command: {cmd}")
+                    continue
 
                 # Always use dict format for messages (works with both jinja
                 # and C API paths via _apply_template)
                 self.messages.append({"role": "user", "content": user_input})
                 prompt = self._apply_template(self.messages, add_assistant_msg=True)
 
-                # Generate response
+                # Generate response. Snapshot session counters before
+                # the call so we can derive this turn's tok/s without
+                # changing `generate`'s return signature.
+                p_tokens_before = self.total_prompt_tokens
+                g_tokens_before = self.total_generated_tokens
+                p_time_before = self.total_prompt_time
+                g_time_before = self.total_generation_time
                 try:
                     if stream:
-                        print(esc(33), end="", flush=True)  # yellow foreground
+                        print(esc(37), end="", flush=True)  # white foreground
                         response = self.generate(
                             prompt,
                             on_token=lambda piece: print(piece, end="", flush=True),
@@ -345,9 +532,18 @@ class Chat:
                         print(FG_END)
                     else:
                         response = self.generate(prompt)
-                        print(yellow(response))
+                        print(white(response))
 
                     self.messages.append({"role": "assistant", "content": response})
+
+                    p_dt = self.total_prompt_time - p_time_before
+                    g_dt = self.total_generation_time - g_time_before
+                    p_dn = self.total_prompt_tokens - p_tokens_before
+                    g_dn = self.total_generated_tokens - g_tokens_before
+                    p_tps = (p_dn / p_dt) if p_dt > 0 else 0.0
+                    g_tps = (g_dn / g_dt) if g_dt > 0 else 0.0
+                    print(magenta(f"[ Prompt: {p_tps:.1f} t/s | Generation: {g_tps:.1f} t/s ]"))
+                    print()
 
                 except KeyboardInterrupt:
                     print(FG_END)
@@ -360,6 +556,8 @@ class Chat:
         finally:
             # Always reset terminal colors on exit
             print(END, end="", flush=True)
+            if restore_completer is not None:
+                restore_completer()
             if stats and self.total_generated_tokens > 0:
                 print(file=sys.stderr)
                 self.print_session_stats()
