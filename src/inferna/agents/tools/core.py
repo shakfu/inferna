@@ -175,6 +175,13 @@ class Tool:
     parameters: Dict[str, Any] = field(default_factory=dict)
     coerce: bool = True
     timeout: Optional[float] = None
+    #: Hand-curated example invocation. When set, ``to_prompt_string`` emits
+    #: this as ``Example tool_args: <json>`` instead of synthesising values
+    #: from the schema. Use this for tools whose correct call shape isn't
+    #: obvious from arg names alone (e.g. ``quarto_render``'s ``content``
+    #: takes a multi-line Quarto document, not a string of the literal word
+    #: ``"example"``).
+    example_args: Optional[Dict[str, Any]] = None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the tool with given arguments."""
@@ -192,6 +199,15 @@ class Tool:
         params = self.parameters.get("properties", {})
         required = self.parameters.get("required", [])
 
+        # When a tool has no required params, the model sees `Example
+        # tool_args: {}` and -- on small models especially -- loses the
+        # pattern of which optional args matter. Fall back to including
+        # every param in the example so the call shape is concrete. The
+        # description still carries which combinations are legal.
+        # Skipped entirely when ``example_args`` is set, since the
+        # hand-curated example already conveys the right shape.
+        include_all_in_example = not required and self.example_args is None
+
         param_strs = []
         example_args: Dict[str, Any] = {}
         for param_name, param_info in params.items():
@@ -203,8 +219,7 @@ class Tool:
             desc_part = f" - {param_desc}" if param_desc else ""
             param_strs.append(f"  {param_name}: {param_type}{req_marker}{desc_part}")
 
-            # Generate example value for required params
-            if is_required:
+            if is_required or include_all_in_example:
                 if param_type == "string":
                     example_args[param_name] = "example"
                 elif param_type == "integer":
@@ -218,8 +233,10 @@ class Tool:
 
         param_block = "\n".join(param_strs) if param_strs else "  (no parameters)"
 
-        # Build example call
-        example_json = json.dumps(example_args)
+        # Build example call. Hand-curated example wins when set; otherwise
+        # use the values we synthesised above from the schema.
+        rendered_example = self.example_args if self.example_args is not None else example_args
+        example_json = json.dumps(rendered_example)
         example_line = f"Example tool_args: {example_json}"
 
         return f"{self.name}: {self.description}\nParameters:\n{param_block}\n{example_line}"
@@ -1003,6 +1020,7 @@ def tool(
     description: Optional[str] = None,
     coerce: bool = True,
     timeout: Optional[float] = None,
+    example_args: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """
     Decorator to register a function as an agent tool.
@@ -1031,6 +1049,12 @@ def tool(
             threads), but the agent abandons the result and moves on.
             Useful for runaway network calls, infinite loops, etc. For hard
             resource limits, use out-of-process tools.
+        example_args: Hand-curated example invocation rendered into the
+            agent prompt as ``Example tool_args: <json>``. Use this when the
+            correct call shape isn't obvious from arg names alone -- e.g. a
+            tool where a string parameter takes a multi-line document, or
+            where one optional parameter is typically required in practice.
+            When omitted, the example is synthesised from the JSON schema.
 
     Returns:
         Tool instance that wraps the function
@@ -1060,6 +1084,7 @@ def tool(
             parameters=schema,
             coerce=coerce,
             timeout=timeout,
+            example_args=example_args,
         )
 
         return tool_instance

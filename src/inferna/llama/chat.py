@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 SLASH_COMMANDS: Tuple[Tuple[str, str], ...] = (
     ("/help", "show this help message"),
     ("/exit", "exit the chat"),
+    ("/tools", "list the tools available to /agent"),
     ("/agent", "/agent <task> - run a ReAct agent"),
     ("/agent-strict", "/agent-strict <task> - run a constrained agent"),
     ("/agent-contract", "/agent-contract <task> - run a contract agent"),
@@ -490,6 +491,27 @@ class Chat:
                         continue
                     if cmd == "/exit":
                         break
+
+                    if cmd == "/tools":
+                        # Lazy-import so users who never list/use tools don't
+                        # pay the import cost on chat start.
+                        from ..agents.tools import DEMO_TOOLS
+
+                        if not DEMO_TOOLS:
+                            print("(no tools registered)")
+                            continue
+                        width = max(len(t.name) for t in DEMO_TOOLS)
+                        print("available tools (for /agent*):")
+                        for t in DEMO_TOOLS:
+                            # First non-empty line of the tool's description
+                            # is conventionally the one-line summary. Avoid
+                            # dumping multi-paragraph docstrings here.
+                            summary = next(
+                                (line.strip() for line in t.description.splitlines() if line.strip()),
+                                "",
+                            )
+                            print(f"  {cyan(t.name.ljust(width))}  {summary}")
+                        continue
 
                     # /agent and /agent-* family
                     if cmd == "/agent" or cmd.startswith("/agent-"):

@@ -236,7 +236,7 @@ Use tools when needed, then provide a helpful final answer based on the results.
         detect_loops: bool = True,
         max_consecutive_same_action: int = 2,
         max_consecutive_same_tool: int = 4,
-        max_context_chars: int = 6000,
+        max_context_chars: int = 16000,
     ):
         """
         Initialize constrained agent.

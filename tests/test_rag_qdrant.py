@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-qdrant_client = pytest.importorskip("qdrant_client", reason="qdrant-client not installed (pip install inferna[qdrant])")
+qdrant_client = pytest.importorskip("qdrant_client", reason="qdrant-client not installed")
 
 from inferna.rag import SearchResult  # noqa: E402
 from inferna.rag.stores import QdrantVectorStore  # noqa: E402

@@ -177,11 +177,28 @@ class TestResponseFormatLive:
         assert r.parsed is None
 
     def test_response_format_bypasses_cache(self, llm: LLM) -> None:
-        # Two calls with the same prompt + response_format should both
-        # produce parsed output; we don't assert text equality (sampling)
-        # but we do assert that neither call returns the literal cached
-        # Response from a prior plain-text call.
+        # The contract under test is purely about caching: a follow-up
+        # call with response_format= must NOT return the Response object
+        # from a prior plain-text call with the same prompt. We check
+        # that directly (object identity + grammar-shape evidence) and
+        # deliberately do NOT assert that with_fmt.parsed is non-None --
+        # the grammar guarantees structural validity at every prefix but
+        # not termination, so a small model on a contentless prompt
+        # ("hi") can exhaust n_predict mid-structure, leaving valid
+        # partial JSON that json.loads rejects. That's a separate
+        # concern from cache bypass; see test_json_object_mode for the
+        # completion-quality check on a properly-anchored prompt.
         plain = llm("hi")
         with_fmt = llm("hi", response_format={"type": "json_object"})
         assert plain.parsed is None
-        assert with_fmt.parsed is not None
+        # Cache bypass: the second call produced a distinct Response.
+        assert with_fmt is not plain
+        # And it ran under the grammar -- output must start with '{' or
+        # '[' (the json_object grammar's root is `object`, but in
+        # practice cyllama's _ANY_JSON_GBNF has `root ::= object`, so
+        # this is `{`). Use a permissive check so the test stays robust
+        # if the root rule is ever widened to any JSON value.
+        stripped = with_fmt.text.lstrip()
+        assert stripped.startswith(("{", "[")), (
+            f"response_format=json_object should produce JSON-shaped output; got {with_fmt.text!r}"
+        )
