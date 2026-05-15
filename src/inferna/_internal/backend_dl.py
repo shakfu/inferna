@@ -33,7 +33,7 @@ import sys
 _PREFIX = "ggml-" if sys.platform == "win32" else "libggml-"
 _EXT = ".dll" if sys.platform == "win32" else ".so"
 
-# All three Cython modules (llama, whisper, sd) share the same ggml
+# All three native modules (llama, whisper, sd) share the same ggml
 # dynamic library and thus the same backend registry.  This flag ensures
 # the scan runs only once to avoid duplicate registrations.
 _libs_loaded = False

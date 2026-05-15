@@ -46,19 +46,19 @@ on:
         default: true
         type: boolean
       vulkan_windows:
-        description: 'Build Vulkan wheels (Windows x86_64)'
+        description: 'Build Vulkan wheels (Windows x86_64) -- not published to PyPI'
         required: false
-        default: true
+        default: false
         type: boolean
       vulkan_macos_intel:
-        description: 'Build Vulkan wheels (macOS Intel x86_64)'
+        description: 'Build Vulkan wheels (macOS Intel x86_64) -- not published to PyPI'
         required: false
-        default: true
+        default: false
         type: boolean
       cuda_windows:
-        description: 'Build CUDA wheels (Windows x86_64)'
+        description: 'Build CUDA wheels (Windows x86_64) -- not published to PyPI'
         required: false
-        default: true
+        default: false
         type: boolean
       upload_release:
         description: 'Upload wheels to GitHub Release'

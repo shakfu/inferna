@@ -18,7 +18,7 @@ from typing import Any, List, Tuple, cast
 import threading
 
 # Import the whisper module (use: python -m inferna.whisper.cli).
-# whisper_cpp is a Cython-compiled extension; the runtime import works
+# whisper_cpp is a nanobind-compiled extension; the runtime import works
 # but mypy can't see the .so as a package attribute. Bind the module
 # through importlib + an Any annotation so attribute access (e.g.
 # wh.WhisperContext) typechecks as Any rather than failing static

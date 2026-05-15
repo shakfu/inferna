@@ -63,7 +63,7 @@ endif
 # =============================================================================
 # Primary targets
 # =============================================================================
-.PHONY: all build build-dynamic setup sync dev dev-abi3 lean reset remake reset-webui
+.PHONY: all build build-dynamic xcframework setup sync dev dev-abi3 lean reset remake reset-webui
 
 all: build
 
@@ -89,6 +89,12 @@ build: $(LIBLAMMA)
 
 build-dynamic:
 	@$(SYSTEM_PYTHON) scripts/manage.py build --all --dynamic
+
+# Build four macOS xcframeworks (Ggml, LlamaCpp, Whisper, StableDiffusion)
+# from the prebuilt dynamic libs under thirdparty/*/lib. Requires the
+# dylib build to have run first (e.g. `make build` on macOS arm64).
+xcframework:
+	@$(SYSTEM_PYTHON) scripts/make_xcframework.py
 
 remake: reset build test
 

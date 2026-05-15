@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include "mongoose.h"
 
-/* Re-export all mongoose functions we need for Cython */
+/* Re-export all mongoose functions we need from the C++ bindings */
 
 void inferna_mg_mgr_init(struct mg_mgr *mgr) {
     mg_mgr_init(mgr);

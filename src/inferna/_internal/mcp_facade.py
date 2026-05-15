@@ -171,5 +171,6 @@ class MCPFacade:
             logger.warning(
                 "MCP disconnect_all failed (%s); dropping client anyway",
                 type(exc).__name__,
+                exc_info=True,
             )
         self._client = None

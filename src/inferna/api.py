@@ -630,11 +630,21 @@ class LLM:
             verbose: Print detailed information during generation
             cache_size: Maximum number of responses to cache (0 = disabled)
             cache_ttl: Cache time-to-live in seconds (None = no expiration)
-            **kwargs: Generation parameters (temperature, max_tokens, etc.)
-                      These override values in config if both are provided.
+            **kwargs: Per-field overrides on top of ``config``.
+                Merge semantics are a **shallow per-field override**:
+                kwargs replace matching fields on a copy of ``config``,
+                fields not named in kwargs keep their value from
+                ``config``. The original ``config`` instance is not
+                mutated. If ``config`` is ``None`` and kwargs are
+                provided, kwargs initialize a fresh ``GenerationConfig``
+                directly (so kwargs alone work as a config shorthand).
+                Each kwarg name must be a valid ``GenerationConfig``
+                field; unknown names raise ``TypeError`` from the
+                dataclass constructor.
 
         Example:
-            >>> # Direct parameters (recommended for simple cases)
+            >>> # Direct parameters (recommended for simple cases) --
+            >>> # kwargs alone construct a GenerationConfig.
             >>> llm = LLM("model.gguf", temperature=0.9, max_tokens=100)
             >>>
             >>> # Explicit config
@@ -789,7 +799,16 @@ class LLM:
             try:
                 self.close()
             except Exception:
-                pass
+                # `__del__` may run during interpreter shutdown when even
+                # `logger` may have been torn down -- guard the report
+                # itself so cleanup never crashes the process. Failures
+                # in close() are still surfaced when shutdown is normal.
+                try:
+                    import traceback
+
+                    traceback.print_exc()
+                except Exception:
+                    pass
 
     def close(self) -> None:
         """

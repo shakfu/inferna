@@ -42,7 +42,7 @@ __all__ = [
     "VisionLanguageChat",
     "AudioProcessor",
     "ImageAnalyzer",
-    # Low-level Cython wrappers
+    # Low-level nanobind wrappers
     "MtmdContext",
     "MtmdContextParams",
     "MtmdBitmap",

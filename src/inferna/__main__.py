@@ -183,7 +183,7 @@ def cmd_info() -> int:
     # whisper.cpp
     print("whisper.cpp:")
     try:
-        # whisper_cpp is a Cython-compiled module; import via importlib
+        # whisper_cpp is a compiled nanobind module; import via importlib
         # because the static type stubs don't expose it as an attribute.
         import importlib
 
