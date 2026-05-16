@@ -433,9 +433,20 @@ class Chat:
         """Print startup banner with model info and available commands."""
         from .. import __version__
 
-        print(f"build      : inferna v{__version__}")
-        print(f"model      : {os.path.basename(self.model_path)}")
-        print("modalities : text")
+        model_name = os.path.basename(self.model_path)
+
+    #     print(f"build      : inferna v{__version__}")
+    #     print(f"model      : {model_name}")
+    #     print("modalities : text")
+
+        left = f"{bold(cyan('inferna'))} v{__version__} chat"
+        right = model_name
+        try:
+            cols = os.get_terminal_size().columns
+        except OSError:
+            cols = 80
+        print(f"{left}{right:>{cols - (len(left) - 19)}}")
+
         print()
         print(f"type {cyan('/help')} to list available commands, or {cyan('/exit')} to quit")
         print()
@@ -458,6 +469,12 @@ class Chat:
 
         setup_history(history_path_for("chat"))
         restore_completer = setup_completer(SLASH_COMMAND_NAMES, FILE_ARG_COMMANDS)
+
+        # Clear screen + scrollback and home the cursor before the
+        # banner so the chat starts on a fresh viewport. ANSI escapes
+        # work on macOS/Linux terminals and on Windows 10+ consoles
+        # (which have VT processing enabled by default).
+        print("\033[2J\033[3J\033[H", end="", flush=True)
 
         self.print_banner()
 
