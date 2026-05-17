@@ -634,8 +634,10 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_batch,         "n_batch")
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_ubatch,        "n_ubatch")
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_seq_max,       "n_seq_max")
+        PARAM_VAL(LlamaContextParamsW, uint32_t, n_rs_seq,        "n_rs_seq")
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_threads,       "n_threads")
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_threads_batch, "n_threads_batch")
+        PARAM_VAL(LlamaContextParamsW, int,  ctx_type,          "ctx_type")
         PARAM_VAL(LlamaContextParamsW, int,  rope_scaling_type, "rope_scaling_type")
         PARAM_VAL(LlamaContextParamsW, int,  pooling_type,      "pooling_type")
         PARAM_VAL(LlamaContextParamsW, int,  attention_type,    "attention_type")
@@ -1172,6 +1174,7 @@ NB_MODULE(_llama_native, m) {
         .def_prop_ro("n_batch",    [](LlamaContextW& s){ s.ensure_valid(); return llama_n_batch(s.ptr); })
         .def_prop_ro("n_ubatch",   [](LlamaContextW& s){ s.ensure_valid(); return llama_n_ubatch(s.ptr); })
         .def_prop_ro("n_seq_max",  [](LlamaContextW& s){ s.ensure_valid(); return llama_n_seq_max(s.ptr); })
+        .def_prop_ro("n_rs_seq",   [](LlamaContextW& s){ s.ensure_valid(); return llama_n_rs_seq(s.ptr); })
         .def_prop_ro("pooling_type", [](LlamaContextW& s){
             s.ensure_valid();
             return (int) llama_pooling_type(s.ptr);

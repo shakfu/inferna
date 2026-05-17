@@ -90,6 +90,8 @@ struct SDContextParamsW {
     std::optional<std::string> control_net_path_s;
     std::optional<std::string> photo_maker_path_s;
     std::optional<std::string> tensor_type_rules_s;
+    std::optional<std::string> backend_s;
+    std::optional<std::string> params_backend_s;
 
     // Owning storage for the embeddings array. Strings must outlive new_sd_ctx().
     std::vector<std::pair<std::string, std::string>> embeddings_owned;  // (name, path)
@@ -137,6 +139,7 @@ struct SDSampleParamsW {
     sd_sample_params_t p{};
     std::vector<int> slg_layers_owned;
     std::vector<float> custom_sigmas_owned;
+    std::optional<std::string> extra_sample_args_s;
 
     SDSampleParamsW() {
         sd_sample_params_init(&p);
@@ -272,10 +275,16 @@ struct SDContextW {
 struct UpscalerW {
     upscaler_ctx_t* ctx = nullptr;
     UpscalerW(const std::string& model_path, bool offload_to_cpu, bool direct,
-              int n_threads, int tile_size) {
+              int n_threads, int tile_size,
+              std::optional<std::string> backend,
+              std::optional<std::string> params_backend) {
         if (n_threads < 0) n_threads = sd_get_num_physical_cores();
+        const char* backend_c = (backend && !backend->empty()) ? backend->c_str() : nullptr;
+        const char* params_backend_c =
+            (params_backend && !params_backend->empty()) ? params_backend->c_str() : nullptr;
         ctx = new_upscaler_ctx(model_path.c_str(), offload_to_cpu, direct,
-                                n_threads, tile_size);
+                                n_threads, tile_size,
+                                backend_c, params_backend_c);
         if (!ctx) {
             throw std::runtime_error("Failed to load upscaler model: " + model_path);
         }
@@ -375,6 +384,8 @@ static nb::dict make_enum_dict() {
     add("RES_MULTISTEP_SAMPLE_METHOD", RES_MULTISTEP_SAMPLE_METHOD);
     add("RES_2S_SAMPLE_METHOD", RES_2S_SAMPLE_METHOD);
     add("ER_SDE_SAMPLE_METHOD", ER_SDE_SAMPLE_METHOD);
+    add("EULER_CFG_PP_SAMPLE_METHOD", EULER_CFG_PP_SAMPLE_METHOD);
+    add("EULER_A_CFG_PP_SAMPLE_METHOD", EULER_A_CFG_PP_SAMPLE_METHOD);
     add("SAMPLE_METHOD_COUNT", SAMPLE_METHOD_COUNT);
 
     add("DISCRETE_SCHEDULER", DISCRETE_SCHEDULER);
@@ -599,6 +610,8 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDContextParamsW, int,  p.chroma_t5_mask_pad, "chroma_t5_mask_pad")
         SD_PARAM_VAL(SDContextParamsW, bool, p.qwen_image_zero_cond_t, "qwen_image_zero_cond_t")
         SD_PARAM_VAL(SDContextParamsW, float, p.max_vram, "max_vram")
+        SD_PARAM_PATH(SDContextParamsW, p.backend,         backend_s,         "backend")
+        SD_PARAM_PATH(SDContextParamsW, p.params_backend,  params_backend_s,  "params_backend")
         .def_prop_rw("embeddings",
             [](SDContextParamsW& s) {
                 nb::list out;
@@ -638,6 +651,7 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDSampleParamsW, float, p.eta, "eta")
         SD_PARAM_VAL(SDSampleParamsW, int,   p.shifted_timestep, "shifted_timestep")
         SD_PARAM_VAL(SDSampleParamsW, float, p.flow_shift, "flow_shift")
+        SD_PARAM_PATH(SDSampleParamsW, p.extra_sample_args, extra_sample_args_s, "extra_sample_args")
         SD_PARAM_VAL(SDSampleParamsW, float, p.guidance.txt_cfg, "cfg_scale")
         SD_PARAM_VAL(SDSampleParamsW, float, p.guidance.img_cfg, "img_cfg_scale")
         SD_PARAM_VAL(SDSampleParamsW, float, p.guidance.distilled_guidance, "distilled_guidance")
@@ -755,10 +769,13 @@ NB_MODULE(_sd_native, m) {
                 s.sample.p = v.p;
                 s.sample.slg_layers_owned = v.slg_layers_owned;
                 s.sample.custom_sigmas_owned = v.custom_sigmas_owned;
+                s.sample.extra_sample_args_s = v.extra_sample_args_s;
                 if (!s.sample.slg_layers_owned.empty())
                     s.sample.p.guidance.slg.layers = s.sample.slg_layers_owned.data();
                 if (!s.sample.custom_sigmas_owned.empty())
                     s.sample.p.custom_sigmas = s.sample.custom_sigmas_owned.data();
+                s.sample.p.extra_sample_args =
+                    s.sample.extra_sample_args_s ? s.sample.extra_sample_args_s->c_str() : nullptr;
                 s.sync_sample();
             },
             nb::rv_policy::reference_internal)
@@ -978,9 +995,11 @@ NB_MODULE(_sd_native, m) {
     // Upscaler
     // -------------------------------------------------------------------------
     nb::class_<UpscalerW>(m, "Upscaler")
-        .def(nb::init<const std::string&, bool, bool, int, int>(),
+        .def(nb::init<const std::string&, bool, bool, int, int,
+                      std::optional<std::string>, std::optional<std::string>>(),
              "model_path"_a, "offload_to_cpu"_a = false, "direct"_a = false,
-             "n_threads"_a = -1, "tile_size"_a = 0)
+             "n_threads"_a = -1, "tile_size"_a = 0,
+             "backend"_a = nb::none(), "params_backend"_a = nb::none())
         .def_prop_ro("is_valid", [](UpscalerW& s){ return s.ctx != nullptr; })
         .def_prop_ro("upscale_factor", [](UpscalerW& s){
             return s.ctx ? get_upscale_factor(s.ctx) : 0;

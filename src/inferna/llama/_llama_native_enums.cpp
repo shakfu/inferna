@@ -226,6 +226,10 @@ void register_enums(nb::module_& m) {
     EXPORT(LLAMA_SPLIT_MODE_ROW);
     EXPORT(LLAMA_SPLIT_MODE_TENSOR);
 
+    // -------- llama context type --------
+    EXPORT(LLAMA_CONTEXT_TYPE_DEFAULT);
+    EXPORT(LLAMA_CONTEXT_TYPE_MTP);
+
     // -------- llama token sentinel (preprocessor define) --------
     m.attr("LLAMA_TOKEN_NULL") = (int) LLAMA_TOKEN_NULL;
 }
