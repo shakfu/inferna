@@ -86,8 +86,6 @@ from pathlib import Path
 from typing import Any, Iterable, List, Optional, TypeVar, Union, Callable, NoReturn
 from urllib.request import urlretrieve
 
-__version__ = "0.1.1"
-
 # ----------------------------------------------------------------------------
 # type aliases
 

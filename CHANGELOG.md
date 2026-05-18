@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.1.5]
+
 ### Added
 
 - **stable-diffusion.cpp sync to `master-612-d7ecbe1`** -- `src/inferna/sd/_sd_native.cpp` and `src/inferna/sd/stable_diffusion.py` updated for the four header additions between `master-596-90e87bc` and `master-612-d7ecbe1`. (1) Two new entries in `enum sample_method_t` -- `EULER_CFG_PP_SAMPLE_METHOD` and `EULER_A_CFG_PP_SAMPLE_METHOD` -- exposed both as int constants in `make_enum_dict()` and as `SampleMethod.EULER_CFG_PP` / `SampleMethod.EULER_A_CFG_PP` on the `IntEnum`. (2) Two new `const char*` fields on `sd_ctx_params_t` (`backend`, `params_backend`) bound on `SDContextParams` via `SD_PARAM_PATH` with matching `backend_s` / `params_backend_s` ownership slots in `SDContextParamsW`. (3) One new `const char*` field on `sd_sample_params_t` (`extra_sample_args`) bound on `SDSampleParams`; `SDSampleParamsW` carries an `extra_sample_args_s` slot, and `SDImageGenParamsW`'s `sample_params=` setter copies the slot and re-points `p.sample_params.extra_sample_args` alongside the existing `slg_layers` / `custom_sigmas` ownership re-establishment. (4) Two new trailing args on `new_upscaler_ctx(..., const char* backend, const char* params_backend)` plumbed through `UpscalerW`'s constructor as `std::optional<std::string>` with the `Upscaler(...)` Python binding gaining `backend=None, params_backend=None` keyword args. All 132 existing `tests/test_sd.py` tests pass against the new headers.
