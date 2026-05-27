@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.1.6]
+
 ### Added
 
 - **stable-diffusion.cpp sync to `master-652-92dc726`: new enum members** -- bumped `SDCPP_VERSION` in `scripts/manage.py` (`master-612-d7ecbe1` -> `master-652-92dc726`). A member-by-member audit of every `enum` in `include/stable-diffusion.h` against `make_enum_dict()` found three new upstream values, now exposed both as int constants in `make_enum_dict()` (the single source of truth the Python `IntEnum`s read) and on the facade enums: `EULER_GE_SAMPLE_METHOD` (`SampleMethod.EULER_GE`), `LTX2_SCHEDULER` (`Scheduler.LTX2`), and `SD_CACHE_SPECTRUM` (cache modes have no `IntEnum`; accessed via `_E["SD_CACHE_SPECTRUM"]` like the other modes). The `*_COUNT` sentinels are sourced dynamically from the dict, so `SampleMethod.COUNT` / `Scheduler.COUNT` shifted to 18 / 12 with no hardcoded values to update. The curated `SDType` subset and the unexported `*_COUNT` sentinels of other enums are pre-existing intentional choices, left unchanged.
