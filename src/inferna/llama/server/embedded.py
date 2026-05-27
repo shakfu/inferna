@@ -45,12 +45,13 @@ from .python import (
 # ---------------------------------------------------------------------------
 # Web UI assets
 #
-# The build hook in scripts/manage.py copies llama.cpp's prebuilt server SPA
-# into ``inferna/llama/server/assets/webui/*.gz`` (gzipped at build time —
-# the package always ships the compressed form). We load the bytes once at
-# import and serve them with ``Content-Encoding: gzip``.
+# A gzipped snapshot of llama.cpp's web UI is committed under
+# ``inferna/llama/server/assets/webui/*.gz`` (vendored — upstream stopped
+# shipping the prebuilt SPA in-tree as of b9352; refresh with
+# ``manage.py fetch_webui``). We load the bytes once at import and serve them
+# with ``Content-Encoding: gzip``.
 #
-# Asset names mirror upstream's tools/server/public/. ``index.html`` is
+# Asset names mirror upstream's tools/ui/ build output. ``index.html`` is
 # also exposed at ``/`` so a bare visit to the server lands on the UI.
 # ---------------------------------------------------------------------------
 

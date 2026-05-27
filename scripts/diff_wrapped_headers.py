@@ -33,9 +33,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 @dataclass(frozen=True)
 class Project:
-    name: str          # short name used for CLI flag (e.g. "llama")
-    checkout: Path     # path to the git checkout (relative to REPO_ROOT)
-    headers: tuple[str, ...]   # header paths relative to the checkout root
+    name: str  # short name used for CLI flag (e.g. "llama")
+    checkout: Path  # path to the git checkout (relative to REPO_ROOT)
+    headers: tuple[str, ...]  # header paths relative to the checkout root
 
 
 # Headers actually #include'd by the inferna native bindings. Keep this list
@@ -134,10 +134,7 @@ def main() -> int:
             f"--{proj.name}",
             nargs=2,
             metavar=("FROM", "TO"),
-            help=(
-                f"two refs (tags, branches, or SHAs) to diff in "
-                f"{proj.checkout}. Defaults to <previous tag>..HEAD."
-            ),
+            help=(f"two refs (tags, branches, or SHAs) to diff in {proj.checkout}. Defaults to <previous tag>..HEAD."),
         )
     parser.add_argument(
         "--output",
@@ -159,9 +156,7 @@ def main() -> int:
 
         rng = resolve_range(checkout, getattr(args, proj.name))
         if rng is None:
-            summary.append(
-                f"  {proj.name:<8} SKIP (no prior tag; pass --{proj.name} FROM TO)"
-            )
+            summary.append(f"  {proj.name:<8} SKIP (no prior tag; pass --{proj.name} FROM TO)")
             continue
         frm, to = rng
 
@@ -183,11 +178,7 @@ def main() -> int:
         sys.exit("error: nothing to diff (no checkouts found)")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        "# Wrapped-header diffs\n\n"
-        + "\n\n".join(sections)
-        + "\n"
-    )
+    args.output.write_text("# Wrapped-header diffs\n\n" + "\n\n".join(sections) + "\n")
 
     print(f"wrote {args.output}")
     print("\n".join(summary))

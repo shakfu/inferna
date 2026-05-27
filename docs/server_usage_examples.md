@@ -1,6 +1,6 @@
 # Inferna Server Usage Examples
 
-Inferna ships an embedded OpenAI-compatible HTTP server with an optional built-in chat web UI (a rebrand of llama.cpp's reference webui), plus a pure-Python fallback for environments without the compiled mongoose extension.
+Inferna ships an embedded OpenAI-compatible HTTP server with an optional built-in chat web UI (a vendored snapshot of llama.cpp's reference webui), plus a pure-Python fallback for environments without the compiled mongoose extension.
 
 A single subcommand, `inferna server`, drives all three configurations:
 
@@ -18,7 +18,7 @@ The webui is opt-in. Library callers control it via `ServerConfig(serve_webui=Tr
 
 - C networking via the [Mongoose](https://mongoose.ws/) library, bound to Python through nanobind
 - Single-threaded poll loop on the main thread; per-stream worker threads for concurrent token generation
-- Mounts the upstream [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui) web UI at `GET /` when `serve_webui=True` (gzipped at build time, served with `Content-Encoding: gzip`)
+- Mounts the upstream [llama.cpp](https://github.com/ggml-org/llama.cpp/tree/master/tools/ui) web UI at `GET /` when `serve_webui=True` (a gzipped snapshot vendored in the package, served with `Content-Encoding: gzip`)
 - When `serve_webui=False` (the default), webui routes (`/`, `/index.html`, `/bundle.{css,js}`, `/loading.html`, `/props`, `/slots`, `/metrics`) return 404 — the OpenAI-compatible API and `/health` remain available
 - Compiled as part of the standard `make build`
 

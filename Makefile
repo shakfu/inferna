@@ -63,7 +63,7 @@ endif
 # =============================================================================
 # Primary targets
 # =============================================================================
-.PHONY: all build build-dynamic xcframework setup sync dev dev-abi3 lean reset remake reset-webui
+.PHONY: all build build-dynamic xcframework setup sync dev dev-abi3 lean reset remake reset-webui fetch-webui fetch-webui-latest
 
 all: build
 
@@ -98,13 +98,21 @@ xcframework:
 
 remake: reset build test
 
-# Drop the gzipped webui assets and regenerate them from the llama.cpp
-# source checkout under build/llama.cpp/tools/server/public/. Use after
-# editing brand_subs in scripts/manage.py to pick up the new strings
-# without doing a full make reset / rebuild.
-reset-webui:
-	@rm -f src/inferna/llama/server/assets/webui/*.gz
-	@$(SYSTEM_PYTHON) scripts/manage.py build --llama-cpp --dynamic --deps-only
+# Refresh the committed, gzipped web UI snapshot under
+# src/inferna/llama/server/assets/webui/. As of llama.cpp b9352 the UI is no
+# longer shipped in the source tree; these targets download the prebuilt
+# SvelteKit bundle from the ggml-org/llama-ui Hugging Face bucket, gzip it, and
+# commit it (plus a VERSION marker). Run on llama.cpp bumps.
+#   fetch-webui          -> pinned LLAMACPP_WEBUI_VERSION (falls back to latest)
+#   fetch-webui-latest   -> always the bucket's 'latest'
+fetch-webui:
+	@$(SYSTEM_PYTHON) scripts/manage.py fetch_webui
+
+fetch-webui-latest:
+	@$(SYSTEM_PYTHON) scripts/manage.py fetch_webui --webui-version latest
+
+# Back-compat alias for the old name.
+reset-webui: fetch-webui
 
 # =============================================================================
 # Wheel and distribution
@@ -361,7 +369,10 @@ wheel-repair:
 # =============================================================================
 # CLI and server tests
 # =============================================================================
-.PHONY: cli test-cli test-chat test-server test-tts test-whisper
+.PHONY: cli test-cli test-chat test-server webui test-tts test-whisper
+
+# Port for the `webui` target; override with `make webui PORT=9090`.
+PORT ?= 8080
 
 cli:
 	@$(LLAMACPP)/bin/llama-cli -n 32 -no-cnv -lv 0 \
@@ -380,6 +391,13 @@ test-chat:
 test-server:
 	@uv run python -m inferna server \
 		-m $(MODEL)
+
+# Run the embedded server with the browser web UI enabled, then open
+# http://localhost:$(PORT)/ . Override the model with `make webui MODEL=path`
+# and the port with `make webui PORT=9090`.
+webui: $(MODEL)
+	@echo "Web UI at http://localhost:$(PORT)/  (Ctrl-C to stop)"
+	@uv run python -m inferna server -m $(MODEL) --port $(PORT) -w
 
 test-tts:
 	@uv run python -m inferna tts \

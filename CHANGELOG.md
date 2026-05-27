@@ -22,6 +22,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Changed
+
+- **Web UI is now a vendored snapshot fetched from the Hugging Face bucket** -- as of upstream `b9352`, llama.cpp removed the prebuilt server SPA from the source tree (`tools/server/public/` is gone; the UI is now a SvelteKit app in `tools/ui/` built via npm, downloaded from the `ggml-org/llama-ui` HF bucket, or pre-placed in `tools/ui/dist/`). inferna does not build the llama.cpp server, so `LlamaCppBuilder._copy_webui_assets()` in `scripts/manage.py` -- which used to copy + gzip the in-tree SPA at build time -- no longer has a source to read. The assets (`index.html`, `bundle.css`, `bundle.js`, `loading.html`) are now provisioned by a new `manage.py fetch_webui` subcommand that downloads the prebuilt UI from the HF bucket (`LlamaCppBuilder.fetch_webui_assets()`: tries the pinned `LLAMACPP_WEBUI_VERSION` then falls back to `latest`, verifies SHA256 checksums when published, gzips reproducibly with `mtime=0`), and the resulting `*.gz` snapshot plus a `VERSION` marker are **committed** into `src/inferna/llama/server/assets/webui/` (the `*.gz` gitignore was dropped). The build path now uses the committed snapshot offline -- no network or Node toolchain at wheel-build time -- and falls back to the legacy in-tree copy for older pins. The asset filenames and `embedded.py` serving routes are unchanged, so `serve_webui=True` works as before. The UI snapshot is pinned independently of `LLAMACPP_VERSION` (default `b9351`; the bucket does not publish every build, and `b9352` itself is absent) so a mismatch is auditable via the committed `VERSION` file.
+
+- **Dropped the web UI brand-string rewrite** -- the previous `_copy_webui_assets()` rewrote `llama.cpp` -> `inferna` in `bundle.js` (the `APP_NAME` constant, the tab-title suffix, and the connection toast) and raised `RuntimeError` if a pattern was absent. The new SvelteKit bundle contains zero `llama.cpp` literals (the brand is a custom favicon plus internal `llama-ui` identifiers), so the rewrite is both impossible and moot; it was removed. The UI now ships upstream-as-is.
+
+### Fixed
+
+- **llama.cpp sync to `b9352`** -- bumped `LLAMACPP_VERSION` (`b9190` -> `b9352`). A wrapped-surface audit of the public headers actually `#include`'d by the four binding TUs (`include/llama.h`, the ggml/gguf headers, `tools/mtmd/mtmd.h`, `tools/mtmd/mtmd-helper.h`) found **no** removed, renamed, retyped, or newly-deprecated symbols across `b9190..b9352`: the delta is comment-only plus additive (new `gguf_init_from_buffer` / `gguf_init_from_callback`, and the explicitly-unstable `mtmd_get_memory_usage`), none of which the bindings consume. No binding code changes were required beyond the clean recompile. The only behavioral change is data-level: `llama_chat_builtin_templates()` renamed `hunyuan-ocr` -> `hunyuan-vl`; `tests/test_chat.py::test_chat_builtin_templates` was updated to match.
+
 ## [0.1.5]
 
 ### Added

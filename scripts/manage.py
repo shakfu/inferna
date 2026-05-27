@@ -142,8 +142,22 @@ PY_VER_MINOR = sys.version_info.minor
 # LLAMACPP_VERSION=master) if you need to test against a newer revision.
 # (Previously gated behind a STABLE_BUILD flag whose two branches carried
 # identical values — the flag was a no-op.)
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b9190")
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b9352")
 WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.8.4")
+
+# As of upstream b9352 llama.cpp no longer ships a prebuilt server SPA under
+# tools/server/public/. The web UI is now a SvelteKit app in tools/ui/ that is
+# either built with npm or fetched as prebuilt assets from a Hugging Face
+# bucket (keyed by build number). inferna doesn't build the server, so we fetch
+# the prebuilt assets, gzip them, and commit the snapshot into the package
+# (see `manage.py fetch_webui`). The bucket only publishes some builds (e.g.
+# b9352 is absent while b9351 exists), so the UI snapshot is pinned separately
+# from LLAMACPP_VERSION and the fetcher falls back to 'latest'.
+LLAMACPP_WEBUI_VERSION = os.getenv("LLAMACPP_WEBUI_VERSION", "b9351")
+LLAMACPP_WEBUI_HF_BASE = "https://huggingface.co/buckets/ggml-org/llama-ui/resolve"
+# Files the upstream index.html hard-references. If a future pin drops one we
+# want to fail loudly rather than ship a broken UI.
+LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html")
 SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-612-d7ecbe1")
 SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "0.9.95")
 if PLATFORM == "Darwin":
@@ -1207,83 +1221,134 @@ class LlamaCppBuilder(GgmlBuilder):
         # mtmd (multimodal) headers.
         self.glob_copy(self.src_dir / "tools" / "mtmd", self.include, patterns=["*.h"])
 
-    def _copy_webui_assets(self) -> None:
-        """Copy llama.cpp's prebuilt server webui into the inferna package.
+    @property
+    def webui_assets_dir(self) -> Path:
+        """Committed, gzipped web UI snapshot served by the embedded server."""
+        return self.project.cwd / "src" / "inferna" / "llama" / "server" / "assets" / "webui"
 
-        The pinned llama.cpp source ships the static SPA bundle under
-        ``tools/server/public/`` (older pins: ``examples/server/public/``).
-        We gzip each file at copy time so wheels carry the compressed form
-        (~7 MB raw -> ~2 MB gz) and the embedded server can serve them
-        with ``Content-Encoding: gzip`` directly.
-        """
+    @staticmethod
+    def _gzip_to(data: bytes, out_path: Path) -> None:
+        """Write `data` gzipped to `out_path` reproducibly (mtime=0)."""
         import gzip
 
-        candidates = [
-            self.src_dir / "tools" / "server" / "public",
-            self.src_dir / "examples" / "server" / "public",
-        ]
-        src = next((p for p in candidates if p.exists()), None)
-        if src is None:
-            self.log.warning(
-                f"llama.cpp webui not found under {self.src_dir} "
-                f"(checked {[str(p.relative_to(self.src_dir)) for p in candidates]}); "
-                f"embedded server's web UI will be unavailable on this build."
+        with gzip.GzipFile(filename="", mode="wb", fileobj=open(out_path, "wb"), compresslevel=9, mtime=0) as fo:
+            fo.write(data)
+
+    def _copy_webui_assets(self) -> None:
+        """Provision the embedded server's web UI for the wheel (build-time).
+
+        As of upstream b9352 the prebuilt SPA no longer ships in the llama.cpp
+        source tree, so the snapshot is fetched separately and committed under
+        ``src/inferna/llama/server/assets/webui/`` (see ``fetch_webui_assets``
+        / ``manage.py fetch-webui``). The build is therefore offline:
+
+        1. If the committed gzipped snapshot is present, use it as-is.
+        2. Otherwise, for older pins that still carry ``tools/server/public/``,
+           regenerate the snapshot from the source tree.
+        3. Otherwise warn — the build proceeds without a web UI.
+        """
+        dst = self.webui_assets_dir
+        committed = [dst / f"{name}.gz" for name in LLAMACPP_WEBUI_ASSETS[:3]]
+        if all(p.exists() for p in committed):
+            self.log.info(
+                f"webui: using committed snapshot in {dst} ({self._webui_snapshot_version() or 'unversioned'})"
             )
             return
 
-        dst = self.project.cwd / "src" / "inferna" / "llama" / "server" / "assets" / "webui"
+        # Fallback for older pins that still ship the prebuilt SPA in-tree.
+        legacy = [
+            self.src_dir / "tools" / "server" / "public",
+            self.src_dir / "examples" / "server" / "public",
+        ]
+        src = next((p for p in legacy if p.exists()), None)
+        if src is None:
+            self.log.warning(
+                f"webui: no committed snapshot in {dst} and no in-tree SPA under {self.src_dir} "
+                f"(checked {[str(p.relative_to(self.src_dir)) for p in legacy]}); the embedded "
+                f"server's web UI will be unavailable. Run `python scripts/manage.py fetch_webui` "
+                f"to download and commit a snapshot."
+            )
+            return
+
         dst.mkdir(parents=True, exist_ok=True)
-
-        # Files the upstream UI hard-references from index.html. If the pin
-        # ever drops one we want to know loudly rather than ship a broken UI.
-        required = ("index.html", "bundle.css", "bundle.js")
-        optional = ("loading.html",)
-        for name in required:
-            in_path = src / name
-            if not in_path.exists():
+        for name in LLAMACPP_WEBUI_ASSETS[:3]:
+            if not (src / name).exists():
                 raise FileNotFoundError(
-                    f"required webui asset missing: {in_path}. LLAMACPP_VERSION={self.version} may not include it."
+                    f"required webui asset missing: {src / name}. LLAMACPP_VERSION={self.version} may not include it."
                 )
-
-        # Brand-string rewrites applied to bundle.js before gzipping. As of
-        # upstream b9025 the bundle centralizes the brand in an APP_NAME
-        # constant referenced by the navbar/empty-state <h1>s and the
-        # default document title. The active-conversation title suffix and
-        # the connection-init toast still hard-code "llama.cpp" verbatim.
-        # Exact-substring substitution — bundle ships without source maps,
-        # so length-changing replacements are safe.
-        brand_subs: dict[str, dict[bytes, bytes]] = {
-            "bundle.js": {
-                # Central brand constant — drives <h1> hero + default title.
-                b'APP_NAME="llama.cpp"': b'APP_NAME="inferna"',
-                # Active-conversation tab title suffix.
-                b"} - llama.cpp`": b"} - inferna`",
-                # Connection-init status toast.
-                b"Initializing connection to llama.cpp server": (b"Initializing connection to inferna server"),
-            },
-        }
-
-        for name in required + optional:
+        for name in LLAMACPP_WEBUI_ASSETS:
             in_path = src / name
             if not in_path.exists():
                 continue
-            with open(in_path, "rb") as fi:
-                data = fi.read()
-            # Apply brand rewrites if any are configured for this file.
-            for needle, replacement in brand_subs.get(name, {}).items():
-                if needle not in data:
-                    raise RuntimeError(
-                        f"webui brand rewrite failed for {name}: pattern {needle!r} "
-                        f"not found in upstream bundle. Upstream may have changed "
-                        f"the string at {self.version}; update brand_subs in "
-                        f"_copy_webui_assets."
-                    )
-                data = data.replace(needle, replacement)
-            out_path = dst / f"{name}.gz"
-            # mtime=0 -> reproducible gzip output across rebuilds.
-            with gzip.GzipFile(filename="", mode="wb", fileobj=open(out_path, "wb"), compresslevel=9, mtime=0) as fo:
-                fo.write(data)
-            self.log.info(f"webui asset: {name} ({len(data)} -> {out_path.stat().st_size} bytes)")
+            data = in_path.read_bytes()
+            self._gzip_to(data, dst / f"{name}.gz")
+            self.log.info(f"webui asset: {name} ({len(data)} -> {(dst / f'{name}.gz').stat().st_size} bytes)")
+
+    def _webui_snapshot_version(self) -> str | None:
+        """Read the recorded UI snapshot version, if any."""
+        vf = self.webui_assets_dir / "VERSION"
+        return vf.read_text().strip() if vf.exists() else None
+
+    def fetch_webui_assets(self, version: Optional[str] = None) -> None:
+        """Download the prebuilt web UI from the HF bucket and commit a snapshot.
+
+        Tries the requested/pinned build number first, then falls back to
+        ``latest`` (the bucket does not publish every build). Verifies the
+        SHA256 checksums when the bucket provides them, gzips each asset
+        reproducibly, and writes the snapshot plus a ``VERSION`` marker into
+        ``webui_assets_dir``. This is a maintenance step, run on llama.cpp
+        bumps — not part of the per-wheel build.
+        """
+        import hashlib
+        import tempfile
+        import urllib.error
+
+        pinned = version or LLAMACPP_WEBUI_VERSION
+        candidates = [pinned, "latest"] if pinned != "latest" else ["latest"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            resolved = None
+            for tag in candidates:
+                base = f"{LLAMACPP_WEBUI_HF_BASE}/{tag}"
+                self.log.info(f"webui: trying {tag} from {base}")
+                try:
+                    for name in LLAMACPP_WEBUI_ASSETS:
+                        urlretrieve(f"{base}/{name}?download=true", tmpdir / name)
+                    # Best-effort checksum verification.
+                    try:
+                        urlretrieve(f"{base}/checksums.txt?download=true", tmpdir / "checksums.txt")
+                        sums = {}
+                        for line in (tmpdir / "checksums.txt").read_text().splitlines():
+                            parts = line.split()
+                            if len(parts) == 2:
+                                sums[parts[1]] = parts[0].lower()
+                        for name in LLAMACPP_WEBUI_ASSETS:
+                            if name in sums:
+                                got = hashlib.sha256((tmpdir / name).read_bytes()).hexdigest()
+                                if got != sums[name]:
+                                    raise RuntimeError(f"checksum mismatch for {name} at {tag}")
+                        self.log.info(f"webui: checksums verified for {tag}")
+                    except urllib.error.HTTPError:
+                        self.log.warning(f"webui: no checksums.txt at {tag}; skipping verification")
+                    resolved = tag
+                    break
+                except urllib.error.HTTPError as e:
+                    self.log.warning(f"webui: {tag} unavailable ({e.code}); trying next candidate")
+
+            if resolved is None:
+                raise RuntimeError(
+                    f"webui: could not fetch assets for any of {candidates} from {LLAMACPP_WEBUI_HF_BASE}"
+                )
+
+            dst = self.webui_assets_dir
+            dst.mkdir(parents=True, exist_ok=True)
+            for name in LLAMACPP_WEBUI_ASSETS:
+                data = (tmpdir / name).read_bytes()
+                self._gzip_to(data, dst / f"{name}.gz")
+                self.log.info(f"webui asset: {name} ({len(data)} -> {(dst / f'{name}.gz').stat().st_size} bytes)")
+            (dst / "VERSION").write_text(f"{resolved}\n")
+            self.log.info(f"webui: committed snapshot {resolved} to {dst}")
 
     def build(self, shared: bool = False) -> None:
         """main build function"""
@@ -2682,6 +2747,18 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 SqliteVectorBuilder: SQLITEVECTOR_VERSION,
             }
         )
+
+    # ------------------------------------------------------------------------
+    # fetch_webui
+
+    @option(
+        "--webui-version",
+        default=LLAMACPP_WEBUI_VERSION,
+        help=f"web UI build to fetch from the HF bucket (default: {LLAMACPP_WEBUI_VERSION}; falls back to 'latest')",
+    )
+    def do_fetch_webui(self, args: argparse.Namespace) -> None:
+        """download the prebuilt llama.cpp web UI and commit a gzipped snapshot"""
+        LlamaCppBuilder(project=self.project).fetch_webui_assets(version=args.webui_version)
 
     # ------------------------------------------------------------------------
     # fix_macos_vulkan_wheel

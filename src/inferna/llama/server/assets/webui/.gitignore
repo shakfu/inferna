@@ -1,1 +1,4 @@
-*.gz
+# The gzipped web UI snapshot is committed (vendored) rather than generated at
+# build time: upstream llama.cpp stopped shipping the prebuilt SPA in-tree as
+# of b9352. Refresh it on llama.cpp bumps with `python scripts/manage.py
+# fetch_webui`. See LLAMACPP_WEBUI_VERSION in scripts/manage.py.

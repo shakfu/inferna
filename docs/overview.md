@@ -78,7 +78,7 @@ Inferna is structured as a layered stack. At the bottom, three C/C++ inference e
 
 - **Zero Python dependencies**: The core library has no runtime dependencies beyond Python itself. Optional integrations (LangChain, OpenAI compat) import lazily.
 
-- **Dual server strategy**: `EmbeddedServer` runs an in-process [Mongoose](https://mongoose.ws/) HTTP server (vendored in `src/inferna/llama/server/mongoose.{c,h}` and exposed through nanobind) and optionally serves the upstream [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui) chat web UI alongside the OpenAI-compatible JSON API (gated by `ServerConfig.serve_webui`, opt-in; `inferna server -w` enables it from the CLI); `PythonServer` offers a pure-Python `http.server` alternative without the web UI for debugging or wheel-less environments. Both share the same `ServerConfig` and JSON endpoint surface.
+- **Dual server strategy**: `EmbeddedServer` runs an in-process [Mongoose](https://mongoose.ws/) HTTP server (vendored in `src/inferna/llama/server/mongoose.{c,h}` and exposed through nanobind) and optionally serves the upstream [llama.cpp](https://github.com/ggml-org/llama.cpp/tree/master/tools/ui) chat web UI alongside the OpenAI-compatible JSON API (gated by `ServerConfig.serve_webui`, opt-in; `inferna server -w` enables it from the CLI); `PythonServer` offers a pure-Python `http.server` alternative without the web UI for debugging or wheel-less environments. Both share the same `ServerConfig` and JSON endpoint surface.
 
 ## Quick Example
 
