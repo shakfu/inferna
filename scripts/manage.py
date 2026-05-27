@@ -158,7 +158,7 @@ LLAMACPP_WEBUI_HF_BASE = "https://huggingface.co/buckets/ggml-org/llama-ui/resol
 # Files the upstream index.html hard-references. If a future pin drops one we
 # want to fail loudly rather than ship a broken UI.
 LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html")
-SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-612-d7ecbe1")
+SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-652-92dc726")
 SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "0.9.95")
 if PLATFORM == "Darwin":
     # Source of truth: matches pyproject.toml [tool.cibuildwheel.macos]

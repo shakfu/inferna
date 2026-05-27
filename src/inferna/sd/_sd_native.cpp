@@ -386,6 +386,7 @@ static nb::dict make_enum_dict() {
     add("ER_SDE_SAMPLE_METHOD", ER_SDE_SAMPLE_METHOD);
     add("EULER_CFG_PP_SAMPLE_METHOD", EULER_CFG_PP_SAMPLE_METHOD);
     add("EULER_A_CFG_PP_SAMPLE_METHOD", EULER_A_CFG_PP_SAMPLE_METHOD);
+    add("EULER_GE_SAMPLE_METHOD", EULER_GE_SAMPLE_METHOD);
     add("SAMPLE_METHOD_COUNT", SAMPLE_METHOD_COUNT);
 
     add("DISCRETE_SCHEDULER", DISCRETE_SCHEDULER);
@@ -399,6 +400,7 @@ static nb::dict make_enum_dict() {
     add("KL_OPTIMAL_SCHEDULER", KL_OPTIMAL_SCHEDULER);
     add("LCM_SCHEDULER", LCM_SCHEDULER);
     add("BONG_TANGENT_SCHEDULER", BONG_TANGENT_SCHEDULER);
+    add("LTX2_SCHEDULER", LTX2_SCHEDULER);
     add("SCHEDULER_COUNT", SCHEDULER_COUNT);
 
     add("EPS_PRED", EPS_PRED);
@@ -457,6 +459,7 @@ static nb::dict make_enum_dict() {
     add("SD_CACHE_DBCACHE", SD_CACHE_DBCACHE);
     add("SD_CACHE_TAYLORSEER", SD_CACHE_TAYLORSEER);
     add("SD_CACHE_CACHE_DIT", SD_CACHE_CACHE_DIT);
+    add("SD_CACHE_SPECTRUM", SD_CACHE_SPECTRUM);
 
     return d;
 }
@@ -960,13 +963,18 @@ NB_MODULE(_sd_native, m) {
 
             int num_frames_out = 0;
             sd_image_t* result = nullptr;
+            sd_audio_t* audio_out = nullptr;
+            bool ok = false;
             {
                 inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
                 nb::gil_scoped_release rel;
-                result = generate_video(s.ctx, &vid_params, &num_frames_out);
+                ok = generate_video(s.ctx, &vid_params, &result,
+                                    &num_frames_out, &audio_out);
             }
 
-            if (!result) throw std::runtime_error("Video generation failed");
+            // Video generation produces frames only; discard any audio track.
+            if (audio_out) free_sd_audio(audio_out);
+            if (!ok || !result) throw std::runtime_error("Video generation failed");
 
             nb::list out;
             int n_invalid = 0;
