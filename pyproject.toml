@@ -230,7 +230,12 @@ before-all = "yum install -y git ccache && /opt/python/cp310-cp310/bin/pip insta
 # preserves these defaults.
 environment = { GGML_METAL = "0", GGML_NATIVE = "0" }
 
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+# Delegate to do_wheel_repair so CPU/Metal builds share the same repair
+# surface as the GPU reusables (see WHEEL_REPAIR_EXCLUDES_LINUX in
+# scripts/manage.py). Today the "cpu" exclude list is empty so behavior
+# is identical to the bare `auditwheel repair`; a future addition (e.g.,
+# excluding libssl/libcrypto on Linux to mirror macOS) lands in one place.
+repair-wheel-command = "python {project}/scripts/manage.py wheel_repair --backend cpu --dest-dir {dest_dir} {wheel}"
 
 [tool.cibuildwheel.macos]
 # Build thirdparty deps once at job start (NOT per-Python).
@@ -238,6 +243,11 @@ before-all = "python scripts/manage.py build --all --deps-only --no-sd-examples 
 
 environment = { MACOSX_DEPLOYMENT_TARGET = "11.0", GGML_METAL = "1", GGML_NATIVE = "0" }
 
+# NOT delegated to manage.py wheel_repair: that path does not pass
+# --require-archs {delocate_archs}, which is delocate's check that the
+# repaired wheel actually contains binaries for the architectures cibuildwheel
+# was configured to build. The --exclude entries here mirror
+# WHEEL_REPAIR_DARWIN_BASE in scripts/manage.py and must be kept in sync.
 repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} --exclude libssl --exclude libcrypto"
 
 [tool.cibuildwheel.windows]
@@ -248,4 +258,9 @@ before-all = "pip install delvewheel && python scripts/manage.py build --all --d
 
 environment = { GGML_METAL = "0", GGML_NATIVE = "0" }
 
-repair-wheel-command = "delvewheel repair -w {dest_dir} {wheel}"
+# Delegate to do_wheel_repair so the CPU Windows build shares the same
+# repair surface as the GPU Windows reusables; the "cpu" entry has no
+# --include / --no-dll flags today, so behavior is identical to the bare
+# delvewheel command. Any future Windows-side exclude lands in
+# WHEEL_REPAIR_WIN_EXCLUDES in scripts/manage.py.
+repair-wheel-command = "python {project}/scripts/manage.py wheel_repair --backend cpu --dest-dir {dest_dir} {wheel}"

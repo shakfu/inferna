@@ -129,6 +129,33 @@ def setenv(key: str, default: str) -> str:
         return default
 
 
+def infer_wheel_backend() -> str:
+    """Pick the wheel-repair backend tag from current GGML_* env vars.
+
+    Mirrors the convention used by do_wheel_build's backend_env table:
+    each backend toggles one GGML_<BACKEND> env var; whichever is truthy
+    wins, in a priority order matching cibuildwheel reusables (GPU SDKs
+    before Metal so a cross-build doesn't get classified as Metal just
+    because the runner is macOS). Returns 'cpu' if no GPU flag is set.
+
+    The return value feeds do_wheel_repair --backend so the wheel is
+    repaired with the correct WHEEL_REPAIR_EXCLUDES_* set instead of
+    silently bundling vendor runtimes.
+    """
+    for var, backend in (
+        ("GGML_CUDA", "cuda"),
+        ("GGML_HIP", "hip"),
+        ("GGML_HIPBLAS", "hip"),
+        ("GGML_SYCL", "sycl"),
+        ("GGML_VULKAN", "vulkan"),
+        ("GGML_OPENCL", "opencl"),
+        ("GGML_METAL", "metal"),
+    ):
+        if getenv(var, default=False):
+            return backend
+    return "cpu"
+
+
 # ----------------------------------------------------------------------------
 # constants
 
@@ -160,6 +187,87 @@ LLAMACPP_WEBUI_HF_BASE = "https://huggingface.co/buckets/ggml-org/llama-ui/resol
 LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html")
 SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-652-92dc726")
 SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "0.9.95")
+
+# ---------------------------------------------------------------------------
+# Per-backend wheel-repair exclude lists.
+#
+# Hoisted to module scope so both `do_wheel_repair` (which feeds them to
+# auditwheel/delocate/delvewheel) and `scripts/audit_wheel.py` (which checks
+# a built wheel's DT_NEEDED entries against the same list) read from a
+# single source of truth. Keep in sync with .github/workflows/_gpu-build-*.yml
+# and pyproject.toml's macOS delocate command.
+#
+# Linux: matched against bare DT_NEEDED names; fnmatch globs (e.g.
+# "libmkl_*.so*") are honored by auditwheel and the auditor.
+# Darwin: substring-matched by delocate against the dylib install_name.
+# Windows: backend DLLs to force-include (`--include`) and vendor DLLs to
+# leave for the user's driver (`--no-dll`).
+WHEEL_REPAIR_EXCLUDES_LINUX: dict[str, list[str]] = {
+    "": [],
+    "cpu": [],
+    "cuda": [
+        "libcuda.so.1",
+        "libcudart.so.12",
+        "libcublas.so.12",
+        "libcublasLt.so.12",
+        "libgomp.so.1",
+    ],
+    "vulkan": ["libvulkan.so.1", "libgomp.so.1"],
+    "hip": [
+        "libamdhip64.so.6",
+        "libhipblas.so.2",
+        "librocblas.so.4",
+        "libhsa-runtime64.so.1",
+        "librocsolver.so.0",
+        "libhipblaslt.so.0",
+        "libamd_comgr.so.2",
+        "librocprofiler-register.so.0",
+        "libgomp.so.1",
+    ],
+    "sycl": [
+        "libsycl.so.8",
+        "libOpenCL.so.1",
+        "libsvml.so",
+        "libimf.so",
+        "libintlc.so.5",
+        "libtbb.so.12",
+        "libgomp.so.1",
+        # Intel MKL (oneMKL): llama.cpp's SYCL backend links against MKL
+        # for GEMM. Glob form covers the many split shared objects
+        # (libmkl_core, libmkl_sycl_blas, etc.) which are version-coupled
+        # to the user's oneAPI install and must not be bundled.
+        "libmkl_*.so*",
+        # Intel LLVM-OpenMP runtime, pulled in by MKL. Cannot coexist
+        # with libgomp in one process without KMP_DUPLICATE_LIB_OK; keep
+        # it as a runtime dep.
+        "libiomp5.so",
+        # Intel DPC++ compiler random-number runtime, typically pulled
+        # in transitively alongside libsvml/libimf.
+        "libirng.so",
+    ],
+    "opencl": ["libOpenCL.so.1", "libgomp.so.1"],
+    "metal": [],
+}
+WHEEL_REPAIR_DARWIN_BASE: list[str] = ["libssl", "libcrypto"]
+WHEEL_REPAIR_EXCLUDES_DARWIN: dict[str, list[str]] = {
+    "": WHEEL_REPAIR_DARWIN_BASE,
+    "cpu": WHEEL_REPAIR_DARWIN_BASE,
+    "metal": WHEEL_REPAIR_DARWIN_BASE,
+    "vulkan": WHEEL_REPAIR_DARWIN_BASE + ["libvulkan", "libMoltenVK"],
+    "cuda": WHEEL_REPAIR_DARWIN_BASE,
+    "hip": WHEEL_REPAIR_DARWIN_BASE,
+    "sycl": WHEEL_REPAIR_DARWIN_BASE,
+    "opencl": WHEEL_REPAIR_DARWIN_BASE,
+}
+# Windows: --include forces a backend DLL into the wheel; --no-dll
+# excludes vendor/driver runtimes the user's GPU driver provides.
+WHEEL_REPAIR_WIN_INCLUDES: dict[str, list[str]] = {
+    "cuda": ["ggml-cuda.dll"],
+    "vulkan": ["ggml-vulkan.dll"],
+}
+WHEEL_REPAIR_WIN_EXCLUDES: dict[str, list[str]] = {
+    "cuda": ["nvcuda.dll", "cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
+}
 if PLATFORM == "Darwin":
     # Source of truth: matches pyproject.toml [tool.cibuildwheel.macos]
     # environment.MACOSX_DEPLOYMENT_TARGET and Makefile.
@@ -2309,22 +2417,27 @@ class WheelBuilder(ShellCmd):
                 shutil.rmtree(venv)
 
     def build_dynamic_wheel(self) -> None:
+        """Build a dynamic-link wheel and delegate repair to do_wheel_repair.
+
+        Previously this called bare auditwheel/delocate-wheel/delvewheel with
+        no excludes, which silently bundled vendor runtimes (libcuda, libmkl,
+        libvulkan, ...) into GPU-backend dynamic wheels — producing wheels
+        that were both bloated and incompatible with the user's installed
+        SDK. Routing through do_wheel_repair (the same path the CIBW
+        reusables use) honors WHEEL_REPAIR_EXCLUDES_* and the backend
+        inferred from GGML_* env vars.
+        """
         self.log.info("building dynamic build wheel")
         self.clean()
         self.ensure_wheels_dir()
         self.build_wheel()
-        src = self.project.dist
-        dst = self.project.wheels
-        lib = self.project.lib
-        if PLATFORM == "Darwin":
-            self.cmd(f"delocate-wheel -v --wheel-dir {dst} {src}/*.whl")
-        elif PLATFORM == "Linux":
-            self.cmd(f"auditwheel repair --plat linux_{ARCH} --wheel-dir {dst} {src}/*.whl")
-        elif PLATFORM == "Windows":
-            for whl in self.project.dist.glob("*.whl"):
-                self.cmd(f"delvewheel repair --add-path {lib} --wheel-dir {dst} {whl}")
-        else:
-            raise self.fail("platform not supported")
+        backend = infer_wheel_backend()
+        self.log.info(f"repairing dynamic wheel (backend={backend!r})")
+        Application().do_wheel_repair(argparse.Namespace(
+            backend=backend,
+            wheel=str(self.project.dist),
+            dest_dir=str(self.project.wheels),
+        ))
 
     def build_static_wheel(self) -> None:
         self.log.info("building static build wheel")
@@ -2767,6 +2880,30 @@ class Application(ShellCmd, metaclass=MetaCommander):
     def do_fix_macos_vulkan_wheel(self, args: argparse.Namespace) -> None:
         """Rewrite hardcoded Homebrew libvulkan path in a macOS Vulkan wheel.
 
+        CLI wrapper around _fix_macos_vulkan_wheel; resolves --wheel as either
+        a directory (picks the newest *.whl) or a single wheel file.
+        """
+        target = Path(args.wheel).resolve()
+        if target.is_dir():
+            candidates = sorted(
+                target.glob("*.whl"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if not candidates:
+                self.log.error(f"no *.whl found in {target}")
+                sys.exit(1)
+            wheel_path = candidates[0]
+        elif target.is_file():
+            wheel_path = target
+        else:
+            self.log.error(f"wheel not found: {target}")
+            sys.exit(1)
+        self._fix_macos_vulkan_wheel(wheel_path)
+
+    def _fix_macos_vulkan_wheel(self, wheel_path: Path) -> None:
+        """Rewrite hardcoded Homebrew libvulkan path in a macOS Vulkan wheel.
+
         Homebrew's libvulkan.1.dylib has its install id set to its absolute
         Homebrew-Intel prefix (/usr/local/opt/vulkan-loader/lib/libvulkan.1.dylib).
         Everything linked against it on the CI runner records that absolute
@@ -2786,23 +2923,6 @@ class Application(ShellCmd, metaclass=MetaCommander):
         OLD = "/usr/local/opt/vulkan-loader/lib/libvulkan.1.dylib"
         NEW = "@rpath/libvulkan.1.dylib"
         RPATHS = ["/opt/homebrew/lib", "/usr/local/lib"]
-
-        target = Path(args.wheel).resolve()
-        if target.is_dir():
-            candidates = sorted(
-                target.glob("*.whl"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if not candidates:
-                self.log.error(f"no *.whl found in {target}")
-                sys.exit(1)
-            wheel_path = candidates[0]
-        elif target.is_file():
-            wheel_path = target
-        else:
-            self.log.error(f"wheel not found: {target}")
-            sys.exit(1)
 
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
@@ -3202,62 +3322,13 @@ class Application(ShellCmd, metaclass=MetaCommander):
         so a local `uv build --wheel` + `manage.py wheel_repair --backend
         <b>` produces a wheel equivalent to a CI-built one.
         """
-        # Per-backend excludes — keep in sync with CIBW_REPAIR_WHEEL_COMMAND_*
-        # in pyproject.toml and .github/workflows/_gpu-build-*.yml.
-        excludes_linux: dict[str, list[str]] = {
-            "": [],
-            "cpu": [],
-            "cuda": [
-                "libcuda.so.1",
-                "libcudart.so.12",
-                "libcublas.so.12",
-                "libcublasLt.so.12",
-                "libgomp.so.1",
-            ],
-            "vulkan": ["libvulkan.so.1", "libgomp.so.1"],
-            "hip": [
-                "libamdhip64.so.6",
-                "libhipblas.so.2",
-                "librocblas.so.4",
-                "libhsa-runtime64.so.1",
-                "librocsolver.so.0",
-                "libhipblaslt.so.0",
-                "libamd_comgr.so.2",
-                "librocprofiler-register.so.0",
-                "libgomp.so.1",
-            ],
-            "sycl": [
-                "libsycl.so.8",
-                "libOpenCL.so.1",
-                "libsvml.so",
-                "libimf.so",
-                "libintlc.so.5",
-                "libtbb.so.12",
-                "libgomp.so.1",
-            ],
-            "opencl": ["libOpenCL.so.1", "libgomp.so.1"],
-            "metal": [],
-        }
-        darwin_base = ["libssl", "libcrypto"]
-        excludes_darwin: dict[str, list[str]] = {
-            "": darwin_base,
-            "cpu": darwin_base,
-            "metal": darwin_base,
-            "vulkan": darwin_base + ["libvulkan", "libMoltenVK"],
-            "cuda": darwin_base,
-            "hip": darwin_base,
-            "sycl": darwin_base,
-            "opencl": darwin_base,
-        }
-        # Windows: --include forces a backend DLL into the wheel; --no-dll
-        # excludes vendor/driver runtimes the user's GPU driver provides.
-        win_includes: dict[str, list[str]] = {
-            "cuda": ["ggml-cuda.dll"],
-            "vulkan": ["ggml-vulkan.dll"],
-        }
-        win_excludes: dict[str, list[str]] = {
-            "cuda": ["nvcuda.dll", "cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
-        }
+        # Per-backend excludes live at module scope (WHEEL_REPAIR_EXCLUDES_*)
+        # so scripts/audit_wheel.py can read the same source of truth.
+        excludes_linux = WHEEL_REPAIR_EXCLUDES_LINUX
+        excludes_darwin = WHEEL_REPAIR_EXCLUDES_DARWIN
+        darwin_base = WHEEL_REPAIR_DARWIN_BASE
+        win_includes = WHEEL_REPAIR_WIN_INCLUDES
+        win_excludes = WHEEL_REPAIR_WIN_EXCLUDES
 
         backend = args.backend or ""
 
@@ -3356,7 +3427,8 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 # delocate's --exclude libvulkan leaves the hardcoded Homebrew
                 # libvulkan path intact; rewrite it to @rpath so the wheel
                 # loads on Apple Silicon and Intel Homebrew alike.
-                self.do_fix_macos_vulkan_wheel(argparse.Namespace(wheel=str(dist)))
+                for repaired in sorted(dist.glob("*.whl")):
+                    self._fix_macos_vulkan_wheel(repaired)
         elif PLATFORM == "Windows":
             _install("delvewheel")
             for whl in wheels:

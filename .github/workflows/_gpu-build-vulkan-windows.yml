@@ -122,6 +122,15 @@ jobs:
         shell: bash
         run: ls -lah wheelhouse/
 
+      # Windows audit is a stub (PE parsing not implemented); the call
+      # prints a notice and returns 0. Kept for policy uniformity.
+      - name: Audit built wheels
+        shell: bash
+        run: |
+          for w in wheelhouse/*.whl; do
+            python3 scripts/audit_wheel.py "$w"
+          done
+
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:

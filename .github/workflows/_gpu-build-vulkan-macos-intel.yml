@@ -124,6 +124,14 @@ jobs:
       - name: List built wheels
         run: ls -lah wheelhouse/
 
+      # Audits otool -L install_names against WHEEL_REPAIR_EXCLUDES_DARWIN
+      # ('vulkan' substring-matches libvulkan / libMoltenVK).
+      - name: Audit built wheels
+        run: |
+          for w in wheelhouse/*.whl; do
+            python3 scripts/audit_wheel.py "$w"
+          done
+
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:

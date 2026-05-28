@@ -123,6 +123,15 @@ jobs:
       - name: List built wheels
         run: ls -lah wheelhouse/
 
+      # Catches drift between the wheel's actual DT_NEEDED entries and the
+      # backend's exclude list in scripts/manage.py
+      # (WHEEL_REPAIR_EXCLUDES_LINUX).
+      - name: Audit built wheels
+        run: |
+          for w in wheelhouse/*.whl; do
+            python3 scripts/audit_wheel.py "$w"
+          done
+
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
