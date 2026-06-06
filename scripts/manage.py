@@ -169,8 +169,8 @@ PY_VER_MINOR = sys.version_info.minor
 # LLAMACPP_VERSION=master) if you need to test against a newer revision.
 # (Previously gated behind a STABLE_BUILD flag whose two branches carried
 # identical values — the flag was a no-op.)
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b9352")
-WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.8.4")
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b9528") # from: b9352
+WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.8.6") # from: v1.8.4
 
 # As of upstream b9352 llama.cpp no longer ships a prebuilt server SPA under
 # tools/server/public/. The web UI is now a SvelteKit app in tools/ui/ that is
@@ -185,8 +185,8 @@ LLAMACPP_WEBUI_HF_BASE = "https://huggingface.co/buckets/ggml-org/llama-ui/resol
 # Files the upstream index.html hard-references. If a future pin drops one we
 # want to fail loudly rather than ship a broken UI.
 LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html")
-SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-652-92dc726")
-SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "0.9.95")
+SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-672-1f9ee88") # from: master-652-92dc726
+SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "1.0.0")
 
 # ---------------------------------------------------------------------------
 # Per-backend wheel-repair exclude lists.

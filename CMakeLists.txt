@@ -472,13 +472,48 @@ else()
     endif()
 endif()
 
-# Whisper: static libs are always needed, but ggml comes from dylibs when available
+# Whisper: link whisper's OWN ggml, NOT llama's. llama.cpp and whisper.cpp
+# vendor different ggml snapshots (both stamp themselves 0.13.1, but their
+# ggml-metal shader/host code differs by ~200 lines). llama's ggml-metal
+# kernels produce silently-wrong output for whisper's encoder graph on Metal
+# (whisper_full returns rc=0 with zero segments), so whisper must run on its
+# own self-consistent ggml. SD already does this by default (SD_GGML_LIB_DIR).
+# These libs are linked only into _whisper_native (below), deliberately NOT
+# appended to the global STATIC_LIBS, so no single extension ends up with two
+# ggml copies.
 if(WITH_WHISPER)
     static_lib(LIB_WHISPER_COMMON "${WHISPERCPP_LIB}" "common")
     static_lib(LIB_WHISPER "${WHISPERCPP_LIB}" "whisper")
     if(NOT WITH_DYLIB)
-        # Static build: add whisper libs globally (linked into every extension)
-        list(APPEND STATIC_LIBS "${LIB_WHISPER_COMMON}" "${LIB_WHISPER}")
+        static_lib(WLIB_GGML "${WHISPERCPP_LIB}" "ggml")
+        static_lib(WLIB_GGML_BASE "${WHISPERCPP_LIB}" "ggml-base")
+        static_lib(WLIB_GGML_CPU "${WHISPERCPP_LIB}" "ggml-cpu")
+        set(WHISPER_GGML_LIBS ${WLIB_GGML} ${WLIB_GGML_BASE} ${WLIB_GGML_CPU})
+        if(GGML_METAL)
+            static_lib(WLIB_GGML_BLAS "${WHISPERCPP_LIB}" "ggml-blas")
+            static_lib(WLIB_GGML_METAL "${WHISPERCPP_LIB}" "ggml-metal")
+            list(APPEND WHISPER_GGML_LIBS ${WLIB_GGML_BLAS} ${WLIB_GGML_METAL})
+        endif()
+        if(GGML_CUDA)
+            static_lib(WLIB_GGML_CUDA "${WHISPERCPP_LIB}" "ggml-cuda")
+            list(APPEND WHISPER_GGML_LIBS ${WLIB_GGML_CUDA})
+        endif()
+        if(GGML_VULKAN)
+            static_lib(WLIB_GGML_VULKAN "${WHISPERCPP_LIB}" "ggml-vulkan")
+            list(APPEND WHISPER_GGML_LIBS ${WLIB_GGML_VULKAN})
+        endif()
+        if(GGML_HIP)
+            static_lib(WLIB_GGML_HIP "${WHISPERCPP_LIB}" "ggml-hip")
+            list(APPEND WHISPER_GGML_LIBS ${WLIB_GGML_HIP})
+        endif()
+        if(GGML_SYCL)
+            static_lib(WLIB_GGML_SYCL "${WHISPERCPP_LIB}" "ggml-sycl")
+            list(APPEND WHISPER_GGML_LIBS ${WLIB_GGML_SYCL})
+        endif()
+        if(GGML_OPENCL)
+            static_lib(WLIB_GGML_OPENCL "${WHISPERCPP_LIB}" "ggml-opencl")
+            list(APPEND WHISPER_GGML_LIBS ${WLIB_GGML_OPENCL})
+        endif()
     endif()
 endif()
 
@@ -751,6 +786,12 @@ if(WITH_WHISPER)
     )
 
     if(WITH_DYLIB)
+        # WARNING: this links whisper against llama.cpp's ggml dylibs (DYLIBS),
+        # which carries the SAME latent Metal defect fixed for the static builds
+        # below: whisper's encoder produces zero segments on llama's ggml-metal.
+        # A correct dynamic build must build + bundle whisper's OWN ggml dylibs
+        # and rpath whisper to those (a manage.py change). Left as-is for now;
+        # the static (default) build is correct.
         # See _llama_native: --no-as-needed retains backend libs (ggml-cuda
         # etc.) in NEEDED so auditwheel/delocate can chase and bundle them.
         if(UNIX AND NOT APPLE)
@@ -773,45 +814,33 @@ if(WITH_WHISPER)
             INSTALL_RPATH "${LLAMACPP_DYLIB_DIR};${WHISPERCPP_LIB}"
         )
     elseif(UNIX AND NOT APPLE)
-        # Static linking on Linux: ggml needs whole-archive
-        set(_GGML_LIBS ${LIB_GGML} ${LIB_GGML_BASE} ${LIB_GGML_CPU})
-        if(GGML_METAL)
-            list(APPEND _GGML_LIBS ${LIB_GGML_BLAS} ${LIB_GGML_METAL})
-        endif()
-        if(GGML_CUDA)
-            list(APPEND _GGML_LIBS ${LIB_GGML_CUDA})
-        endif()
-        if(GGML_VULKAN)
-            list(APPEND _GGML_LIBS ${LIB_GGML_VULKAN})
-        endif()
-        if(GGML_SYCL)
-            list(APPEND _GGML_LIBS ${LIB_GGML_SYCL})
-        endif()
-        if(GGML_HIP)
-            list(APPEND _GGML_LIBS ${LIB_GGML_HIP})
-        endif()
-        if(GGML_OPENCL)
-            list(APPEND _GGML_LIBS ${LIB_GGML_OPENCL})
-        endif()
-
-        set(_OTHER_LIBS ${LIB_LLAMA} ${LIB_MTMD} ${LIB_WHISPER_COMMON} ${LIB_WHISPER})
-        if(EXISTS "${LIB_CPP_HTTPLIB}")
-            list(APPEND _OTHER_LIBS ${LIB_CPP_HTTPLIB})
-        endif()
+        # Static linking on Linux: whisper's OWN ggml (whole-archive so the
+        # backend-registration static initializers are retained). Deliberately
+        # NOT llama's ggml and NOT llama/mtmd -- the whisper TU references no
+        # llama symbols, and llama's ggml-metal miscomputes the whisper graph.
         target_link_libraries(_whisper_native PRIVATE
-            -Wl,--whole-archive ${_GGML_LIBS} -Wl,--no-whole-archive
-            ${_OTHER_LIBS}
+            -Wl,--whole-archive ${WHISPER_GGML_LIBS} -Wl,--no-whole-archive
+            "${LIB_WHISPER}"
+            "${LIB_WHISPER_COMMON}"
             ${SYSTEM_LIBS}
         )
         set_target_properties(_whisper_native PROPERTIES
-            BUILD_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB};${SDCPP_LIB}"
-            INSTALL_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB};${SDCPP_LIB}"
+            BUILD_RPATH "${WHISPERCPP_LIB}"
+            INSTALL_RPATH "${WHISPERCPP_LIB}"
         )
     else()
-        target_link_libraries(_whisper_native PRIVATE ${STATIC_LIBS} ${SYSTEM_LIBS})
+        # macOS static: whisper's OWN ggml + whisper libs (NOT llama's
+        # STATIC_LIBS ggml). ld64 pulls the needed backend registrations
+        # without whole-archive (verified via standalone relink).
+        target_link_libraries(_whisper_native PRIVATE
+            "${LIB_WHISPER}"
+            "${LIB_WHISPER_COMMON}"
+            ${WHISPER_GGML_LIBS}
+            ${SYSTEM_LIBS}
+        )
         set_target_properties(_whisper_native PROPERTIES
-            BUILD_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB};${SDCPP_LIB}"
-            INSTALL_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB};${SDCPP_LIB}"
+            BUILD_RPATH "${WHISPERCPP_LIB}"
+            INSTALL_RPATH "${WHISPERCPP_LIB}"
         )
     endif()
 
