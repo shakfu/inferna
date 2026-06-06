@@ -1,7 +1,36 @@
 # whisper-on-Metal silent zero-output: ggml `im2col_ext` mismatch
 
-Status: resolved (fix in `CMakeLists.txt`, regression gate in
-`tests/test_whisper_gpu_parity.py`).
+Status: resolved per-platform (platform-split linkage in `CMakeLists.txt`),
+regression gate in `tests/test_whisper_gpu_parity.py`. The underlying ggml-metal
+kernel defect is still unfixed upstream and is the subject of the draft issue
+below.
+
+Resolution (current): whisper's ggml linkage is split by platform, so the
+project's single-ggml premise is kept everywhere it does not cause a
+correctness problem:
+
+- **macOS (APPLE), static build:** `_whisper_native` links whisper's OWN
+  self-consistent ggml from `thirdparty/whisper.cpp/lib`. This is the one place
+  the single-ggml premise is deliberately broken, because llama's ggml-metal
+  miscomputes whisper's encoder (the `im2col` defect analysed below) -- the
+  only correct option on Apple GPU until the upstream fix lands.
+- **Linux / non-Apple:** whisper links llama's **shared** ggml. The defect is
+  Metal-only, so CUDA/Vulkan/CPU run whisper correctly on the single shared
+  ggml and the premise holds.
+
+This supersedes an intermediate state in which whisper was reverted to llama's
+shared ggml on *all* platforms (which reintroduced the Metal symptom on macOS).
+The split restores correctness on macOS while keeping one ggml on Linux.
+
+Known gap (unchanged): the macOS `WITH_DYLIB` build still links llama's ggml
+dylibs and remains broken on Metal -- see "Known gap" below. The default
+(static) build is correct.
+
+The defect itself is in ggml-metal's `im2col` dispatch (analysed in full below)
+and must be fixed upstream in `ggml-org/ggml`; the paste-ready issue is in the
+"Draft upstream issue" section. Until then, the macOS link split is the
+workaround. The sections below ("Fix" / "Known gap" / "Release gate") describe
+the original macOS-static fix, which is again in force.
 
 Platform observed: macOS / Apple M1, Metal backend. Pins at time of
 investigation: llama.cpp `b9528`, whisper.cpp `v1.8.6`, sd `master-672`.
@@ -57,6 +86,28 @@ each extension's symbols are hidden (`-fvisibility=hidden`).
    not API.
 8. Not the ~200-line `ggml-metal.metal` shader delta: see bisection below --
    the shaders are innocent.
+
+## Reproduction (from scratch)
+
+`scripts/repro_ggml_metal_im2col.sh` is a self-contained, clean-room repro
+(no inferna/cyllama dependencies). It clones `llama.cpp@b9528` and
+`whisper.cpp@v1.8.6`, builds `whisper-cli` twice -- once against whisper's own
+ggml, once against llama's ggml (via `WHISPER_USE_SYSTEM_GGML`) -- and runs
+both on `samples/jfk.wav`. The only variable is which ggml is linked:
+
+| build | ggml | backend | transcript |
+| --- | --- | --- | --- |
+| A | whisper's own | Metal/GPU | correct |
+| B | llama's (b9528) | Metal/GPU | **EMPTY** |
+| B | llama's (b9528) | CPU (`-ng`) | correct |
+
+```bash
+bash scripts/repro_ggml_metal_im2col.sh          # exit 0 = bug reproduced
+WORKDIR=/tmp/repro bash scripts/repro_ggml_metal_im2col.sh
+```
+
+A-vs-B isolates the ggml; B-GPU-vs-B-CPU isolates the backend. This is the
+artifact to attach to the upstream issue below.
 
 ## Bisection
 
@@ -166,7 +217,11 @@ Approaches considered and rejected:
   `..._SHARED_BUFFERS_DISABLE`, `GGML_METAL_NO_RESIDENCY`): no combination
   helps; the selection is not gated by any of these.
 
-## Fix
+## Fix (macOS, in force; see Status)
+
+This is the macOS resolution, currently in force. (On Linux / non-Apple,
+whisper links llama's shared ggml instead -- the defect is Metal-only. See
+Status for the platform split.)
 
 `CMakeLists.txt`: `_whisper_native` links whisper's own ggml stack from
 `thirdparty/whisper.cpp/lib` (`libggml{,-base,-cpu,-blas,-metal}.a` +
@@ -251,6 +306,12 @@ fine; only the large-`IC` conv breaks.) 2-D convs are unaffected because both
 sites use `KW*KH`.
 
 **Steps to reproduce**
+
+A scripted, from-scratch repro is in `scripts/repro_ggml_metal_im2col.sh`
+(clones both repos at pinned tags, builds `whisper-cli` against each ggml, runs
+the A/B comparison; see the "Reproduction (from scratch)" section above).
+Manually:
+
 1. Build whisper.cpp's `whisper-cli` (or any whisper integration) against a
    ggml at/after the commit that added the size-based `im2col` kernel selection
    in `ggml/src/ggml-metal/ggml-metal-device.cpp`.

@@ -14,15 +14,25 @@ class. Background:
   `ggml-metal-device.cpp` routes large im2col (the conv front-end of whisper's
   encoder, `ne00*ne01 > 1024`) to `kernel_im2col_ext`, which miscomputes for
   whisper. The base `kernel_im2col` is correct in both snapshots; llama's own
-  LLMs never use im2col, so the regression was invisible upstream. The fix is
-  to link whisper against its OWN ggml (see CMakeLists.txt `_whisper_native`).
+  LLMs never use im2col, so the regression was invisible upstream.
+
+CURRENT STATE (resolved per platform): whisper's ggml linkage is platform-split
+in CMakeLists.txt. On macOS, where the Metal defect bites, `_whisper_native`
+links whisper's OWN self-consistent ggml (static build) and transcribes
+correctly. On Linux / non-Apple, whisper links llama's shared ggml (the
+single-ggml premise) -- the defect is Metal-only, so CUDA/Vulkan/CPU are
+unaffected. Hence this gate is a hard PASS on every default (static) build.
+
+Known gap: the macOS WITH_DYLIB build still links llama's ggml dylibs and so
+remains broken on Metal (an empty transcript) -- see docs/dev/ggml-metal-issue.md.
+This gate has no xfail: if it goes red, that is the intended "do not ship GPU
+whisper on this platform/pin" signal, and macOS-dynamic is exactly such a case.
 
 What this test guards: for the current llama/whisper/ggml pin combination on
 the current platform, the GPU backend must transcribe correctly and agree with
 the CPU backend. If it fails, inferna must NOT be released with GPU enabled for
 whisper on this platform/pin combination -- it is exactly the failure that the
-rest of the suite (which only transcribes implicitly, or on CPU) does not
-catch.
+rest of the suite (which only transcribes implicitly, or on CPU) does not catch.
 
 On CPU-only hosts `use_gpu=True` falls back to CPU, so GPU==CPU trivially and
 this test is benign; it only has teeth where a real GPU backend (Metal/CUDA/
