@@ -219,12 +219,8 @@ params.lora_apply_mode = LoraApplyMode.AUTO   # LoRA application mode
 params.chroma_t5_mask_pad = 0                 # Chroma T5 mask pad
 
 # Boolean flags
-params.vae_decode_only = True                 # VAE decode only (faster)
 params.enable_mmap = True                     # Enable memory-mapped loading
-params.offload_params_to_cpu = False          # Offload to CPU (low VRAM)
-params.keep_clip_on_cpu = False               # Keep CLIP on CPU
-params.keep_vae_on_cpu = False                # Keep VAE on CPU
-params.keep_control_net_on_cpu = False        # Keep ControlNet on CPU
+params.stream_layers = False                  # Residency+prefetch streaming (needs max_vram)
 params.diffusion_flash_attn = False           # Flash attention
 params.diffusion_conv_direct = False          # Direct convolution
 params.vae_conv_direct = False                # VAE direct convolution
@@ -234,6 +230,17 @@ params.circular_y = False                     # Circular padding Y (tileable)
 params.qwen_image_zero_cond_t = False         # Zero conditioning for Qwen
 params.chroma_use_dit_mask = True             # DiT mask for Chroma
 params.chroma_use_t5_mask = False             # T5 mask for Chroma
+
+# CPU offload / low-VRAM. Upstream replaced the old offload_params_to_cpu /
+# keep_*_on_cpu flags with backend-assignment specs; use the helper, which
+# fills in params.backend / params.params_backend for you.
+params.apply_cpu_offload(
+    offload_params=False,       # params_backend "*=cpu"
+    clip_on_cpu=False,          # backend "te=cpu"
+    vae_on_cpu=False,           # backend "vae=cpu"
+    control_net_on_cpu=False,   # backend "controlnet=cpu"
+)
+params.max_vram = ""           # GiB budget / backend-assignment spec (string, "" = disabled)
 ```
 
 ### SDImage

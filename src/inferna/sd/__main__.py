@@ -207,16 +207,14 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
     if hasattr(args, "tensor_type_rules") and args.tensor_type_rules:
         params.tensor_type_rules = args.tensor_type_rules
 
-    # Memory/performance options
-    if hasattr(args, "offload_to_cpu") and args.offload_to_cpu:
-        params.offload_params_to_cpu = True
-        params.free_params_immediately = True
-    if hasattr(args, "clip_on_cpu") and args.clip_on_cpu:
-        params.keep_clip_on_cpu = True
-    if hasattr(args, "vae_on_cpu") and args.vae_on_cpu:
-        params.keep_vae_on_cpu = True
-    if hasattr(args, "control_net_cpu") and args.control_net_cpu:
-        params.keep_control_net_on_cpu = True
+    # Memory/performance options. Upstream replaced the dedicated offload
+    # struct fields with backend-assignment specs; translate accordingly.
+    params.apply_cpu_offload(
+        offload_params=bool(getattr(args, "offload_to_cpu", False)),
+        clip_on_cpu=bool(getattr(args, "clip_on_cpu", False)),
+        vae_on_cpu=bool(getattr(args, "vae_on_cpu", False)),
+        control_net_on_cpu=bool(getattr(args, "control_net_cpu", False)),
+    )
     if hasattr(args, "diffusion_fa") and args.diffusion_fa:
         params.diffusion_flash_attn = True
     if hasattr(args, "diffusion_conv_direct") and args.diffusion_conv_direct:
@@ -401,7 +399,7 @@ def cmd_img2img(args: argparse.Namespace) -> int:
     start = time.time()
 
     params = create_context_params(args)
-    params.vae_decode_only = False  # Need encoder for img2img
+    # (upstream now always loads the full VAE; no decode-only toggle needed)
 
     try:
         ctx = SDContext(params)
@@ -489,7 +487,6 @@ def cmd_inpaint(args: argparse.Namespace) -> int:
     start = time.time()
 
     params = create_context_params(args)
-    params.vae_decode_only = False
 
     try:
         ctx = SDContext(params)

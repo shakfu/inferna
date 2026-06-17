@@ -20,6 +20,8 @@ from inferna.sd import (
     Scheduler,
     Prediction,
     SDType,
+    VaeFormat,
+    CancelMode,
     LogLevel,
     PreviewMode,
     LoraApplyMode,
@@ -67,6 +69,38 @@ class TestEnums:
         assert len(list(SDType)) >= 10
         assert SDType.F32.value == 0
         assert SDType.F16.value == 1
+
+    def test_sd_type_extended_members(self):
+        # Newer quant/int types added upstream must be exposed.
+        assert SDType.IQ4_XS.value == 23
+        assert SDType.F64.value == 28
+        assert SDType.TQ1_0.value == 34
+        assert SDType.MXFP4.value == 39
+        assert SDType.NVFP4.value == 40
+        assert SDType.Q1_0.value == 41
+
+    def test_vae_format(self):
+        assert VaeFormat.AUTO.value == -1
+        assert VaeFormat.FLUX.value == 0
+        assert VaeFormat.SD3.value == 1
+        assert VaeFormat.FLUX2.value == 2
+        # round-trips through the SDContextParams field
+        params = SDContextParams()
+        params.vae_format = int(VaeFormat.SD3)
+        assert params.vae_format == VaeFormat.SD3.value
+
+    def test_cancel_mode(self):
+        assert CancelMode.ALL.value == 0
+        assert CancelMode.NEW_LATENTS.value == 1
+        assert CancelMode.RESET.value == 2
+
+    def test_pulid_params(self):
+        # PuLID identity conditioning fields on SDImageGenParams.
+        g = SDImageGenParams()
+        g.pulid_id_embedding_path = "/path/to/id_embed.bin"
+        assert g.pulid_id_embedding_path == "/path/to/id_embed.bin"
+        g.pulid_id_weight = 0.85
+        assert abs(g.pulid_id_weight - 0.85) < 1e-6
 
 
 class TestUtilityFunctions:
@@ -369,7 +403,6 @@ class TestSDContextParams:
     def test_default_init(self):
         params = SDContextParams()
         assert params.n_threads > 0 or params.n_threads == -1
-        assert params.vae_decode_only is True
 
     def test_model_path(self):
         params = SDContextParams()
@@ -750,12 +783,16 @@ class TestSDContextParamsExtended:
         params.t5xxl_path = "/path/to/t5xxl.safetensors"
         assert params.t5xxl_path == "/path/to/t5xxl.safetensors"
 
-    def test_vae_decode_only(self):
+    def test_max_vram_is_string_spec(self):
+        # Upstream changed max_vram from a float GiB budget to a string spec.
         params = SDContextParams()
-        params.vae_decode_only = False
-        assert params.vae_decode_only is False
-        params.vae_decode_only = True
-        assert params.vae_decode_only is True
+        params.max_vram = "8"
+        assert params.max_vram == "8"
+
+    def test_stream_layers(self):
+        params = SDContextParams()
+        params.stream_layers = True
+        assert params.stream_layers is True
 
     def test_diffusion_flash_attn(self):
         params = SDContextParams()
@@ -772,10 +809,25 @@ class TestSDContextParamsExtended:
         params.diffusion_model_path = "/path/to/diffusion.safetensors"
         assert params.diffusion_model_path == "/path/to/diffusion.safetensors"
 
-    def test_offload_params_to_cpu(self):
+    def test_apply_cpu_offload_translates_to_backend_specs(self):
+        # The dedicated offload fields were removed upstream; offloading is now
+        # expressed via backend-assignment strings.
         params = SDContextParams()
-        params.offload_params_to_cpu = True
-        assert params.offload_params_to_cpu is True
+        params.apply_cpu_offload(
+            offload_params=True,
+            clip_on_cpu=True,
+            vae_on_cpu=True,
+            control_net_on_cpu=True,
+        )
+        assert params.params_backend == "*=cpu"
+        backend_parts = set(params.backend.split(","))
+        assert backend_parts == {"te=cpu", "vae=cpu", "controlnet=cpu"}
+
+    def test_apply_cpu_offload_noop_when_all_false(self):
+        params = SDContextParams()
+        params.apply_cpu_offload()
+        assert params.backend is None
+        assert params.params_backend is None
 
     def test_clip_vision_path(self):
         params = SDContextParams()
@@ -827,20 +879,11 @@ class TestSDContextParamsExtended:
         params.lora_apply_mode = LoraApplyMode.IMMEDIATELY
         assert params.lora_apply_mode == LoraApplyMode.IMMEDIATELY
 
-    def test_keep_clip_on_cpu(self):
+    def test_apply_cpu_offload_clip_only(self):
         params = SDContextParams()
-        params.keep_clip_on_cpu = True
-        assert params.keep_clip_on_cpu is True
-
-    def test_keep_vae_on_cpu(self):
-        params = SDContextParams()
-        params.keep_vae_on_cpu = True
-        assert params.keep_vae_on_cpu is True
-
-    def test_keep_control_net_on_cpu(self):
-        params = SDContextParams()
-        params.keep_control_net_on_cpu = True
-        assert params.keep_control_net_on_cpu is True
+        params.apply_cpu_offload(clip_on_cpu=True)
+        assert params.backend == "te=cpu"
+        assert params.params_backend is None
 
     def test_diffusion_conv_direct(self):
         params = SDContextParams()

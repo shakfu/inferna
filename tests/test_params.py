@@ -73,6 +73,89 @@ def test_model_params_tensor_split_validation():
         params.tensor_split = [0.5] * (max_devices + 1)
 
 
+def test_model_params_kv_overrides():
+    """kv_overrides round-trips through the owned, empty-key-terminated array."""
+    params = cy.LlamaModelParams()
+    assert params.kv_overrides == []
+
+    o_bool = cy.LlamaModelKvOverride()
+    o_bool.tag = cy.LLAMA_KV_OVERRIDE_TYPE_BOOL
+    o_bool.key = "general.some_flag"
+    o_bool.val_bool = True
+
+    o_int = cy.LlamaModelKvOverride()
+    o_int.tag = cy.LLAMA_KV_OVERRIDE_TYPE_INT
+    o_int.key = "general.some_int"
+    o_int.val_i64 = 42
+
+    o_str = cy.LlamaModelKvOverride()
+    o_str.tag = cy.LLAMA_KV_OVERRIDE_TYPE_STR
+    o_str.key = "general.some_str"
+    o_str.val_str = "hello"
+
+    params.kv_overrides = [o_bool, o_int, o_str]
+    got = params.kv_overrides
+    assert len(got) == 3  # terminator is not surfaced
+    assert got[0].key == "general.some_flag"
+    assert got[0].tag == cy.LLAMA_KV_OVERRIDE_TYPE_BOOL
+    assert got[0].val_bool is True
+    assert got[1].key == "general.some_int"
+    assert got[1].val_i64 == 42
+    assert got[2].key == "general.some_str"
+    assert got[2].val_str == "hello"
+
+    # Clearing
+    params.kv_overrides = []
+    assert params.kv_overrides == []
+
+
+def test_model_params_kv_override_empty_key_rejected():
+    params = cy.LlamaModelParams()
+    bad = cy.LlamaModelKvOverride()  # key defaults to empty
+    bad.tag = cy.LLAMA_KV_OVERRIDE_TYPE_INT
+    bad.val_i64 = 1
+    with pytest.raises(ValueError):
+        params.kv_overrides = [bad]
+
+
+def test_model_params_tensor_buft_overrides():
+    """tensor_buft_overrides round-trips; buft resolves by backend name.
+
+    CPU is always a registered buffer type, so this is platform-independent.
+    """
+    params = cy.LlamaModelParams()
+    assert params.tensor_buft_overrides == []
+
+    t = cy.LlamaModelTensorBuftOverride()
+    t.pattern = "attn.*"
+    t.buft = "CPU"
+    assert t.buft == "CPU"  # resolved + readable
+
+    params.tensor_buft_overrides = [t]
+    got = params.tensor_buft_overrides
+    assert len(got) == 1  # {nullptr,nullptr} terminator not surfaced
+    assert got[0].pattern == "attn.*"
+    assert got[0].buft == "CPU"
+
+    params.tensor_buft_overrides = []
+    assert params.tensor_buft_overrides == []
+
+
+def test_tensor_buft_override_unknown_buft_rejected():
+    t = cy.LlamaModelTensorBuftOverride()
+    with pytest.raises(ValueError):
+        t.buft = "NoSuchBackend"
+
+
+def test_tensor_buft_override_requires_pattern_and_buft():
+    """Wiring an override with only a pattern (no buft) is rejected."""
+    params = cy.LlamaModelParams()
+    t = cy.LlamaModelTensorBuftOverride()
+    t.pattern = "attn.*"  # no buft set
+    with pytest.raises(ValueError):
+        params.tensor_buft_overrides = [t]
+
+
 def test_model_params_progress_callback():
     """Test that progress callback can be set and retrieved."""
     params = cy.LlamaModelParams()
@@ -171,6 +254,34 @@ def test_default_model_quantize_params():
     assert params.only_copy == False
     assert params.pure == False
     assert params.keep_split == False
+
+
+def test_quantize_params_imatrix_roundtrip():
+    """Importance-matrix data round-trips through the owned, name-terminated array."""
+    params = cy.LlamaModelQuantizeParams()
+    assert params.imatrix == {}
+
+    params.imatrix = {
+        "blk.0.attn_q.weight": [0.5, 0.25, 0.125],
+        "blk.0.ffn_down.weight": [1.0, 2.0],
+    }
+    got = params.imatrix
+    assert set(got.keys()) == {"blk.0.attn_q.weight", "blk.0.ffn_down.weight"}
+    assert list(got["blk.0.ffn_down.weight"]) == [1.0, 2.0]
+    assert [approx(x) for x in got["blk.0.attn_q.weight"]] == [0.5, 0.25, 0.125]
+
+    params.imatrix = None
+    assert params.imatrix == {}
+
+
+def test_quantize_function_is_exposed():
+    """The quantize entry point must exist (and validate inputs)."""
+    assert callable(cy.llama_model_quantize)
+    with pytest.raises(Exception):
+        # nonexistent input file -> native failure surfaced as an exception
+        cy.llama_model_quantize(
+            "/nonexistent/in.gguf", "/tmp/out.gguf", cy.LlamaModelQuantizeParams()
+        )
 
 
 def test_default_ggml_threadpool_params():

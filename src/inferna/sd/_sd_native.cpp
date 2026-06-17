@@ -85,13 +85,19 @@ struct SDContextParamsW {
     std::optional<std::string> llm_vision_path_s;
     std::optional<std::string> diffusion_model_path_s;
     std::optional<std::string> high_noise_diffusion_model_path_s;
+    std::optional<std::string> uncond_diffusion_model_path_s;
+    std::optional<std::string> embeddings_connectors_path_s;
     std::optional<std::string> vae_path_s;
+    std::optional<std::string> audio_vae_path_s;
     std::optional<std::string> taesd_path_s;
     std::optional<std::string> control_net_path_s;
     std::optional<std::string> photo_maker_path_s;
+    std::optional<std::string> pulid_weights_path_s;
     std::optional<std::string> tensor_type_rules_s;
+    std::optional<std::string> max_vram_s;
     std::optional<std::string> backend_s;
     std::optional<std::string> params_backend_s;
+    std::optional<std::string> rpc_servers_s;
 
     // Owning storage for the embeddings array. Strings must outlive new_sd_ctx().
     std::vector<std::pair<std::string, std::string>> embeddings_owned;  // (name, path)
@@ -156,6 +162,7 @@ struct SDImageGenParamsW {
     std::optional<std::string> prompt_s;
     std::optional<std::string> negative_prompt_s;
     std::optional<std::string> pm_id_embed_path_s;
+    std::optional<std::string> pulid_id_embedding_path_s;
     std::optional<std::string> scm_mask_s;
     std::optional<std::string> hires_model_path_s;
 
@@ -274,7 +281,7 @@ struct SDContextW {
 
 struct UpscalerW {
     upscaler_ctx_t* ctx = nullptr;
-    UpscalerW(const std::string& model_path, bool offload_to_cpu, bool direct,
+    UpscalerW(const std::string& model_path, bool direct,
               int n_threads, int tile_size,
               std::optional<std::string> backend,
               std::optional<std::string> params_backend) {
@@ -282,7 +289,7 @@ struct UpscalerW {
         const char* backend_c = (backend && !backend->empty()) ? backend->c_str() : nullptr;
         const char* params_backend_c =
             (params_backend && !params_backend->empty()) ? params_backend->c_str() : nullptr;
-        ctx = new_upscaler_ctx(model_path.c_str(), offload_to_cpu, direct,
+        ctx = new_upscaler_ctx(model_path.c_str(), direct,
                                 n_threads, tile_size,
                                 backend_c, params_backend_c);
         if (!ctx) {
@@ -425,8 +432,35 @@ static nb::dict make_enum_dict() {
     add("SD_TYPE_Q5_K", SD_TYPE_Q5_K);
     add("SD_TYPE_Q6_K", SD_TYPE_Q6_K);
     add("SD_TYPE_Q8_K", SD_TYPE_Q8_K);
+    add("SD_TYPE_IQ2_XXS", SD_TYPE_IQ2_XXS);
+    add("SD_TYPE_IQ2_XS", SD_TYPE_IQ2_XS);
+    add("SD_TYPE_IQ3_XXS", SD_TYPE_IQ3_XXS);
+    add("SD_TYPE_IQ1_S", SD_TYPE_IQ1_S);
+    add("SD_TYPE_IQ4_NL", SD_TYPE_IQ4_NL);
+    add("SD_TYPE_IQ3_S", SD_TYPE_IQ3_S);
+    add("SD_TYPE_IQ2_S", SD_TYPE_IQ2_S);
+    add("SD_TYPE_IQ4_XS", SD_TYPE_IQ4_XS);
+    add("SD_TYPE_I8", SD_TYPE_I8);
+    add("SD_TYPE_I16", SD_TYPE_I16);
+    add("SD_TYPE_I32", SD_TYPE_I32);
+    add("SD_TYPE_I64", SD_TYPE_I64);
+    add("SD_TYPE_F64", SD_TYPE_F64);
+    add("SD_TYPE_IQ1_M", SD_TYPE_IQ1_M);
     add("SD_TYPE_BF16", SD_TYPE_BF16);
+    add("SD_TYPE_TQ1_0", SD_TYPE_TQ1_0);
+    add("SD_TYPE_TQ2_0", SD_TYPE_TQ2_0);
+    add("SD_TYPE_MXFP4", SD_TYPE_MXFP4);
+    add("SD_TYPE_NVFP4", SD_TYPE_NVFP4);
+    add("SD_TYPE_Q1_0", SD_TYPE_Q1_0);
     add("SD_TYPE_COUNT", SD_TYPE_COUNT);
+    add("SD_VAE_FORMAT_AUTO", SD_VAE_FORMAT_AUTO);
+    add("SD_VAE_FORMAT_FLUX", SD_VAE_FORMAT_FLUX);
+    add("SD_VAE_FORMAT_SD3", SD_VAE_FORMAT_SD3);
+    add("SD_VAE_FORMAT_FLUX2", SD_VAE_FORMAT_FLUX2);
+    add("SD_VAE_FORMAT_COUNT", SD_VAE_FORMAT_COUNT);
+    add("SD_CANCEL_ALL", SD_CANCEL_ALL);
+    add("SD_CANCEL_NEW_LATENTS", SD_CANCEL_NEW_LATENTS);
+    add("SD_CANCEL_RESET", SD_CANCEL_RESET);
 
     add("SD_LOG_DEBUG", SD_LOG_DEBUG);
     add("SD_LOG_INFO", SD_LOG_INFO);
@@ -582,10 +616,14 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_PATH(SDContextParamsW, p.llm_vision_path,                  llm_vision_path_s,                  "llm_vision_path")
         SD_PARAM_PATH(SDContextParamsW, p.diffusion_model_path,             diffusion_model_path_s,             "diffusion_model_path")
         SD_PARAM_PATH(SDContextParamsW, p.high_noise_diffusion_model_path,  high_noise_diffusion_model_path_s,  "high_noise_diffusion_model_path")
+        SD_PARAM_PATH(SDContextParamsW, p.uncond_diffusion_model_path,      uncond_diffusion_model_path_s,      "uncond_diffusion_model_path")
+        SD_PARAM_PATH(SDContextParamsW, p.embeddings_connectors_path,       embeddings_connectors_path_s,       "embeddings_connectors_path")
         SD_PARAM_PATH(SDContextParamsW, p.vae_path,                         vae_path_s,                         "vae_path")
+        SD_PARAM_PATH(SDContextParamsW, p.audio_vae_path,                   audio_vae_path_s,                   "audio_vae_path")
         SD_PARAM_PATH(SDContextParamsW, p.taesd_path,                       taesd_path_s,                       "taesd_path")
         SD_PARAM_PATH(SDContextParamsW, p.control_net_path,                 control_net_path_s,                 "control_net_path")
         SD_PARAM_PATH(SDContextParamsW, p.photo_maker_path,                 photo_maker_path_s,                 "photo_maker_path")
+        SD_PARAM_PATH(SDContextParamsW, p.pulid_weights_path,               pulid_weights_path_s,               "pulid_weights_path")
         SD_PARAM_PATH(SDContextParamsW, p.tensor_type_rules,                tensor_type_rules_s,                "tensor_type_rules")
         SD_PARAM_VAL(SDContextParamsW, int, p.n_threads, "n_threads")
         SD_PARAM_VAL(SDContextParamsW, int, p.wtype, "wtype")
@@ -593,13 +631,7 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDContextParamsW, int, p.sampler_rng_type, "sampler_rng_type")
         SD_PARAM_VAL(SDContextParamsW, int, p.prediction, "prediction")
         SD_PARAM_VAL(SDContextParamsW, int, p.lora_apply_mode, "lora_apply_mode")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.vae_decode_only, "vae_decode_only")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.free_params_immediately, "free_params_immediately")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.offload_params_to_cpu, "offload_params_to_cpu")
         SD_PARAM_VAL(SDContextParamsW, bool, p.enable_mmap, "enable_mmap")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.keep_clip_on_cpu, "keep_clip_on_cpu")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.keep_control_net_on_cpu, "keep_control_net_on_cpu")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.keep_vae_on_cpu, "keep_vae_on_cpu")
         SD_PARAM_VAL(SDContextParamsW, bool, p.flash_attn, "flash_attn")
         SD_PARAM_VAL(SDContextParamsW, bool, p.diffusion_flash_attn, "diffusion_flash_attn")
         SD_PARAM_VAL(SDContextParamsW, bool, p.tae_preview_only, "tae_preview_only")
@@ -612,9 +644,12 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDContextParamsW, bool, p.chroma_use_t5_mask, "chroma_use_t5_mask")
         SD_PARAM_VAL(SDContextParamsW, int,  p.chroma_t5_mask_pad, "chroma_t5_mask_pad")
         SD_PARAM_VAL(SDContextParamsW, bool, p.qwen_image_zero_cond_t, "qwen_image_zero_cond_t")
-        SD_PARAM_VAL(SDContextParamsW, float, p.max_vram, "max_vram")
+        SD_PARAM_VAL(SDContextParamsW, int,  p.vae_format, "vae_format")
+        SD_PARAM_PATH(SDContextParamsW, p.max_vram,        max_vram_s,        "max_vram")
+        SD_PARAM_VAL(SDContextParamsW, bool, p.stream_layers, "stream_layers")
         SD_PARAM_PATH(SDContextParamsW, p.backend,         backend_s,         "backend")
         SD_PARAM_PATH(SDContextParamsW, p.params_backend,  params_backend_s,  "params_backend")
+        SD_PARAM_PATH(SDContextParamsW, p.rpc_servers,     rpc_servers_s,     "rpc_servers")
         .def_prop_rw("embeddings",
             [](SDContextParamsW& s) {
                 nb::list out;
@@ -763,6 +798,9 @@ NB_MODULE(_sd_native, m) {
         // Photo maker
         SD_PARAM_PATH(SDImageGenParamsW, p.pm_params.id_embed_path, pm_id_embed_path_s, "pm_id_embed_path")
         SD_PARAM_VAL(SDImageGenParamsW, float,  p.pm_params.style_strength, "pm_style_strength")
+        // PuLID (identity conditioning; pairs with SDContextParams.pulid_weights_path)
+        SD_PARAM_PATH(SDImageGenParamsW, p.pulid_params.id_embedding_path, pulid_id_embedding_path_s, "pulid_id_embedding_path")
+        SD_PARAM_VAL(SDImageGenParamsW, float,  p.pulid_params.id_weight, "pulid_id_weight")
         // sample_params is the SDSampleParams handle. Setting it copies; getting
         // returns a reference that the caller can mutate (write-through).
         .def_prop_rw("sample_params",
@@ -868,6 +906,13 @@ NB_MODULE(_sd_native, m) {
         .def("close", [](SDContextW& s){
             if (s.ctx) { free_sd_ctx(s.ctx); s.ctx = nullptr; }
         })
+        .def("cancel", [](SDContextW& s, int mode){
+            // Request cancellation of an in-progress generation. Meant to be
+            // called from another thread while generate_* runs with the GIL
+            // released; mode is an SD_CANCEL_* value.
+            if (!s.ctx) throw std::runtime_error("Context not initialized");
+            sd_cancel_generation(s.ctx, (sd_cancel_mode_t) mode);
+        }, "mode"_a = (int) SD_CANCEL_ALL)
         .def_prop_ro("is_valid", [](SDContextW& s){ return s.ctx != nullptr; })
         .def_prop_ro("supports_image_generation", [](SDContextW& s){
             if (!s.ctx) throw std::runtime_error("Context not initialized");
@@ -939,7 +984,8 @@ NB_MODULE(_sd_native, m) {
                 int64_t seed, int clip_skip, float strength,
                 float eta, float moe_boundary, float vace_strength,
                 std::optional<SDImageW*> init_image,
-                std::optional<SDImageW*> end_image) {
+                std::optional<SDImageW*> end_image,
+                int fps, nb::list loras) {
             if (!s.ctx) throw std::runtime_error("Context not initialized");
             sd_vid_gen_params_t vid_params;
             sd_vid_gen_params_init(&vid_params);
@@ -958,8 +1004,31 @@ NB_MODULE(_sd_native, m) {
             vid_params.sample_params.eta = eta;
             vid_params.moe_boundary = moe_boundary;
             vid_params.vace_strength = vace_strength;
+            if (fps > 0) vid_params.fps = fps;
             if (init_image && *init_image) vid_params.init_image = (*init_image)->img;
             if (end_image  && *end_image)  vid_params.end_image  = (*end_image)->img;
+
+            // Optional LoRAs (list of {path, multiplier?, is_high_noise?}). The
+            // backing storage only needs to outlive the generate_video call below.
+            std::vector<std::string> lora_paths;
+            std::vector<sd_lora_t> lora_buf;
+            if (loras.size() > 0) {
+                lora_paths.reserve(loras.size());
+                lora_buf.reserve(loras.size());
+                for (auto h : loras) {
+                    nb::dict d = nb::cast<nb::dict>(h);
+                    lora_paths.push_back(nb::cast<std::string>(d["path"]));
+                    sd_lora_t entry{};
+                    entry.path = lora_paths.back().c_str();
+                    entry.multiplier = d.contains("multiplier")
+                        ? nb::cast<float>(d["multiplier"]) : 1.0f;
+                    entry.is_high_noise = d.contains("is_high_noise")
+                        ? nb::cast<bool>(d["is_high_noise"]) : false;
+                    lora_buf.push_back(entry);
+                }
+                vid_params.loras = lora_buf.data();
+                vid_params.lora_count = (uint32_t) lora_buf.size();
+            }
 
             int num_frames_out = 0;
             sd_image_t* result = nullptr;
@@ -1003,9 +1072,9 @@ NB_MODULE(_sd_native, m) {
     // Upscaler
     // -------------------------------------------------------------------------
     nb::class_<UpscalerW>(m, "Upscaler")
-        .def(nb::init<const std::string&, bool, bool, int, int,
+        .def(nb::init<const std::string&, bool, int, int,
                       std::optional<std::string>, std::optional<std::string>>(),
-             "model_path"_a, "offload_to_cpu"_a = false, "direct"_a = false,
+             "model_path"_a, "direct"_a = false,
              "n_threads"_a = -1, "tile_size"_a = 0,
              "backend"_a = nb::none(), "params_backend"_a = nb::none())
         .def_prop_ro("is_valid", [](UpscalerW& s){ return s.ctx != nullptr; })

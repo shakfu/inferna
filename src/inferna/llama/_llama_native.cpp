@@ -85,6 +85,10 @@ struct LlamaModelParamsW {
     llama_model_params p;
     nb::object progress_callback_obj;     // owns the Python callable lifetime
     std::vector<float> tensor_split_owned;
+    // Owning backing for the two NULL/empty-terminated override arrays.
+    std::vector<llama_model_kv_override> kv_overrides_owned;
+    std::vector<llama_model_tensor_buft_override> tensor_buft_overrides_owned;
+    std::vector<std::string> tensor_buft_patterns_owned;  // keeps pattern c_strs alive
 
     LlamaModelParamsW() : p(llama_model_default_params()) {}
 };
@@ -104,6 +108,10 @@ struct LlamaContextParamsW {
 
 struct LlamaModelQuantizeParamsW {
     llama_model_quantize_params p;
+    // Owning backing for the name-terminated importance-matrix array.
+    std::vector<std::string> imatrix_names_owned;
+    std::vector<std::vector<float>> imatrix_data_owned;
+    std::vector<llama_model_imatrix_data> imatrix_owned;
     LlamaModelQuantizeParamsW() : p(llama_model_quantize_default_params()) {}
 };
 
@@ -164,7 +172,27 @@ struct LlamaModelKvOverrideW {
 struct LlamaModelTensorBuftOverrideW {
     llama_model_tensor_buft_override p{};
     std::optional<std::string> pattern_s;
+    std::optional<std::string> buft_name_s;  // resolved buffer-type name (for read-back)
 };
+
+// Resolve a ggml buffer type by its name (e.g. "CPU", "Metal"), mirroring
+// llama.cpp's --override-tensor parsing. Throws with the available names listed
+// if the requested type is unknown.
+static ggml_backend_buffer_type_t resolve_buft_by_name(const std::string& name) {
+    ggml_backend_load_all();  // ensure all backends are registered (idempotent)
+    std::string available;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev);
+        if (!buft) continue;
+        const char* bn = ggml_backend_buft_name(buft);
+        if (name == bn) return buft;
+        if (!available.empty()) available += ", ";
+        available += bn;
+    }
+    throw std::invalid_argument(
+        "unknown buffer type '" + name + "'; available: " + available);
+}
 
 // =============================================================================
 // LlamaVocab — non-owning view of a llama_vocab*
@@ -605,7 +633,74 @@ NB_MODULE(_llama_native, m) {
                     // above keeps the refcount alive for the params lifetime.
                     s.p.progress_callback_user_data = cb.ptr();
                 }
-            }, nb::arg("cb").none());
+            }, nb::arg("cb").none())
+        // kv_overrides: list[LlamaModelKvOverride]. We own a vector backing the
+        // C pointer, appending the empty-key terminator the loader expects.
+        .def_prop_rw("kv_overrides",
+            [](LlamaModelParamsW& s) {
+                nb::list out;
+                for (auto& o : s.kv_overrides_owned) {
+                    if (o.key[0] == 0) break;  // skip the terminator
+                    auto* w = new LlamaModelKvOverrideW();
+                    w->p = o;
+                    out.append(nb::cast(w, nb::rv_policy::take_ownership));
+                }
+                return out;
+            },
+            [](LlamaModelParamsW& s, nb::iterable v) {
+                s.kv_overrides_owned.clear();
+                for (nb::handle item : v) {
+                    auto& w = nb::cast<LlamaModelKvOverrideW&>(item);
+                    if (w.p.key[0] == 0)
+                        throw std::invalid_argument("kv_override key must not be empty");
+                    s.kv_overrides_owned.push_back(w.p);
+                }
+                if (s.kv_overrides_owned.empty()) {
+                    s.p.kv_overrides = nullptr;
+                } else {
+                    s.kv_overrides_owned.push_back(llama_model_kv_override{});  // key[0]==0
+                    s.p.kv_overrides = s.kv_overrides_owned.data();
+                }
+            })
+        // tensor_buft_overrides: list[LlamaModelTensorBuftOverride], terminated
+        // by a {nullptr, nullptr} entry. Patterns are copied into owned storage.
+        .def_prop_rw("tensor_buft_overrides",
+            [](LlamaModelParamsW& s) {
+                nb::list out;
+                for (auto& o : s.tensor_buft_overrides_owned) {
+                    if (o.pattern == nullptr) break;  // skip the terminator
+                    auto* w = new LlamaModelTensorBuftOverrideW();
+                    w->pattern_s = std::string(o.pattern);
+                    w->p.pattern = w->pattern_s->c_str();
+                    w->p.buft = o.buft;
+                    if (o.buft) w->buft_name_s = std::string(ggml_backend_buft_name(o.buft));
+                    out.append(nb::cast(w, nb::rv_policy::take_ownership));
+                }
+                return out;
+            },
+            [](LlamaModelParamsW& s, nb::iterable v) {
+                std::vector<std::string> pats;
+                std::vector<ggml_backend_buffer_type_t> bufts;
+                for (nb::handle item : v) {
+                    auto& w = nb::cast<LlamaModelTensorBuftOverrideW&>(item);
+                    if (!w.p.pattern || !w.p.buft)
+                        throw std::invalid_argument(
+                            "tensor_buft_override requires both pattern and buft");
+                    pats.emplace_back(w.p.pattern);
+                    bufts.push_back(w.p.buft);
+                }
+                s.tensor_buft_patterns_owned = std::move(pats);
+                s.tensor_buft_overrides_owned.clear();
+                if (s.tensor_buft_patterns_owned.empty()) {
+                    s.p.tensor_buft_overrides = nullptr;
+                    return;
+                }
+                for (size_t i = 0; i < s.tensor_buft_patterns_owned.size(); ++i)
+                    s.tensor_buft_overrides_owned.push_back(
+                        { s.tensor_buft_patterns_owned[i].c_str(), bufts[i] });
+                s.tensor_buft_overrides_owned.push_back({ nullptr, nullptr });
+                s.p.tensor_buft_overrides = s.tensor_buft_overrides_owned.data();
+            });
 
     // -------------------------------------------------------------------------
     // LlamaContextParams
@@ -674,7 +769,37 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaModelQuantizeParamsW, bool, only_copy, "only_copy")
         PARAM_VAL(LlamaModelQuantizeParamsW, bool, pure,      "pure")
         PARAM_VAL(LlamaModelQuantizeParamsW, bool, keep_split, "keep_split")
-        PARAM_VAL(LlamaModelQuantizeParamsW, bool, dry_run,    "dry_run");
+        PARAM_VAL(LlamaModelQuantizeParamsW, bool, dry_run,    "dry_run")
+        // imatrix: importance-matrix data as {tensor_name: [float, ...]}. Backed
+        // by owned storage and a name==nullptr terminated array, as the
+        // quantizer expects. Improves low-bit (IQ*/Q*_K) quantization quality.
+        .def_prop_rw("imatrix",
+            [](LlamaModelQuantizeParamsW& s) {
+                nb::dict out;
+                for (size_t i = 0; i < s.imatrix_names_owned.size(); ++i)
+                    out[s.imatrix_names_owned[i].c_str()] = nb::cast(s.imatrix_data_owned[i]);
+                return out;
+            },
+            [](LlamaModelQuantizeParamsW& s, nb::object v) {
+                s.imatrix_names_owned.clear();
+                s.imatrix_data_owned.clear();
+                s.imatrix_owned.clear();
+                if (v.is_none()) { s.p.imatrix = nullptr; return; }
+                for (nb::handle it : v.attr("items")()) {
+                    nb::tuple kv = nb::cast<nb::tuple>(nb::borrow(it));
+                    s.imatrix_names_owned.push_back(nb::cast<std::string>(kv[0]));
+                    s.imatrix_data_owned.push_back(nb::cast<std::vector<float>>(kv[1]));
+                }
+                if (s.imatrix_names_owned.empty()) { s.p.imatrix = nullptr; return; }
+                s.imatrix_owned.reserve(s.imatrix_names_owned.size() + 1);
+                for (size_t i = 0; i < s.imatrix_names_owned.size(); ++i)
+                    s.imatrix_owned.push_back(llama_model_imatrix_data{
+                        s.imatrix_names_owned[i].c_str(),
+                        s.imatrix_data_owned[i].data(),
+                        s.imatrix_data_owned[i].size() });
+                s.imatrix_owned.push_back(llama_model_imatrix_data{nullptr, nullptr, 0});
+                s.p.imatrix = s.imatrix_owned.data();
+            }, nb::arg("imatrix").none());
 
     // -------------------------------------------------------------------------
     // LlamaSamplerChainParams
@@ -753,9 +878,20 @@ NB_MODULE(_llama_native, m) {
     // LlamaModelTensorBuftOverride
     // -------------------------------------------------------------------------
     nb::class_<LlamaModelTensorBuftOverrideW>(m, "LlamaModelTensorBuftOverride",
-        "Override that pins tensors matching a regex pattern to a specific buffer type.")
+        "Override that pins tensors matching a regex pattern to a specific buffer type. "
+        "Set buft to a buffer-type name (e.g. \"CPU\"); it is resolved against the "
+        "registered ggml backends at assignment time.")
         .def(nb::init<>())
-        PARAM_PATH(LlamaModelTensorBuftOverrideW, pattern, pattern_s, "pattern");
+        PARAM_PATH(LlamaModelTensorBuftOverrideW, pattern, pattern_s, "pattern")
+        .def_prop_rw("buft",
+            [](LlamaModelTensorBuftOverrideW& s) -> nb::object {
+                if (!s.buft_name_s) return nb::none();
+                return nb::cast(*s.buft_name_s);
+            },
+            [](LlamaModelTensorBuftOverrideW& s, std::optional<std::string> v) {
+                if (!v || v->empty()) { s.p.buft = nullptr; s.buft_name_s.reset(); }
+                else { s.p.buft = resolve_buft_by_name(*v); s.buft_name_s = std::move(*v); }
+            });
 
     // -------------------------------------------------------------------------
     // LlamaVocab — non-owning view; constructor not exposed (use LlamaModel.get_vocab).
@@ -1436,6 +1572,31 @@ NB_MODULE(_llama_native, m) {
         .def("add_infill", [](LlamaSamplerW& s, LlamaVocabW& vocab){
             chain_add_checked(s.ptr, llama_sampler_init_infill(vocab.ptr), "infill");
         })
+        .def("add_top_n_sigma", [](LlamaSamplerW& s, float n){
+            chain_add_checked(s.ptr, llama_sampler_init_top_n_sigma(n), "top_n_sigma");
+        }, "n"_a)
+        .def("add_dry", [](LlamaSamplerW& s, LlamaVocabW& vocab, int32_t n_ctx_train,
+                           float dry_multiplier, float dry_base, int32_t dry_allowed_length,
+                           int32_t dry_penalty_last_n, nb::list seq_breakers){
+            // init_dry copies the breaker strings internally, so the temporaries
+            // below only need to outlive the call.
+            std::vector<std::string> breakers_owned;
+            breakers_owned.reserve(seq_breakers.size());
+            for (auto h : seq_breakers) breakers_owned.push_back(nb::cast<std::string>(h));
+            std::vector<const char*> breakers_c;
+            breakers_c.reserve(breakers_owned.size());
+            for (auto& b : breakers_owned) breakers_c.push_back(b.c_str());
+            chain_add_checked(s.ptr,
+                llama_sampler_init_dry(vocab.ptr, n_ctx_train, dry_multiplier, dry_base,
+                                       dry_allowed_length, dry_penalty_last_n,
+                                       breakers_c.empty() ? nullptr : breakers_c.data(),
+                                       breakers_c.size()),
+                "dry");
+        }, "vocab"_a, "n_ctx_train"_a, "dry_multiplier"_a, "dry_base"_a,
+           "dry_allowed_length"_a, "dry_penalty_last_n"_a, "seq_breakers"_a)
+        .def("add_adaptive_p", [](LlamaSamplerW& s, float target, float decay, uint32_t seed){
+            chain_add_checked(s.ptr, llama_sampler_init_adaptive_p(target, decay, seed), "adaptive_p");
+        }, "target"_a, "decay"_a, "seed"_a)
         .def("sample", [](LlamaSamplerW& s, LlamaContextW& ctx, int idx){
             return llama_sampler_sample(s.ptr, ctx.ptr, idx);
         })
@@ -1551,6 +1712,22 @@ NB_MODULE(_llama_native, m) {
           "True if any GPU backend is available for layer offloading.");
     m.def("llama_supports_rpc",         [](){ return (bool) llama_supports_rpc(); },
           "True if the RPC backend is compiled in.");
+
+    m.def("llama_model_quantize",
+        [](const std::string& fname_inp, const std::string& fname_out,
+           LlamaModelQuantizeParamsW& params) {
+            uint32_t rc;
+            {
+                nb::gil_scoped_release release;  // quantization is long and pure-native
+                rc = llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), &params.p);
+            }
+            if (rc != 0)
+                throw std::runtime_error(
+                    "llama_model_quantize failed (code " + std::to_string(rc) + ")");
+        },
+        "fname_inp"_a, "fname_out"_a, "params"_a,
+        "Quantize a GGUF model from fname_inp to fname_out using the given "
+        "LlamaModelQuantizeParams. Raises RuntimeError on failure.");
 
     m.def("llama_batch_get_one", [](std::vector<int> tokens, int n_past){
         // Build a batch with n_tokens tokens, fill pos / seq_id / logits,

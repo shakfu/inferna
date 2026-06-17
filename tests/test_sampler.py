@@ -16,3 +16,15 @@ def test_sampler_instance():
     # The constructed sampler should still be the LlamaSampler type after
     # the chain additions.
     assert isinstance(smplr, cy.LlamaSampler)
+
+
+def test_sampler_top_n_sigma_and_adaptive_p():
+    """Newer vocab-free samplers added to the chain (DRY needs a vocab; covered
+    separately in model-gated tests)."""
+    smplr = cy.LlamaSampler()
+    smplr.add_top_n_sigma(1.0)
+    smplr.add_adaptive_p(0.3, 0.9, 1234)
+    assert isinstance(smplr, cy.LlamaSampler)
+    # The new methods must all be present, including the vocab-dependent DRY.
+    for m in ("add_top_n_sigma", "add_dry", "add_adaptive_p"):
+        assert callable(getattr(smplr, m))

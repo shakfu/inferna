@@ -79,6 +79,7 @@ llama_supports_mmap = _N.llama_supports_mmap
 llama_supports_mlock = _N.llama_supports_mlock
 llama_supports_gpu_offload = _N.llama_supports_gpu_offload
 llama_supports_rpc = _N.llama_supports_rpc
+llama_model_quantize = _N.llama_model_quantize
 llama_attach_threadpool = _N.llama_attach_threadpool
 llama_detach_threadpool = _N.llama_detach_threadpool
 llama_batch_get_one = _N.llama_batch_get_one
@@ -303,6 +304,12 @@ LLAMA_SPLIT_MODE_TENSOR = _N.LLAMA_SPLIT_MODE_TENSOR
 # llama context type
 LLAMA_CONTEXT_TYPE_DEFAULT = _N.LLAMA_CONTEXT_TYPE_DEFAULT
 LLAMA_CONTEXT_TYPE_MTP = _N.LLAMA_CONTEXT_TYPE_MTP
+
+# llama model kv-override type (tag for LlamaModelKvOverride)
+LLAMA_KV_OVERRIDE_TYPE_INT = _N.LLAMA_KV_OVERRIDE_TYPE_INT
+LLAMA_KV_OVERRIDE_TYPE_FLOAT = _N.LLAMA_KV_OVERRIDE_TYPE_FLOAT
+LLAMA_KV_OVERRIDE_TYPE_BOOL = _N.LLAMA_KV_OVERRIDE_TYPE_BOOL
+LLAMA_KV_OVERRIDE_TYPE_STR = _N.LLAMA_KV_OVERRIDE_TYPE_STR
 
 # llama token sentinel
 LLAMA_TOKEN_NULL = _N.LLAMA_TOKEN_NULL

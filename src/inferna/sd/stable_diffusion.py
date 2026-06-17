@@ -118,8 +118,44 @@ class SDType(IntEnum):
     Q5_K = _E["SD_TYPE_Q5_K"]
     Q6_K = _E["SD_TYPE_Q6_K"]
     Q8_K = _E["SD_TYPE_Q8_K"]
+    IQ2_XXS = _E["SD_TYPE_IQ2_XXS"]
+    IQ2_XS = _E["SD_TYPE_IQ2_XS"]
+    IQ3_XXS = _E["SD_TYPE_IQ3_XXS"]
+    IQ1_S = _E["SD_TYPE_IQ1_S"]
+    IQ4_NL = _E["SD_TYPE_IQ4_NL"]
+    IQ3_S = _E["SD_TYPE_IQ3_S"]
+    IQ2_S = _E["SD_TYPE_IQ2_S"]
+    IQ4_XS = _E["SD_TYPE_IQ4_XS"]
+    I8 = _E["SD_TYPE_I8"]
+    I16 = _E["SD_TYPE_I16"]
+    I32 = _E["SD_TYPE_I32"]
+    I64 = _E["SD_TYPE_I64"]
+    F64 = _E["SD_TYPE_F64"]
+    IQ1_M = _E["SD_TYPE_IQ1_M"]
     BF16 = _E["SD_TYPE_BF16"]
+    TQ1_0 = _E["SD_TYPE_TQ1_0"]
+    TQ2_0 = _E["SD_TYPE_TQ2_0"]
+    MXFP4 = _E["SD_TYPE_MXFP4"]
+    NVFP4 = _E["SD_TYPE_NVFP4"]
+    Q1_0 = _E["SD_TYPE_Q1_0"]
     COUNT = _E["SD_TYPE_COUNT"]
+
+
+class VaeFormat(IntEnum):
+    AUTO = _E["SD_VAE_FORMAT_AUTO"]
+    FLUX = _E["SD_VAE_FORMAT_FLUX"]
+    SD3 = _E["SD_VAE_FORMAT_SD3"]
+    FLUX2 = _E["SD_VAE_FORMAT_FLUX2"]
+    COUNT = _E["SD_VAE_FORMAT_COUNT"]
+
+
+class CancelMode(IntEnum):
+    # Stop the current generation as soon as possible.
+    ALL = _E["SD_CANCEL_ALL"]
+    # Finish the current sample, skip remaining batch latents, return what's done.
+    NEW_LATENTS = _E["SD_CANCEL_NEW_LATENTS"]
+    # Clear a pending cancellation request.
+    RESET = _E["SD_CANCEL_RESET"]
 
 
 class LogLevel(IntEnum):
@@ -408,7 +444,6 @@ class SDContextParams(_n.SDContextParams):
         diffusion_model_path: Optional[str] = None,
         n_threads: int = -1,
         wtype: SDType = SDType.COUNT,
-        vae_decode_only: bool = True,
     ):
         super().__init__()
         if model_path:
@@ -426,7 +461,40 @@ class SDContextParams(_n.SDContextParams):
         if n_threads > 0:
             self.n_threads = n_threads
         self.wtype = int(wtype)
-        self.vae_decode_only = vae_decode_only
+
+    def apply_cpu_offload(
+        self,
+        *,
+        offload_params: bool = False,
+        clip_on_cpu: bool = False,
+        vae_on_cpu: bool = False,
+        control_net_on_cpu: bool = False,
+    ) -> None:
+        """Translate CPU-offload toggles into backend-assignment strings.
+
+        Upstream stable-diffusion.cpp dropped the dedicated offload struct
+        fields (offload_params_to_cpu / keep_*_on_cpu) in favour of backend
+        assignment specs. This mirrors its CLI: prepend ``te=cpu`` / ``vae=cpu``
+        / ``controlnet=cpu`` to ``backend`` and ``*=cpu`` to ``params_backend``.
+        """
+
+        def _prepend(spec: Optional[str], assignment: str) -> str:
+            return assignment if not spec else f"{assignment},{spec}"
+
+        backend = self.backend or ""
+        params_backend = self.params_backend or ""
+        if offload_params:
+            params_backend = _prepend(params_backend, "*=cpu")
+        if clip_on_cpu:
+            backend = _prepend(backend, "te=cpu")
+        if vae_on_cpu:
+            backend = _prepend(backend, "vae=cpu")
+        if control_net_on_cpu:
+            backend = _prepend(backend, "controlnet=cpu")
+        if backend:
+            self.backend = backend
+        if params_backend:
+            self.params_backend = params_backend
 
 
 # =============================================================================
@@ -707,6 +775,8 @@ class SDContext(_n.SDContext):
         eta: float = float("inf"),
         moe_boundary: float = 0.875,
         vace_strength: float = 1.0,
+        fps: int = -1,
+        loras: Optional[List[dict]] = None,
     ) -> List[SDImage]:
         sm = int(sample_method) if sample_method is not None else int(SampleMethod.COUNT)
         sc = int(scheduler) if scheduler is not None else int(Scheduler.COUNT)
@@ -728,6 +798,8 @@ class SDContext(_n.SDContext):
             vace_strength,
             init_image._native if init_image is not None else None,
             end_image._native if end_image is not None else None,
+            fps,
+            loras if loras is not None else [],
         )
         return [SDImage(native) for native in out]
 
@@ -750,7 +822,12 @@ class Upscaler:
     ):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model not found: {model_path}")
-        self._native = _n.Upscaler(model_path, offload_to_cpu, direct, n_threads, tile_size)
+        # Upstream dropped the offload_to_cpu arg; offloading is now a
+        # params_backend assignment spec ("*=cpu").
+        params_backend = "*=cpu" if offload_to_cpu else None
+        self._native = _n.Upscaler(
+            model_path, direct, n_threads, tile_size, None, params_backend
+        )
 
     @property
     def is_valid(self) -> bool:
@@ -932,9 +1009,11 @@ def text_to_images(
         params.taesd_path = taesd_path
     if control_net_path:
         params.control_net_path = control_net_path
-    params.offload_params_to_cpu = offload_to_cpu
-    params.keep_clip_on_cpu = keep_clip_on_cpu
-    params.keep_vae_on_cpu = keep_vae_on_cpu
+    params.apply_cpu_offload(
+        offload_params=offload_to_cpu,
+        clip_on_cpu=keep_clip_on_cpu,
+        vae_on_cpu=keep_vae_on_cpu,
+    )
     params.diffusion_flash_attn = diffusion_flash_attn
 
     with SDContext(params) as ctx:
@@ -1036,11 +1115,11 @@ def image_to_image(
 ) -> List[SDImage]:
     if isinstance(init_image, str):
         init_image = SDImage.load(init_image)
+    # Upstream now always loads the full VAE, so img2img needs no decode-only toggle.
     params = SDContextParams(
         model_path=model_path,
         vae_path=vae_path,
         n_threads=n_threads,
-        vae_decode_only=False,
     )
     with SDContext(params) as ctx:
         return ctx.generate(

@@ -232,7 +232,19 @@ NB_MODULE(_whisper_native, m) {
             [](WhisperContextParamsW& s, int v){ s.c.gpu_device = v; })
         .def_prop_rw("dtw_token_timestamps",
             [](WhisperContextParamsW& s){ return (bool)s.c.dtw_token_timestamps; },
-            [](WhisperContextParamsW& s, bool v){ s.c.dtw_token_timestamps = v; });
+            [](WhisperContextParamsW& s, bool v){ s.c.dtw_token_timestamps = v; })
+        // DTW alignment-head selection. dtw_token_timestamps has no effect
+        // without a preset matching the model (see WhisperAheadsPreset).
+        .def_prop_rw("dtw_aheads_preset",
+            [](WhisperContextParamsW& s){ return (int)s.c.dtw_aheads_preset; },
+            [](WhisperContextParamsW& s, int v){
+                s.c.dtw_aheads_preset = (enum whisper_alignment_heads_preset) v; })
+        .def_prop_rw("dtw_n_top",
+            [](WhisperContextParamsW& s){ return s.c.dtw_n_top; },
+            [](WhisperContextParamsW& s, int v){ s.c.dtw_n_top = v; })
+        .def_prop_rw("dtw_mem_size",
+            [](WhisperContextParamsW& s){ return (int64_t)s.c.dtw_mem_size; },
+            [](WhisperContextParamsW& s, int64_t v){ s.c.dtw_mem_size = (size_t)v; });
 
     // -------------------------------------------------------------------------
     // WhisperVadParams
@@ -409,7 +421,16 @@ NB_MODULE(_whisper_native, m) {
             [](WhisperFullParamsW& s, std::optional<std::string> v) {
                 if (!v) { s.c.vad_model_path = nullptr; s.vad_model_path_s.reset(); }
                 else    { s.vad_model_path_s = std::move(*v); s.c.vad_model_path = s.vad_model_path_s->c_str(); }
-            });
+            })
+        // vad_params: the embedded whisper_vad_params (tuning for VAD chunking).
+        // Returns/accepts a WhisperVadParams; the struct is held by value.
+        .def_prop_rw("vad_params",
+            [](WhisperFullParamsW& s){
+                auto* w = new WhisperVadParamsW();
+                w->c = s.c.vad_params;
+                return nb::cast(w, nb::rv_policy::take_ownership);
+            },
+            [](WhisperFullParamsW& s, WhisperVadParamsW& v){ s.c.vad_params = v.c; });
 
     // -------------------------------------------------------------------------
     // WhisperTokenData

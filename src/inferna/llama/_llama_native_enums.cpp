@@ -230,6 +230,12 @@ void register_enums(nb::module_& m) {
     EXPORT(LLAMA_CONTEXT_TYPE_DEFAULT);
     EXPORT(LLAMA_CONTEXT_TYPE_MTP);
 
+    // -------- llama model kv-override type (tag for LlamaModelKvOverride) --------
+    EXPORT(LLAMA_KV_OVERRIDE_TYPE_INT);
+    EXPORT(LLAMA_KV_OVERRIDE_TYPE_FLOAT);
+    EXPORT(LLAMA_KV_OVERRIDE_TYPE_BOOL);
+    EXPORT(LLAMA_KV_OVERRIDE_TYPE_STR);
+
     // -------- llama token sentinel (preprocessor define) --------
     m.attr("LLAMA_TOKEN_NULL") = (int) LLAMA_TOKEN_NULL;
 }

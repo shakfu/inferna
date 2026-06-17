@@ -110,6 +110,37 @@ def test_whisper_context_params():
     assert params.gpu_device == 1
 
 
+def test_whisper_context_params_dtw_config():
+    """DTW alignment-head config must be settable (needed for word timestamps)."""
+    params = wh.WhisperContextParams()
+    assert isinstance(params.dtw_aheads_preset, int)
+    assert isinstance(params.dtw_n_top, int)
+    assert isinstance(params.dtw_mem_size, int)
+
+    params.dtw_token_timestamps = True
+    params.dtw_aheads_preset = wh.WhisperAheadsPreset.TINY
+    assert params.dtw_aheads_preset == int(wh.WhisperAheadsPreset.TINY)
+    params.dtw_n_top = 4
+    assert params.dtw_n_top == 4
+    params.dtw_mem_size = 2 * 1024 * 1024
+    assert params.dtw_mem_size == 2 * 1024 * 1024
+
+
+def test_whisper_full_params_vad_params_roundtrip():
+    """The VAD tuning struct can be attached to full params (was unreachable)."""
+    full = wh.WhisperFullParams()
+    vad = wh.WhisperVadParams()
+    vad.threshold = 0.65
+    vad.min_speech_duration_ms = 222
+    vad.max_speech_duration_s = 12.0
+    full.vad_params = vad
+
+    got = full.vad_params
+    assert abs(got.threshold - 0.65) < 1e-6
+    assert got.min_speech_duration_ms == 222
+    assert abs(got.max_speech_duration_s - 12.0) < 1e-6
+
+
 def test_whisper_vad_params():
     """Test whisper VAD parameters."""
     params = wh.WhisperVadParams()

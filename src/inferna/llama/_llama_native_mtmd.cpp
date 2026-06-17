@@ -215,7 +215,8 @@ void register_mtmd(nb::module_& m) {
                         "mtmd_ctx must be an MtmdContext instance, got None");
                 MtmdContextW& ctx = nb::cast<MtmdContextW&>(ctx_obj);
                 auto* w = new MtmdBitmapW();
-                w->ptr = mtmd_helper_bitmap_init_from_file(ctx.ptr, file_path.c_str());
+                w->ptr = mtmd_helper_bitmap_init_from_file(
+                    ctx.ptr, file_path.c_str(), /*placeholder=*/false).bitmap;
                 if (!w->ptr) {
                     delete w;
                     throw std::runtime_error("Failed to load bitmap from file: " + file_path);
@@ -227,7 +228,8 @@ void register_mtmd(nb::module_& m) {
             [](MtmdContextW& ctx, nb::bytes data){
                 auto* w = new MtmdBitmapW();
                 w->ptr = mtmd_helper_bitmap_init_from_buf(ctx.ptr,
-                            (const unsigned char*) data.c_str(), data.size());
+                            (const unsigned char*) data.c_str(), data.size(),
+                            /*placeholder=*/false).bitmap;
                 if (!w->ptr) {
                     delete w;
                     throw std::runtime_error("Failed to load bitmap from buffer");
