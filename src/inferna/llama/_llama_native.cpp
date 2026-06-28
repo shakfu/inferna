@@ -234,6 +234,7 @@ struct LlamaModelW {
     int      cached_n_embd      = -1;
     int      cached_n_embd_inp  = -1;
     int      cached_n_layer     = -1;
+    int      cached_n_layer_nextn = -1;
     int      cached_n_head      = -1;
     int      cached_n_head_kv   = -1;
     int      cached_n_ctx_train = -1;
@@ -275,6 +276,7 @@ struct LlamaModelW {
         cached_n_embd      = llama_model_n_embd(ptr);
         cached_n_embd_inp  = llama_model_n_embd_inp(ptr);
         cached_n_layer     = llama_model_n_layer(ptr);
+        cached_n_layer_nextn = llama_model_n_layer_nextn(ptr);
         cached_n_head      = llama_model_n_head(ptr);
         cached_n_head_kv   = llama_model_n_head_kv(ptr);
         cached_n_ctx_train = llama_model_n_ctx_train(ptr);
@@ -1061,6 +1063,7 @@ NB_MODULE(_llama_native, m) {
         .def_prop_ro("n_embd",      [](LlamaModelW& s){ return s.cached_n_embd; })
         .def_prop_ro("n_embd_inp",  [](LlamaModelW& s){ return s.cached_n_embd_inp; })
         .def_prop_ro("n_layer",     [](LlamaModelW& s){ return s.cached_n_layer; })
+        .def_prop_ro("n_layer_nextn", [](LlamaModelW& s){ return s.cached_n_layer_nextn; })
         .def_prop_ro("n_head",      [](LlamaModelW& s){ return s.cached_n_head; })
         .def_prop_ro("n_head_kv",   [](LlamaModelW& s){ return s.cached_n_head_kv; })
         .def_prop_ro("n_params",    [](LlamaModelW& s){ return s.cached_n_params; })

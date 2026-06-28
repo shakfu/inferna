@@ -408,6 +408,7 @@ static nb::dict make_enum_dict() {
     add("LCM_SCHEDULER", LCM_SCHEDULER);
     add("BONG_TANGENT_SCHEDULER", BONG_TANGENT_SCHEDULER);
     add("LTX2_SCHEDULER", LTX2_SCHEDULER);
+    add("LOGIT_NORMAL_SCHEDULER", LOGIT_NORMAL_SCHEDULER);
     add("SCHEDULER_COUNT", SCHEDULER_COUNT);
 
     add("EPS_PRED", EPS_PRED);
@@ -647,6 +648,7 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDContextParamsW, int,  p.vae_format, "vae_format")
         SD_PARAM_PATH(SDContextParamsW, p.max_vram,        max_vram_s,        "max_vram")
         SD_PARAM_VAL(SDContextParamsW, bool, p.stream_layers, "stream_layers")
+        SD_PARAM_VAL(SDContextParamsW, bool, p.eager_load, "eager_load")
         SD_PARAM_PATH(SDContextParamsW, p.backend,         backend_s,         "backend")
         SD_PARAM_PATH(SDContextParamsW, p.params_backend,  params_backend_s,  "params_backend")
         SD_PARAM_PATH(SDContextParamsW, p.rpc_servers,     rpc_servers_s,     "rpc_servers")

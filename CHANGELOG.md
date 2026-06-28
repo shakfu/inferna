@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.1.8]
+
+### Added
+
+- **llama.cpp sync to `b9828`: `n_layer_nextn` model property** -- bumped `LLAMACPP_VERSION` in `scripts/manage.py` (`b9672` -> `b9828`). The only new public `llama.h` API on the wrapped surface is `llama_model_n_layer_nextn(const llama_model *)` (number of MTP / next-N prediction layers; nonzero only for nextn-capable models such as DeepSeek-MTP). Cached at model-load time alongside the existing `n_layer` / `n_head` family and exposed as the read-only `LlamaModel.n_layer_nextn` property in `_llama_native.cpp`; `0` for models without nextn layers (e.g. Llama-3.2). The upstream `mtmd_context_params` gained `progress_callback` / `progress_callback_user_data` fields, but we construct via `mtmd_context_params_default()` so they are safely NULL-initialized and left unbound (a C function-pointer callback is not worth a Python binding); the internal `clip.h` / `mtmd-audio.h` changes are not on the wrapped surface.
+
+- **stable-diffusion.cpp sync to `master-721-8caa3f9`: new scheduler and `eager_load` param** -- bumped `SDCPP_VERSION` in `scripts/manage.py` (`master-709-92a3b73` -> `master-721-8caa3f9`). Exposed the new `LOGIT_NORMAL_SCHEDULER` value of `scheduler_t` as an int constant in `make_enum_dict()` and as `Scheduler.LOGIT_NORMAL` (= 12) on the facade `IntEnum`; `Scheduler.COUNT` shifts to 13 accordingly. New `SDContextParams.eager_load` (bool) field bound in `_sd_native.cpp` -- loads all params into the params backend at model-load time instead of lazily on first use.
+
 ## [0.1.7]
 
 ### Added
