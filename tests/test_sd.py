@@ -905,20 +905,22 @@ class TestSDContextParamsExtended:
         params.flow_shift = 1.5
         assert abs(params.flow_shift - 1.5) < 0.001
 
-    def test_chroma_use_dit_mask(self):
-        params = SDContextParams()
-        params.chroma_use_dit_mask = False
-        assert params.chroma_use_dit_mask is False
+    def test_circular_x(self):
+        # circular_x/circular_y moved from the context params into the
+        # image-generation params upstream (stable-diffusion.cpp master-775).
+        params = SDImageGenParams()
+        params.circular_x = True
+        assert params.circular_x is True
 
-    def test_chroma_use_t5_mask(self):
-        params = SDContextParams()
-        params.chroma_use_t5_mask = True
-        assert params.chroma_use_t5_mask is True
+    def test_circular_y(self):
+        params = SDImageGenParams()
+        params.circular_y = True
+        assert params.circular_y is True
 
-    def test_chroma_t5_mask_pad(self):
-        params = SDContextParams()
-        params.chroma_t5_mask_pad = 10
-        assert params.chroma_t5_mask_pad == 10
+    def test_qwen_image_layers(self):
+        params = SDImageGenParams()
+        params.qwen_image_layers = 4
+        assert params.qwen_image_layers == 4
 
 
 class TestSDSampleParamsExtended:
@@ -1271,12 +1273,13 @@ class TestEnumsExtended:
     def test_prediction_enum(self):
         """Test Prediction enum values."""
         assert Prediction.EPS.value == 0
-        assert len(list(Prediction)) >= 6  # Includes FLUX2_FLOW
+        assert len(list(Prediction)) >= 6  # Includes SEFI_FLOW / MINIT2I_FLOW
         # Verify key prediction types exist
         assert hasattr(Prediction, "EPS")
         assert hasattr(Prediction, "V")
         assert hasattr(Prediction, "FLUX_FLOW")
-        assert hasattr(Prediction, "FLUX2_FLOW")
+        assert hasattr(Prediction, "SEFI_FLOW")
+        assert hasattr(Prediction, "MINIT2I_FLOW")
 
     def test_log_level_enum(self):
         """Test LogLevel enum values."""

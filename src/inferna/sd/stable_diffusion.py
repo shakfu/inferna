@@ -100,7 +100,8 @@ class Prediction(IntEnum):
     EDM_V = _E["EDM_V_PRED"]
     FLOW = _E["FLOW_PRED"]
     FLUX_FLOW = _E["FLUX_FLOW_PRED"]
-    FLUX2_FLOW = _E["FLUX2_FLOW_PRED"]
+    SEFI_FLOW = _E["SEFI_FLOW_PRED"]
+    MINIT2I_FLOW = _E["MINIT2I_FLOW_PRED"]
     COUNT = _E["PREDICTION_COUNT"]
 
 

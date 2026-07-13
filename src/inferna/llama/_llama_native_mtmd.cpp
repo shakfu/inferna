@@ -391,6 +391,7 @@ void register_mtmd(nb::module_& m) {
 
                 mtmd_input_text input_text{};
                 input_text.text          = text.c_str();
+                input_text.text_len      = text.size();
                 input_text.add_special   = add_special;
                 input_text.parse_special = parse_special;
 

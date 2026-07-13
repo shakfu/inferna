@@ -22,6 +22,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.1.9]
+
+### Added
+
+- **stable-diffusion.cpp sync to `master-775-b5d8120`: relocated tiling and Qwen-Image layer params** -- the `circular_x` / `circular_y` seamless-tiling toggles moved out of `sd_ctx_params_t` and into the per-generation `sd_img_gen_params_t` (and `sd_vid_gen_params_t`); their bindings were moved off `SDContextParams` and onto `SDImageGenParams` (`circular_x` / `circular_y`), matching where they now live upstream. The new `sd_img_gen_params_t.qwen_image_layers` (int) field is bound as `SDImageGenParams.qwen_image_layers`. Two new `prediction_t` enum members, `SEFI_FLOW_PRED` and `MINIT2I_FLOW_PRED`, are exported in `make_enum_dict()` and as `Prediction.SEFI_FLOW` / `Prediction.MINIT2I_FLOW` on the facade `IntEnum`; `Prediction.COUNT` shifts to 7 accordingly.
+
+### Changed
+
+- **llama.cpp sync to `b9979`** -- bumped `LLAMACPP_VERSION` in `scripts/manage.py` (`b9828` -> `b9979`). Upstream added the `ggml_type` value `GGML_TYPE_Q2_0` (= 42), pushing `GGML_TYPE_COUNT` from 42 to 43; the `LlamaModelQuantizeParams` sentinel defaults (`output_tensor_type` / `token_embedding_type`, initialized to `GGML_TYPE_COUNT`) follow automatically since the constant is read from the native enum, and the `test_params.py` assertions were updated to 43.
+
+- **whisper.cpp sync to `v1.9.1`** -- bumped `WHISPERCPP_VERSION` in `scripts/manage.py` (`v1.8.6` -> `v1.9.1`). No changes on the wrapped surface; the existing bindings and tests build and pass unchanged.
+
+- **stable-diffusion.cpp `generate_image` / `upscale` moved to out-parameter calling convention** -- upstream `master-775` changed both from returning an `sd_image_t` (or `sd_image_t*`) to returning `bool` with the image array and count returned via `sd_image_t** images_out, int* num_images_out` out-parameters (matching the already-migrated `generate_video`). `SDContext.generate_with_params` and `Upscaler.upscale` in `_sd_native.cpp` were rewritten to the new signatures, propagating the returned count (instead of assuming `batch_count`) and freeing the returned array and any surplus image buffers correctly. No Python-facing API change.
+
+### Removed
+
+- **stable-diffusion.cpp `master-775` dropped the Chroma masking and Qwen-Image zero-cond context params** -- upstream removed `sd_ctx_params_t.chroma_use_dit_mask`, `chroma_use_t5_mask`, `chroma_t5_mask_pad`, and `qwen_image_zero_cond_t`. Their `SDContextParams` bindings, the `--chroma-disable-dit-mask` / `--chroma-enable-t5-mask` / `--chroma-t5-mask-pad` CLI flags and handling in `sd/__main__.py`, and the corresponding tests were removed. The `prediction_t` enum value `FLUX2_FLOW_PRED` was also removed upstream; `Prediction.FLUX2_FLOW` and the `flux2_flow` CLI prediction choice are gone (superseded by `sefi_flow` / `minit2i_flow`).
+
+### Fixed
+
+- **mtmd tokenization silently produced empty prompts after the `b9979` sync** -- upstream `mtmd_input_text` gained a `text_len` field (the embedded-NUL truncation fix, ggml-org/llama.cpp#25548) and `mtmd_tokenize` now reads the prompt via `input_text.assign(text, text_len)` instead of a NUL-terminated `strlen`. The `MtmdContext.tokenize` binding in `_llama_native_mtmd.cpp` zero-initialized the struct and never set `text_len`, so every prompt tokenized as an empty string -- the media markers were not found and any call with bitmaps raised "number of media markers in text (0) does not match number of bitmaps". Now sets `input_text.text_len = text.size()`.
+
 ## [0.1.8]
 
 ### Added

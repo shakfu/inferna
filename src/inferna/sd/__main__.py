@@ -236,7 +236,8 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
             "edm_v": Prediction.EDM_V,
             "flow": Prediction.FLOW,
             "flux_flow": Prediction.FLUX_FLOW,
-            "flux2_flow": Prediction.FLUX2_FLOW,
+            "sefi_flow": Prediction.SEFI_FLOW,
+            "minit2i_flow": Prediction.MINIT2I_FLOW,
         }
         params.prediction = pred_map.get(args.prediction, Prediction.EPS)
     if hasattr(args, "lora_apply_mode") and args.lora_apply_mode:
@@ -246,14 +247,6 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
             "at_runtime": LoraApplyMode.AT_RUNTIME,
         }
         params.lora_apply_mode = mode_map.get(args.lora_apply_mode, LoraApplyMode.AUTO)
-
-    # Chroma options
-    if hasattr(args, "chroma_disable_dit_mask") and args.chroma_disable_dit_mask:
-        params.chroma_use_dit_mask = False
-    if hasattr(args, "chroma_enable_t5_mask") and args.chroma_enable_t5_mask:
-        params.chroma_use_t5_mask = True
-    if hasattr(args, "chroma_t5_mask_pad") and args.chroma_t5_mask_pad:
-        params.chroma_t5_mask_pad = args.chroma_t5_mask_pad
 
     # TAESD options
     if hasattr(args, "taesd_preview_only") and args.taesd_preview_only:
@@ -886,7 +879,7 @@ def add_common_sampler_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--prediction",
-        choices=["eps", "v", "edm_v", "sd3_flow", "flux_flow", "flux2_flow"],
+        choices=["eps", "v", "edm_v", "sd3_flow", "flux_flow", "sefi_flow", "minit2i_flow"],
         help="Prediction type override",
     )
 
@@ -977,16 +970,6 @@ def add_common_misc_args(parser: argparse.ArgumentParser) -> None:
         help="LoRA application mode",
     )
     parser.add_argument("--flow-shift", dest="flow_shift", type=float, help="Flow shift for SD3.x/Wan models")
-    parser.add_argument(
-        "--chroma-disable-dit-mask",
-        dest="chroma_disable_dit_mask",
-        action="store_true",
-        help="Disable DiT mask for Chroma",
-    )
-    parser.add_argument(
-        "--chroma-enable-t5-mask", dest="chroma_enable_t5_mask", action="store_true", help="Enable T5 mask for Chroma"
-    )
-    parser.add_argument("--chroma-t5-mask-pad", dest="chroma_t5_mask_pad", type=int, help="T5 mask pad for Chroma")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--progress", action="store_true", help="Show progress")
 

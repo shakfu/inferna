@@ -416,7 +416,8 @@ static nb::dict make_enum_dict() {
     add("EDM_V_PRED", EDM_V_PRED);
     add("FLOW_PRED", FLOW_PRED);
     add("FLUX_FLOW_PRED", FLUX_FLOW_PRED);
-    add("FLUX2_FLOW_PRED", FLUX2_FLOW_PRED);
+    add("SEFI_FLOW_PRED", SEFI_FLOW_PRED);
+    add("MINIT2I_FLOW_PRED", MINIT2I_FLOW_PRED);
     add("PREDICTION_COUNT", PREDICTION_COUNT);
 
     add("SD_TYPE_F32", SD_TYPE_F32);
@@ -638,13 +639,7 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDContextParamsW, bool, p.tae_preview_only, "tae_preview_only")
         SD_PARAM_VAL(SDContextParamsW, bool, p.diffusion_conv_direct, "diffusion_conv_direct")
         SD_PARAM_VAL(SDContextParamsW, bool, p.vae_conv_direct, "vae_conv_direct")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.circular_x, "circular_x")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.circular_y, "circular_y")
         SD_PARAM_VAL(SDContextParamsW, bool, p.force_sdxl_vae_conv_scale, "force_sdxl_vae_conv_scale")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.chroma_use_dit_mask, "chroma_use_dit_mask")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.chroma_use_t5_mask, "chroma_use_t5_mask")
-        SD_PARAM_VAL(SDContextParamsW, int,  p.chroma_t5_mask_pad, "chroma_t5_mask_pad")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.qwen_image_zero_cond_t, "qwen_image_zero_cond_t")
         SD_PARAM_VAL(SDContextParamsW, int,  p.vae_format, "vae_format")
         SD_PARAM_PATH(SDContextParamsW, p.max_vram,        max_vram_s,        "max_vram")
         SD_PARAM_VAL(SDContextParamsW, bool, p.stream_layers, "stream_layers")
@@ -755,6 +750,9 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDImageGenParamsW, float,  p.control_strength, "control_strength")
         SD_PARAM_VAL(SDImageGenParamsW, bool,   p.auto_resize_ref_image, "auto_resize_ref_image")
         SD_PARAM_VAL(SDImageGenParamsW, bool,   p.increase_ref_index, "increase_ref_index")
+        SD_PARAM_VAL(SDImageGenParamsW, int,    p.qwen_image_layers, "qwen_image_layers")
+        SD_PARAM_VAL(SDImageGenParamsW, bool,   p.circular_x, "circular_x")
+        SD_PARAM_VAL(SDImageGenParamsW, bool,   p.circular_y, "circular_y")
         // VAE tiling
         SD_PARAM_VAL(SDImageGenParamsW, bool,   p.vae_tiling_params.enabled, "vae_tiling_enabled")
         SD_PARAM_VAL(SDImageGenParamsW, int,    p.vae_tiling_params.tile_size_x, "vae_tile_size_x")
@@ -937,16 +935,17 @@ NB_MODULE(_sd_native, m) {
         .def("generate_with_params", [](SDContextW& s, SDImageGenParamsW& params){
             if (!s.ctx) throw std::runtime_error("Context not initialized");
             params.sync_sample();
-            int batch = params.p.batch_count;
+            int batch = 0;
             sd_image_t* result = nullptr;
+            bool ok = false;
 
             {
                 inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
                 nb::gil_scoped_release rel;
-                result = generate_image(s.ctx, &params.p);
+                ok = generate_image(s.ctx, &params.p, &result, &batch);
             }
 
-            if (!result) throw std::runtime_error("Image generation failed");
+            if (!ok || !result) throw std::runtime_error("Image generation failed");
 
             nb::list out;
             int n_invalid = 0;
@@ -960,7 +959,7 @@ NB_MODULE(_sd_native, m) {
             }
             std::free(result);
 
-            if (n_invalid == batch) {
+            if (batch > 0 && n_invalid == batch) {
                 throw std::runtime_error(
                     "Image generation failed: all images have invalid data. "
                     "This usually means GPU memory allocation failed (out of memory). "
@@ -1086,11 +1085,23 @@ NB_MODULE(_sd_native, m) {
         .def("upscale", [](UpscalerW& s, SDImageW& image, int factor){
             if (!s.ctx) throw std::runtime_error("Upscaler not initialized");
             if (factor == 0) factor = get_upscale_factor(s.ctx);
-            sd_image_t result = ::upscale(s.ctx, image.img, (uint32_t)factor);
-            if (!result.data) throw std::runtime_error("Upscaling failed");
+            sd_image_t* result = nullptr;
+            int n_images = 0;
+            bool ok = ::upscale(s.ctx, image.img, (uint32_t)factor,
+                                &result, &n_images);
+            if (!ok || !result || n_images <= 0 || !result[0].data) {
+                if (result) {
+                    for (int i = 0; i < n_images; ++i) std::free(result[i].data);
+                    std::free(result);
+                }
+                throw std::runtime_error("Upscaling failed");
+            }
+            // Keep the first image; its data buffer is handed to the wrapper.
             auto* w = new SDImageW{};
-            w->img = result;
+            w->img = result[0];
             w->owns = true;
+            for (int i = 1; i < n_images; ++i) std::free(result[i].data);
+            std::free(result);
             return nb::cast(w, nb::rv_policy::take_ownership);
         }, "image"_a, "factor"_a = 0);
 
