@@ -166,6 +166,27 @@ struct SDImageGenParamsW {
     std::optional<std::string> scm_mask_s;
     std::optional<std::string> hires_model_path_s;
 
+    // Reference-image handling. Upstream sd.cpp (master-800+) replaced the
+    // `auto_resize_ref_image` / `increase_ref_index` booleans with a single
+    // key=value string, `ref_image_args`. We keep the booleans as a
+    // compatibility view and compose the effective string the same way the
+    // upstream CLI does, appending them after whatever the caller set.
+    bool auto_resize_ref_image = true;
+    bool increase_ref_index    = false;
+    std::string ref_image_args_user;
+    std::string ref_image_args_effective;
+
+    void rebuild_ref_image_args() {
+        ref_image_args_effective = ref_image_args_user;
+        auto append = [this](const char* kv) {
+            if (!ref_image_args_effective.empty()) ref_image_args_effective += ",";
+            ref_image_args_effective += kv;
+        };
+        if (!auto_resize_ref_image) append("resize_before_vae=0");
+        if (increase_ref_index)     append("ref_index_mode=increase");
+        p.ref_image_args = ref_image_args_effective.c_str();
+    }
+
     // Owning storage for arrays referenced by the C struct.
     std::vector<sd_image_t> ref_images_buf;
     std::vector<sd_image_t> pm_id_images_buf;
@@ -192,6 +213,9 @@ struct SDImageGenParamsW {
         p.hires.upscale_tile_size = 128;
         // Inherit the default sample params we just constructed.
         p.sample_params = sample.p;
+        // Point p.ref_image_args at our own storage instead of the string
+        // literal sd_img_gen_params_init() installs.
+        rebuild_ref_image_args();
     }
 
     void sync_sample() {
@@ -748,8 +772,27 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDImageGenParamsW, int,    p.batch_count, "batch_count")
         SD_PARAM_VAL(SDImageGenParamsW, float,  p.strength, "strength")
         SD_PARAM_VAL(SDImageGenParamsW, float,  p.control_strength, "control_strength")
-        SD_PARAM_VAL(SDImageGenParamsW, bool,   p.auto_resize_ref_image, "auto_resize_ref_image")
-        SD_PARAM_VAL(SDImageGenParamsW, bool,   p.increase_ref_index, "increase_ref_index")
+        // Reference-image processing. `ref_image_args` is the upstream
+        // key=value passthrough; the two booleans are the legacy view that
+        // upstream now expresses as resize_before_vae / ref_index_mode.
+        .def_prop_rw("ref_image_args",
+            [](SDImageGenParamsW& s) { return s.ref_image_args_user; },
+            [](SDImageGenParamsW& s, const std::string& v) {
+                s.ref_image_args_user = v;
+                s.rebuild_ref_image_args();
+            })
+        .def_prop_rw("auto_resize_ref_image",
+            [](SDImageGenParamsW& s) { return s.auto_resize_ref_image; },
+            [](SDImageGenParamsW& s, bool v) {
+                s.auto_resize_ref_image = v;
+                s.rebuild_ref_image_args();
+            })
+        .def_prop_rw("increase_ref_index",
+            [](SDImageGenParamsW& s) { return s.increase_ref_index; },
+            [](SDImageGenParamsW& s, bool v) {
+                s.increase_ref_index = v;
+                s.rebuild_ref_image_args();
+            })
         SD_PARAM_VAL(SDImageGenParamsW, int,    p.qwen_image_layers, "qwen_image_layers")
         SD_PARAM_VAL(SDImageGenParamsW, bool,   p.circular_x, "circular_x")
         SD_PARAM_VAL(SDImageGenParamsW, bool,   p.circular_y, "circular_y")

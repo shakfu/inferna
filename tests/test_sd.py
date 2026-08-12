@@ -1086,6 +1086,39 @@ class TestSDImageGenParamsExtended:
         params.auto_resize_ref_image = True
         assert params.auto_resize_ref_image is True
 
+    def test_ref_image_args_defaults(self):
+        params = SDImageGenParams()
+        assert params.ref_image_args == ""
+        assert params.auto_resize_ref_image is True
+        assert params.increase_ref_index is False
+
+    def test_ref_image_args_passthrough(self):
+        params = SDImageGenParams()
+        params.ref_image_args = "preset=flux_kontext,vlm_max_size=512"
+        assert params.ref_image_args == "preset=flux_kontext,vlm_max_size=512"
+
+    def test_ref_image_bool_flags_are_independent(self):
+        """The legacy booleans compose into ref_image_args without clobbering it.
+
+        Upstream sd.cpp replaced auto_resize_ref_image/increase_ref_index with
+        the ref_image_args key=value string, so the booleans must survive
+        round-tripping and must not overwrite caller-supplied args.
+        """
+        params = SDImageGenParams()
+        params.ref_image_args = "preset=qwen"
+
+        params.auto_resize_ref_image = False
+        params.increase_ref_index = True
+        assert params.ref_image_args == "preset=qwen"
+        assert params.auto_resize_ref_image is False
+        assert params.increase_ref_index is True
+
+        params.auto_resize_ref_image = True
+        params.increase_ref_index = False
+        assert params.ref_image_args == "preset=qwen"
+        assert params.auto_resize_ref_image is True
+        assert params.increase_ref_index is False
+
     def test_hires_defaults(self):
         params = SDImageGenParams()
         assert params.hires_enabled is False

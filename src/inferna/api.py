@@ -1372,6 +1372,7 @@ class LLM:
         # unnecessary chain stage.
         if config.repeat_penalty != 1.0 or config.frequency_penalty != 0.0 or config.presence_penalty != 0.0:
             sampler.add_penalties(
+                self.vocab.n_vocab,
                 config.penalty_last_n,
                 config.repeat_penalty,
                 config.frequency_penalty,

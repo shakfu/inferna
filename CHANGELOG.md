@@ -22,6 +22,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.1.10]
+
+### Added
+
+- **`LlamaModelParams.load_mode`** -- exposes upstream's new `enum llama_load_mode`, together with the `LLAMA_LOAD_MODE_AUTO` / `NONE` / `MMAP` / `MLOCK` / `MMAP_MLOCK` / `DIRECT_IO` constants on the `inferna.llama.llama_cpp` facade.
+
+- **`SDImageGenParams.ref_image_args`** -- exposes upstream's new `sd_img_gen_params_t.ref_image_args` key=value passthrough (`preset`, `resize_before_vae`, `ref_index_mode`, `vlm_max_size`, ...).
+
+### Changed
+
+- **llama.cpp sync to `b10369`** -- bumped `LLAMACPP_VERSION` in `scripts/manage.py` (`b9979` -> `b10369`). Three upstream API breaks were absorbed:
+
+  - `llama_model_params` replaced the `use_mmap` / `use_mlock` / `use_direct_io` booleans with a single `load_mode` enum. The three booleans are retained on `LlamaModelParams` as a compatibility view that projects onto the enum, so existing Python code keeps working; `use_mmap` still reads `True` by default because the default mode is `AUTO`. Because the enum can only encode mmap and mlock together, `use_direct_io = True` now clears mmap/mlock, and vice versa.
+
+  - `llama_sampler_init_penalties` gained a leading `n_vocab` argument (used by the GPU-offloaded sampling path). `LlamaSampler.add_penalties` takes it as its first argument, and the four in-tree call sites pass the model's vocabulary size. The method's parameters are also now nameable as keywords (`n_vocab`, `penalty_last_n`, `penalty_repeat`, `penalty_freq`, `penalty_present`), which fixes a latent `TypeError` in `ConstrainedAgent`.
+
+  - `llama_sampler_init_dry` dropped its `n_ctx_train` argument; `LlamaSampler.add_dry` drops it too.
+
+- **whisper.cpp sync to `v1.9.2`** -- bumped `WHISPERCPP_VERSION` in `scripts/manage.py` (`v1.9.1` -> `v1.9.2`). No changes on the wrapped API.
+
+- **stable-diffusion.cpp sync to `master-817-bcc7e29`** -- bumped `SDCPP_VERSION` in `scripts/manage.py` (`master-775-b5d8120` -> `master-817-bcc7e29`). Upstream removed the `auto_resize_ref_image` and `increase_ref_index` booleans from `sd_img_gen_params_t` in favour of the `ref_image_args` string. Both remain available on `SDImageGenParams` and are composed into `ref_image_args` (as `resize_before_vae=0` and `ref_index_mode=increase`) the same way the upstream CLI does, so they do not clobber caller-supplied args.
+
 ## [0.1.9]
 
 ### Added

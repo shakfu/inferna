@@ -93,6 +93,28 @@ struct LlamaModelParamsW {
     LlamaModelParamsW() : p(llama_model_default_params()) {}
 };
 
+// As of llama.cpp b10000+ the three independent booleans use_mmap / use_mlock /
+// use_direct_io were collapsed into a single `enum llama_load_mode load_mode`.
+// The helpers below project that enum back onto the boolean view so the Python
+// API (and llama.cpp's own deprecated CLI flags) keeps working. The getters
+// mirror llama_model_loader / llama_model_load exactly: AUTO implies mmap, and
+// only the two MLOCK variants imply mlock.
+
+static bool load_mode_has_mmap(llama_load_mode m) {
+    return m == LLAMA_LOAD_MODE_MMAP || m == LLAMA_LOAD_MODE_MMAP_MLOCK || m == LLAMA_LOAD_MODE_AUTO;
+}
+
+static bool load_mode_has_mlock(llama_load_mode m) {
+    return m == LLAMA_LOAD_MODE_MLOCK || m == LLAMA_LOAD_MODE_MMAP_MLOCK;
+}
+
+static llama_load_mode load_mode_from_flags(bool mmap, bool mlock) {
+    if (mmap && mlock) return LLAMA_LOAD_MODE_MMAP_MLOCK;
+    if (mmap)          return LLAMA_LOAD_MODE_MMAP;
+    if (mlock)         return LLAMA_LOAD_MODE_MLOCK;
+    return LLAMA_LOAD_MODE_NONE;
+}
+
 // =============================================================================
 // LlamaContextParams
 // =============================================================================
@@ -584,9 +606,31 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaModelParamsW, int,  split_mode,   "split_mode")
         PARAM_VAL(LlamaModelParamsW, int,  main_gpu,     "main_gpu")
         PARAM_VAL(LlamaModelParamsW, bool, vocab_only,    "vocab_only")
-        PARAM_VAL(LlamaModelParamsW, bool, use_mmap,      "use_mmap")
-        PARAM_VAL(LlamaModelParamsW, bool, use_direct_io, "use_direct_io")
-        PARAM_VAL(LlamaModelParamsW, bool, use_mlock,     "use_mlock")
+        PARAM_VAL(LlamaModelParamsW, int,  load_mode,    "load_mode")
+        // use_mmap / use_mlock / use_direct_io are a compatibility view over
+        // load_mode; setting one preserves the other two where the enum can
+        // express the combination (mmap+mlock is the only pairing it encodes).
+        .def_prop_rw("use_mmap",
+            [](LlamaModelParamsW& s) { return load_mode_has_mmap(s.p.load_mode); },
+            [](LlamaModelParamsW& s, bool v) {
+                s.p.load_mode = load_mode_from_flags(v, load_mode_has_mlock(s.p.load_mode));
+            })
+        .def_prop_rw("use_mlock",
+            [](LlamaModelParamsW& s) { return load_mode_has_mlock(s.p.load_mode); },
+            [](LlamaModelParamsW& s, bool v) {
+                s.p.load_mode = load_mode_from_flags(load_mode_has_mmap(s.p.load_mode), v);
+            })
+        .def_prop_rw("use_direct_io",
+            [](LlamaModelParamsW& s) { return s.p.load_mode == LLAMA_LOAD_MODE_DIRECT_IO; },
+            [](LlamaModelParamsW& s, bool v) {
+                // Direct I/O is mutually exclusive with mmap/mlock in the enum,
+                // so clearing it can only fall back to "no special mode".
+                if (v) {
+                    s.p.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
+                } else if (s.p.load_mode == LLAMA_LOAD_MODE_DIRECT_IO) {
+                    s.p.load_mode = LLAMA_LOAD_MODE_NONE;
+                }
+            })
         PARAM_VAL(LlamaModelParamsW, bool, check_tensors, "check_tensors")
         PARAM_VAL(LlamaModelParamsW, bool, use_extra_bufts, "use_extra_bufts")
         PARAM_VAL(LlamaModelParamsW, bool, no_host,       "no_host")
@@ -1553,10 +1597,15 @@ NB_MODULE(_llama_native, m) {
                 llama_sampler_init_grammar(vocab.ptr, grammar_str.c_str(), grammar_root.c_str()),
                 "grammar");
         })
-        .def("add_penalties", [](LlamaSamplerW& s, int last_n, float repeat,
+        // n_vocab is only consulted by the GPU-offloaded sampling path, but it
+        // must still be the real vocabulary size there, so it is required
+        // rather than defaulted (matching add_mirostat / add_logit_bias).
+        .def("add_penalties", [](LlamaSamplerW& s, int n_vocab, int last_n, float repeat,
                                   float freq, float present){
-            chain_add_checked(s.ptr, llama_sampler_init_penalties(last_n, repeat, freq, present), "penalties");
-        })
+            chain_add_checked(s.ptr,
+                llama_sampler_init_penalties(n_vocab, last_n, repeat, freq, present),
+                "penalties");
+        }, "n_vocab"_a, "penalty_last_n"_a, "penalty_repeat"_a, "penalty_freq"_a, "penalty_present"_a)
         .def("add_logit_bias", [](LlamaSamplerW& s, int n_vocab, nb::list biases){
             std::vector<llama_logit_bias> arr;
             arr.reserve(biases.size());
@@ -1578,7 +1627,7 @@ NB_MODULE(_llama_native, m) {
         .def("add_top_n_sigma", [](LlamaSamplerW& s, float n){
             chain_add_checked(s.ptr, llama_sampler_init_top_n_sigma(n), "top_n_sigma");
         }, "n"_a)
-        .def("add_dry", [](LlamaSamplerW& s, LlamaVocabW& vocab, int32_t n_ctx_train,
+        .def("add_dry", [](LlamaSamplerW& s, LlamaVocabW& vocab,
                            float dry_multiplier, float dry_base, int32_t dry_allowed_length,
                            int32_t dry_penalty_last_n, nb::list seq_breakers){
             // init_dry copies the breaker strings internally, so the temporaries
@@ -1590,12 +1639,12 @@ NB_MODULE(_llama_native, m) {
             breakers_c.reserve(breakers_owned.size());
             for (auto& b : breakers_owned) breakers_c.push_back(b.c_str());
             chain_add_checked(s.ptr,
-                llama_sampler_init_dry(vocab.ptr, n_ctx_train, dry_multiplier, dry_base,
+                llama_sampler_init_dry(vocab.ptr, dry_multiplier, dry_base,
                                        dry_allowed_length, dry_penalty_last_n,
                                        breakers_c.empty() ? nullptr : breakers_c.data(),
                                        breakers_c.size()),
                 "dry");
-        }, "vocab"_a, "n_ctx_train"_a, "dry_multiplier"_a, "dry_base"_a,
+        }, "vocab"_a, "dry_multiplier"_a, "dry_base"_a,
            "dry_allowed_length"_a, "dry_penalty_last_n"_a, "seq_breakers"_a)
         .def("add_adaptive_p", [](LlamaSamplerW& s, float target, float decay, uint32_t seed){
             chain_add_checked(s.ptr, llama_sampler_init_adaptive_p(target, decay, seed), "adaptive_p");

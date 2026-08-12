@@ -957,6 +957,11 @@ params.n_gpu_layers = -1
 params.use_mmap = True
 params.use_mlock = False
 
+# Equivalently, set the underlying enum directly. llama.cpp models model
+# loading as a single mode rather than independent flags; use_mmap,
+# use_mlock and use_direct_io are a boolean view over it.
+params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK
+
 model = LlamaModel("models/llama.gguf", params)
 
 # Properties

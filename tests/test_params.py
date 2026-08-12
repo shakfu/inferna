@@ -18,11 +18,55 @@ def test_default_model_params():
     assert params.split_mode == 1  # LLAMA_SPLIT_MODE_LAYER = 1
     assert params.main_gpu == 0
     assert params.vocab_only == False
+    assert params.load_mode == cy.LLAMA_LOAD_MODE_AUTO
     assert params.use_mmap == True
     assert params.use_mlock == False
+    assert params.use_direct_io == False
     assert params.check_tensors == False
     assert params.progress_callback is None
     assert params.tensor_split == []  # Default is empty (no custom split)
+
+
+def test_model_params_load_mode_boolean_view():
+    """use_mmap/use_mlock/use_direct_io are a view over the load_mode enum.
+
+    Upstream llama.cpp collapsed the three booleans into one enum, so the
+    booleans must still compose to the right enum value in both directions.
+    """
+    params = cy.LlamaModelParams()
+
+    # Turning mmap off from the AUTO default leaves no special mode.
+    params.use_mmap = False
+    assert params.load_mode == cy.LLAMA_LOAD_MODE_NONE
+    assert params.use_mmap is False
+
+    # mlock alone, then mmap+mlock: the only pairing the enum can express.
+    params.use_mlock = True
+    assert params.load_mode == cy.LLAMA_LOAD_MODE_MLOCK
+    params.use_mmap = True
+    assert params.load_mode == cy.LLAMA_LOAD_MODE_MMAP_MLOCK
+    assert params.use_mmap is True and params.use_mlock is True
+
+    # Direct I/O is exclusive; clearing it falls back to "no special mode".
+    params.use_direct_io = True
+    assert params.load_mode == cy.LLAMA_LOAD_MODE_DIRECT_IO
+    assert params.use_mmap is False and params.use_mlock is False
+    params.use_direct_io = False
+    assert params.load_mode == cy.LLAMA_LOAD_MODE_NONE
+
+    # Clearing direct I/O when it was never set must not disturb load_mode.
+    params.load_mode = cy.LLAMA_LOAD_MODE_MMAP
+    params.use_direct_io = False
+    assert params.load_mode == cy.LLAMA_LOAD_MODE_MMAP
+
+
+def test_model_params_load_mode_direct_assignment():
+    """load_mode can also be set directly, and the booleans follow."""
+    params = cy.LlamaModelParams()
+    params.load_mode = cy.LLAMA_LOAD_MODE_MMAP_MLOCK
+    assert params.use_mmap is True
+    assert params.use_mlock is True
+    assert params.use_direct_io is False
 
 
 def test_model_params_tensor_split():

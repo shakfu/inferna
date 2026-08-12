@@ -226,6 +226,14 @@ void register_enums(nb::module_& m) {
     EXPORT(LLAMA_SPLIT_MODE_ROW);
     EXPORT(LLAMA_SPLIT_MODE_TENSOR);
 
+    // -------- llama load mode --------
+    EXPORT(LLAMA_LOAD_MODE_AUTO);
+    EXPORT(LLAMA_LOAD_MODE_NONE);
+    EXPORT(LLAMA_LOAD_MODE_MMAP);
+    EXPORT(LLAMA_LOAD_MODE_MLOCK);
+    EXPORT(LLAMA_LOAD_MODE_MMAP_MLOCK);
+    EXPORT(LLAMA_LOAD_MODE_DIRECT_IO);
+
     // -------- llama context type --------
     EXPORT(LLAMA_CONTEXT_TYPE_DEFAULT);
     EXPORT(LLAMA_CONTEXT_TYPE_MTP);
