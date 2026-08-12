@@ -977,3 +977,114 @@ class TestEmbeddedServerLifecycle:
         # (no double-free or raise). This is the only observable post-exit
         # check since _running is cdef and not Python-accessible.
         server.stop()
+
+
+class TestWebUIAssets:
+    """The vendored llama.cpp web UI snapshot and the routes that serve it.
+
+    The snapshot is committed rather than built (upstream stopped shipping the
+    prebuilt SPA in-tree as of b9352), so nothing else in the build would catch
+    a snapshot that went missing, got truncated, or drifted out of sync with the
+    four routes ``EmbeddedServer`` hard-codes for it.
+    """
+
+    def test_snapshot_is_present_and_gzipped(self):
+        """Every declared asset is bundled and is real gzip data."""
+        import gzip
+
+        from inferna.llama.server.embedded import _WEBUI_ASSETS, _WEBUI_ASSET_TYPES
+
+        assert set(_WEBUI_ASSETS) == set(_WEBUI_ASSET_TYPES), (
+            "web UI snapshot incomplete — run `python scripts/manage.py fetch_webui`"
+        )
+        for name, blob in _WEBUI_ASSETS.items():
+            raw = gzip.decompress(blob)
+            assert raw, f"{name} decompressed to nothing"
+
+    def test_index_references_the_bundles_we_serve(self):
+        """index.html must only reference assets the server actually routes.
+
+        Upstream's UI build moved to content-hashed SvelteKit output
+        (``_app/immutable/bundle.<hash>.js``) after b9611. Pinning past that
+        point would leave an index.html whose script/style tags 404 against the
+        embedded server, which serves exactly four fixed paths.
+        """
+        import gzip
+
+        from inferna.llama.server.embedded import _WEBUI_ASSETS
+
+        html = gzip.decompress(_WEBUI_ASSETS["index.html"]).decode("utf-8")
+        assert "./bundle.js" in html
+        assert "./bundle.css" in html
+        assert "_app/immutable" not in html, (
+            "snapshot uses upstream's content-hashed asset layout, which the "
+            "embedded server's fixed routes cannot serve"
+        )
+
+    def test_snapshot_version_matches_pin(self):
+        """The committed VERSION marker records which build was fetched."""
+        from inferna.llama.server import embedded as _emb
+
+        base = _emb._resource_files("inferna.llama.server").joinpath("assets").joinpath("webui")
+        assert base.joinpath("VERSION").read_text().strip().startswith("b")
+
+    @pytest.mark.parametrize(
+        "path,name",
+        [
+            ("/", "index.html"),
+            ("/index.html", "index.html"),
+            ("/bundle.css", "bundle.css"),
+            ("/bundle.js", "bundle.js"),
+            ("/loading.html", "loading.html"),
+        ],
+    )
+    def test_asset_routes_serve_the_snapshot(self, path, name):
+        """Each UI route returns its asset gzipped, with the right MIME type."""
+        from inferna.llama.server.embedded import (
+            EmbeddedServer,
+            _WEBUI_ASSETS,
+            _WEBUI_ASSET_TYPES,
+        )
+
+        server = EmbeddedServer.__new__(EmbeddedServer)
+        server._config = ServerConfig(model_path="unused.gguf", serve_webui=True)
+        server._logger = Mock()
+
+        conn = Mock()
+        server.handle_http_request(conn, "GET", path, {}, "")
+
+        conn.send_gzipped.assert_called_once_with(_WEBUI_ASSETS[name], _WEBUI_ASSET_TYPES[name])
+        conn.send_error.assert_not_called()
+
+    def test_asset_routes_tolerate_cache_busting_query(self):
+        """``./bundle.js?<hash>`` must route the same as ``./bundle.js``.
+
+        Upstream added a cache-busting query string to index.html's asset
+        references around b9577; routing matches on the path alone.
+        """
+        from inferna.llama.server.embedded import EmbeddedServer, _WEBUI_ASSETS, _WEBUI_ASSET_TYPES
+
+        server = EmbeddedServer.__new__(EmbeddedServer)
+        server._config = ServerConfig(model_path="unused.gguf", serve_webui=True)
+        server._logger = Mock()
+
+        conn = Mock()
+        server.handle_http_request(conn, "GET", "/bundle.js?DKPKeQbL", {}, "")
+
+        conn.send_gzipped.assert_called_once_with(
+            _WEBUI_ASSETS["bundle.js"], _WEBUI_ASSET_TYPES["bundle.js"]
+        )
+
+    def test_asset_routes_are_gated_on_serve_webui(self):
+        """With the UI disabled, its routes 404 instead of serving bytes."""
+        from inferna.llama.server.embedded import EmbeddedServer
+
+        server = EmbeddedServer.__new__(EmbeddedServer)
+        server._config = ServerConfig(model_path="unused.gguf", serve_webui=False)
+        server._logger = Mock()
+
+        conn = Mock()
+        server.handle_http_request(conn, "GET", "/bundle.js", {}, "")
+
+        conn.send_gzipped.assert_not_called()
+        conn.send_error.assert_called_once_with(404, "Not Found")

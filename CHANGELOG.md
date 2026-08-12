@@ -30,19 +30,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **`SDImageGenParams.ref_image_args`** -- exposes upstream's new `sd_img_gen_params_t.ref_image_args` key=value passthrough (`preset`, `resize_before_vae`, `ref_index_mode`, `vlm_max_size`, ...).
 
+- **Web UI asset tests** -- `tests/test_mserver_embedded.py::TestWebUIAssets` (10 cases) covers the vendored snapshot and the four routes that serve it: assets present and valid gzip, each route returning the right bytes and MIME type, cache-busting query strings routing correctly, and the `serve_webui=False` gate returning 404. The snapshot is committed rather than built, so nothing previously would have caught it going missing or drifting away from those routes. One case asserts `index.html` references `./bundle.js` / `./bundle.css` and not `_app/immutable`, so pinning `LLAMACPP_WEBUI_VERSION` past `b9611` without porting the server to the new layout fails a test instead of shipping a broken UI.
+
+- **Load-mode and reference-image tests** -- `test_params.py` asserts the `load_mode` enum and its boolean view stay consistent in both directions; `test_sd.py` asserts `ref_image_args` defaults, passthrough, and that the legacy booleans round-trip without clobbering caller-supplied args.
+
 ### Changed
 
 - **llama.cpp sync to `b10369`** -- bumped `LLAMACPP_VERSION` in `scripts/manage.py` (`b9979` -> `b10369`). Three upstream API breaks were absorbed:
 
   - `llama_model_params` replaced the `use_mmap` / `use_mlock` / `use_direct_io` booleans with a single `load_mode` enum. The three booleans are retained on `LlamaModelParams` as a compatibility view that projects onto the enum, so existing Python code keeps working; `use_mmap` still reads `True` by default because the default mode is `AUTO`. Because the enum can only encode mmap and mlock together, `use_direct_io = True` now clears mmap/mlock, and vice versa.
 
-  - `llama_sampler_init_penalties` gained a leading `n_vocab` argument (used by the GPU-offloaded sampling path). `LlamaSampler.add_penalties` takes it as its first argument, and the four in-tree call sites pass the model's vocabulary size. The method's parameters are also now nameable as keywords (`n_vocab`, `penalty_last_n`, `penalty_repeat`, `penalty_freq`, `penalty_present`), which fixes a latent `TypeError` in `ConstrainedAgent`.
+  - `llama_sampler_init_penalties` gained a leading `n_vocab` argument (used by the GPU-offloaded sampling path). `LlamaSampler.add_penalties` takes it as its first argument, and the four in-tree call sites pass the model's vocabulary size. Callers outside the tree must add the argument; passing `0` disables the GPU sampling path's penalty stage rather than failing loudly, so pass the real vocabulary size.
 
   - `llama_sampler_init_dry` dropped its `n_ctx_train` argument; `LlamaSampler.add_dry` drops it too.
+
+- **web UI snapshot refreshed to `b9611`** -- bumped `LLAMACPP_WEBUI_VERSION` in `scripts/manage.py` (`b9351` -> `b9611`) and re-fetched the committed snapshot under `src/inferna/llama/server/assets/webui/` (checksums verified against the bucket). The pin stays well behind `LLAMACPP_VERSION` on purpose: `b9611` is the newest build the fetcher can consume. The bucket still publishes the flat `bundle.js` / `bundle.css` pair through `b9620`, but from `b9616` the generated `index.html` references content-hashed SvelteKit output (`_app/immutable/bundle.<hash>.js`), and past `b9620` the flat files are gone entirely -- so bumping to a current build would fail the fetch outright rather than degrade. The UI's server contract is unchanged across the gap (`/props`, `/slots`, `/v1/models`, `/v1/chat/completions`, `/models/{load,unload}`), so the older snapshot is behind on UI fixes, not broken. Adopting the new layout is tracked as separate work; the constraint is documented at the pin. Adds ~0.9 MB to the wheel (`bundle.js.gz` 1.5 MB -> 2.37 MB).
 
 - **whisper.cpp sync to `v1.9.2`** -- bumped `WHISPERCPP_VERSION` in `scripts/manage.py` (`v1.9.1` -> `v1.9.2`). No changes on the wrapped API.
 
 - **stable-diffusion.cpp sync to `master-817-bcc7e29`** -- bumped `SDCPP_VERSION` in `scripts/manage.py` (`master-775-b5d8120` -> `master-817-bcc7e29`). Upstream removed the `auto_resize_ref_image` and `increase_ref_index` booleans from `sd_img_gen_params_t` in favour of the `ref_image_args` string. Both remain available on `SDImageGenParams` and are composed into `ref_image_args` (as `resize_before_vae=0` and `ref_index_mode=increase`) the same way the upstream CLI does, so they do not clobber caller-supplied args.
+
+### Fixed
+
+- **`LlamaSampler.add_penalties` rejected keyword arguments** -- the binding declared no parameter names, so the keyword call in `ConstrainedAgent` (`penalty_last_n=`, `penalty_repeat=`, ...) raised `TypeError` whenever a constrained agent was configured with `repeat_penalty != 1.0`. The parameters are now named (`n_vocab`, `penalty_last_n`, `penalty_repeat`, `penalty_freq`, `penalty_present`).
 
 ## [0.1.9]
 

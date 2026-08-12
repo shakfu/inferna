@@ -180,7 +180,22 @@ WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.2") # from: v1.9.1
 # (see `manage.py fetch_webui`). The bucket only publishes some builds (e.g.
 # b9352 is absent while b9351 exists), so the UI snapshot is pinned separately
 # from LLAMACPP_VERSION and the fetcher falls back to 'latest'.
-LLAMACPP_WEBUI_VERSION = os.getenv("LLAMACPP_WEBUI_VERSION", "b9351")
+#
+# CEILING: b9611 is the newest build this fetcher can consume. The bucket still
+# publishes the flat bundle.js/bundle.css pair up to b9620, but from b9616 the
+# generated index.html references SvelteKit output instead
+# (./_app/immutable/bundle.<contenthash>.js), and past b9620 the flat files are
+# gone entirely — bundle.css, bundle.js, loading.html and checksums.txt all 404
+# at, say, b10369 and at 'latest'. Moving past b9611 therefore means adopting
+# the new layout wholesale: fetch the `dist.tar.gz` the bucket now publishes
+# (~2.9MB, sha256 in a sibling dist.tar.gz.sha256) and replace the embedded
+# server's four hard-coded asset routes with a generic static handler, since
+# the JS/CSS filenames are content-hashed per build and the SPA also wants
+# manifest.webmanifest, sw.js, workbox-*.js, favicons, splash PNGs and
+# recommended-mcp/*.ico. The web UI's server contract is unchanged across the
+# gap (/props, /slots, /v1/models, /v1/chat/completions, /models/{load,unload}),
+# so a snapshot older than LLAMACPP_VERSION is behind on UI fixes, not broken.
+LLAMACPP_WEBUI_VERSION = os.getenv("LLAMACPP_WEBUI_VERSION", "b9611") # from: b9351
 LLAMACPP_WEBUI_HF_BASE = "https://huggingface.co/buckets/ggml-org/llama-ui/resolve"
 # Files the upstream index.html hard-references. If a future pin drops one we
 # want to fail loudly rather than ship a broken UI.
