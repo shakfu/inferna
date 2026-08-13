@@ -818,7 +818,7 @@ if(WITH_WHISPER)
             BUILD_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB}"
             INSTALL_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB}"
         )
-    else()
+    elseif(APPLE)
         # macOS static against whisper's OWN ggml (WHISPER_GGML_LIBS), NOT
         # llama's: llama's ggml-metal miscomputes whisper's encoder (see the
         # prep block above and docs/dev/ggml-metal-issue.md). whisper's TU
@@ -834,6 +834,22 @@ if(WITH_WHISPER)
         set_target_properties(_whisper_native PROPERTIES
             BUILD_RPATH "${WHISPERCPP_LIB}"
             INSTALL_RPATH "${WHISPERCPP_LIB}"
+        )
+    else()
+        # Windows static against llama's ggml, matching the Linux branch and
+        # the platform-split policy above: the ggml-metal defect that forces
+        # whisper's own ggml is Apple-only, so the single-ggml premise holds
+        # here. WHISPER_GGML_LIBS is deliberately empty off Apple -- linking
+        # whisper.lib without any ggml is what produced ~100 unresolved
+        # ggml_backend_* externals (LNK2019) in _whisper_native.
+        #
+        # No /WHOLEARCHIVE: _llama_native already links the same archives
+        # plainly on Windows, so the backend registrations survive as-is.
+        target_link_libraries(_whisper_native PRIVATE
+            "${LIB_WHISPER}"
+            "${LIB_WHISPER_COMMON}"
+            ${_GGML_LIBS}
+            ${SYSTEM_LIBS}
         )
     endif()
 
