@@ -2139,6 +2139,18 @@ class StableDiffusionCppBuilder(GgmlBuilder):
         # Get backend options
         backend_options = self.get_backend_cmake_options()
 
+        # MSVC caps a COFF object at 65,536 sections. As of upstream
+        # master-817, src/stable-diffusion.cpp (one very large TU, heavy on
+        # templates and inline model definitions) exceeds that and fails with
+        # `error C1128: number of sections exceeded object file format limit`.
+        # llama.cpp's own CMakeLists adds /bigobj for MSVC; sd.cpp's sets only
+        # /MP and /utf-8, so we supply it here. Windows builds in this project
+        # are always MSVC (see the vswhere/dumpbin paths above).
+        extra: dict[str, str] = {}
+        if PLATFORM == "Windows":
+            extra["CMAKE_C_FLAGS"] = "/bigobj"
+            extra["CMAKE_CXX_FLAGS"] = "/bigobj"
+
         self.cmake_config(
             src_dir=self.src_dir,
             build_dir=self.build_dir,
@@ -2149,6 +2161,7 @@ class StableDiffusionCppBuilder(GgmlBuilder):
             CMAKE_VISIBILITY_INLINES_HIDDEN=True,
             CMAKE_INSTALL_LIBDIR="lib",  # Prevent lib64 on 64-bit Linux
             SD_BUILD_EXAMPLES=examples,
+            **extra,
             **backend_options,
         )
         self.cmake_build(build_dir=self.build_dir, release=True)

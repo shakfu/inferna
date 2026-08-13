@@ -164,7 +164,15 @@ dev = [
     "delvewheel>=1.12.0 ; sys_platform == 'win32'",
     "ruff>=0.15.12",
     "mypy>=1.20.2",
-    "numpy>=1.24.4",
+    # numpy 2.3.0 dropped manylinux_2_17 wheels (2_28 only), and the default
+    # cibuildwheel image here is manylinux2014, whose GCC 10.2.1 is below the
+    # GCC >= 10.3 that a numpy source build demands. Without the cap, pip
+    # falls back to building from source inside the container and the test
+    # step dies before any test runs. The cap is skipped on 3.14+, where no
+    # numpy release ships a manylinux_2_17 wheel at all — that combination
+    # needs the manylinux_2_28 image, not a version pin.
+    "numpy>=1.24.4,<2.3 ; python_version < '3.14'",
+    "numpy>=1.24.4 ; python_version >= '3.14'",
     "requests>=2.33.1",
     "langchain>=1.2.17",
     "twine>=6.2.0",

@@ -12,9 +12,8 @@ import os
 import json
 import wave
 import struct
-import numpy as np
 from pathlib import Path
-from typing import Any, List, Tuple, cast
+from typing import Any, List, Tuple
 import threading
 
 # Import the whisper module (use: python -m inferna.whisper.cli).
@@ -24,6 +23,8 @@ import threading
 # wh.WhisperContext) typechecks as Any rather than failing static
 # analysis at every reference.
 import importlib
+
+from ._audio import AudioSamples, Float32Buffer, float32_from_values, resample_linear
 
 wh: Any = importlib.import_module(".whisper_cpp", package=__package__)
 
@@ -108,8 +109,8 @@ class WhisperParams:
         self.vad_samples_overlap = 0.1
 
 
-def load_wav_file(filepath: str) -> Tuple[np.ndarray, int]:
-    """Load a WAV file and return samples as float32 array and sample rate."""
+def load_wav_file(filepath: str) -> Tuple[Float32Buffer, int]:
+    """Load a WAV file and return samples as a float32 buffer and sample rate."""
     with wave.open(filepath, "rb") as wav_file:
         frames = wav_file.readframes(-1)
         sound_info = wav_file.getparams()
@@ -139,25 +140,12 @@ def load_wav_file(filepath: str) -> Tuple[np.ndarray, int]:
         else:
             raise ValueError(f"Unsupported sample width: {sound_info.sampwidth}")
 
-        return np.array(samples_f, dtype=np.float32), sound_info.framerate
+        return float32_from_values(samples_f), sound_info.framerate
 
 
-def resample_audio(samples: np.ndarray, orig_sr: int, target_sr: int = 16000) -> np.ndarray:
+def resample_audio(samples: AudioSamples, orig_sr: int, target_sr: int = 16000) -> Float32Buffer:
     """Simple resampling using linear interpolation."""
-    if orig_sr == target_sr:
-        return samples
-
-    # Calculate the ratio
-    ratio = orig_sr / target_sr
-    new_length = int(len(samples) / ratio)
-
-    # Create new indices
-    old_indices = np.arange(len(samples))
-    new_indices = np.linspace(0, len(samples) - 1, new_length)
-
-    # Interpolate
-    resampled = np.interp(new_indices, old_indices, samples)
-    return cast(np.ndarray, resampled.astype(np.float32))
+    return resample_linear(samples, orig_sr, target_sr)
 
 
 def escape_string_json(text: str) -> str:

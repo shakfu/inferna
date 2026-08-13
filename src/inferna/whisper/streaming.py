@@ -26,9 +26,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, List, Optional, cast
+from typing import Any, Iterable, Iterator, List, Optional
 
-import numpy as np
+from ._audio import AudioSamples, Float32Buffer, as_float32, concat_float32
 
 logger = logging.getLogger(__name__)
 
@@ -130,16 +130,16 @@ class WhisperStreamer:
         self._length_samples = length_ms * WHISPER_SAMPLE_RATE // 1000
 
         # Rolling buffer holds at most ``length_samples`` of audio. We
-        # use a list-of-arrays + concat-on-pass rather than a circular
-        # ndarray because every transcription pass needs a contiguous
-        # ndarray anyway, and the bookkeeping is simpler.
-        self._pending: List[np.ndarray] = []
+        # use a list-of-buffers + concat-on-pass rather than a circular
+        # buffer because every transcription pass needs a contiguous
+        # buffer anyway, and the bookkeeping is simpler.
+        self._pending: List[Float32Buffer] = []
         self._pending_samples = 0
 
         # Audio that's already inside the rolling window from prior
         # passes. Concatenated with ``_pending`` to form the
         # transcription input.
-        self._window: Optional[np.ndarray] = None
+        self._window: Optional[Float32Buffer] = None
         # Sample index (relative to stream start) of the first sample
         # in ``_window``. Used to convert pass-local timestamps to
         # absolute stream-relative timestamps.
@@ -159,7 +159,7 @@ class WhisperStreamer:
     # Public surface
     # ------------------------------------------------------------------
 
-    def feed(self, samples: np.ndarray) -> List[StreamSegment]:
+    def feed(self, samples: AudioSamples) -> List[StreamSegment]:
         """Append ``samples`` (mono float32 @ 16 kHz) to the buffer.
 
         Runs a transcription pass for every ``step_ms`` of newly
@@ -170,10 +170,10 @@ class WhisperStreamer:
         rolled past the trailing edge of the active window.
         """
         self._ensure_open()
-        samples = self._coerce_samples(samples)
-        self._pending.append(samples)
-        self._pending_samples += samples.shape[0]
-        self._total_samples += samples.shape[0]
+        buf = self._coerce_samples(samples)
+        self._pending.append(buf)
+        self._pending_samples += len(buf)
+        self._total_samples += len(buf)
 
         produced: List[StreamSegment] = []
         while self._pending_samples >= self._step_samples:
@@ -214,16 +214,11 @@ class WhisperStreamer:
         if self._closed:
             raise RuntimeError("WhisperStreamer is closed; construct a new instance")
 
-    def _coerce_samples(self, samples: np.ndarray) -> np.ndarray:
+    def _coerce_samples(self, samples: AudioSamples) -> Float32Buffer:
         """Validate shape/dtype and return a contiguous float32 view."""
-        arr = np.asarray(samples)
-        if arr.ndim != 1:
-            raise ValueError(f"samples must be 1-D mono audio, got shape {arr.shape}")
-        if arr.dtype != np.float32:
-            arr = arr.astype(np.float32, copy=False)
-        return cast(np.ndarray, np.ascontiguousarray(arr))
+        return as_float32(samples)
 
-    def _build_pass_audio(self) -> np.ndarray:
+    def _build_pass_audio(self) -> Float32Buffer:
         """Concatenate ``_window`` + ``_pending`` into the next pass's input.
 
         Updates ``_window`` to hold the trailing ``length_samples`` of
@@ -232,20 +227,20 @@ class WhisperStreamer:
         the absolute sample index of the first sample in the new
         ``_window``.
         """
-        parts: List[np.ndarray] = []
+        parts: List[Float32Buffer] = []
         if self._window is not None:
             parts.append(self._window)
         if self._pending:
             parts.extend(self._pending)
-        audio = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+        audio = concat_float32(parts)
 
         # Cap at length_samples so the encoder's per-call cost stays
         # bounded. Drop the oldest excess.
-        if audio.shape[0] > self._length_samples:
-            drop = audio.shape[0] - self._length_samples
+        if len(audio) > self._length_samples:
+            drop = len(audio) - self._length_samples
             audio = audio[drop:]
             self._window_start_samples += drop
-        elif audio.shape[0] < self._length_samples and self._window is not None:
+        elif len(audio) < self._length_samples and self._window is not None:
             # No drop yet; window_start_samples stays the same.
             pass
 
@@ -264,7 +259,7 @@ class WhisperStreamer:
         wh = self._wh
 
         audio = self._build_pass_audio()
-        if audio.shape[0] == 0:
+        if len(audio) == 0:
             return []
 
         params = wh.WhisperFullParams()
@@ -299,7 +294,7 @@ class WhisperStreamer:
         # ``trailing_edge_sec`` is the last second of audio; segments
         # whose t1 falls before ``trailing_edge_sec - step_sec`` are
         # outside the next pass's window and won't reappear.
-        audio_end_sec = window_start_sec + audio.shape[0] / WHISPER_SAMPLE_RATE
+        audio_end_sec = window_start_sec + len(audio) / WHISPER_SAMPLE_RATE
         step_sec = self.step_ms / 1000.0
         for i in range(n):
             t0_cs = self._ctx.full_get_segment_t0(i)
@@ -327,7 +322,7 @@ class WhisperStreamer:
 
 
 def transcribe_stream(
-    audio_iter: Iterable[np.ndarray],
+    audio_iter: Iterable[AudioSamples],
     *,
     model_path: str,
     step_ms: int = 3000,

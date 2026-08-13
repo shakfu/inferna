@@ -30,8 +30,14 @@ def whisper_model_path():
 
 @pytest.fixture
 def sample_audio_path():
-    """Fixture for sample audio path."""
-    audio_path = Path("samples/jfk.wav")
+    """Fixture for sample audio path.
+
+    Resolved from this file rather than the CWD -- a bare ``samples/jfk.wav``
+    only exists when pytest happens to run from ``tests/``, so the relative
+    form skipped every consumer of this fixture regardless of the sample
+    actually being present.
+    """
+    audio_path = Path(__file__).resolve().parent / "samples" / "jfk.wav"
     if not audio_path.exists():
         pytest.skip(f"Sample audio not found at {audio_path}")
     return str(audio_path)
@@ -138,11 +144,18 @@ class TestAudioProcessing:
         assert samples is not None
         assert len(samples) > 0
         assert sample_rate > 0
-        assert samples.dtype.name == "float32"
+
+        # A float32 buffer, not necessarily a numpy array: inferna must run
+        # with numpy absent, so the audio path returns array('f'). Assert the
+        # buffer contract rather than a concrete type.
+        view = memoryview(samples)
+        assert view.format == "f"
+        assert view.itemsize == 4
+        assert view.ndim == 1
 
         # Check that samples are normalized to [-1, 1]
-        assert samples.min() >= -1.0
-        assert samples.max() <= 1.0
+        assert min(samples) >= -1.0
+        assert max(samples) <= 1.0
 
     def test_resample_audio(self):
         """Test audio resampling."""
@@ -159,7 +172,12 @@ class TestAudioProcessing:
         # Check that the length is approximately correct
         expected_length = int(len(samples) * target_sr / orig_sr)
         assert abs(len(resampled) - expected_length) <= 1
-        assert resampled.dtype.name == "float32"
+        # float32 buffer contract (see test_load_wav_file) -- not numpy-typed.
+        assert memoryview(resampled).format == "f"
+        assert memoryview(resampled).itemsize == 4
+        # Resampling a 440 Hz sine must stay in range and stay non-trivial.
+        assert max(abs(x) for x in resampled) <= 1.0
+        assert max(abs(x) for x in resampled) > 0.5
 
     def test_resample_audio_same_rate(self):
         """Test resampling with same sample rate."""

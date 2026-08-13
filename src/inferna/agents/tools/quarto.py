@@ -210,12 +210,9 @@ def quarto_render(
         <absolute path>`` line and a markdown link the model should
         paste verbatim when telling the user where the document is.
     """
-    if not quarto_available():
-        raise RuntimeError(
-            "quarto CLI not found on PATH. Install via `brew install quarto` "
-            "(macOS) or see https://quarto.org/docs/get-started/."
-        )
-
+    # Argument validation runs before the availability probe so that a bad
+    # call fails the same way whether or not the quarto binary happens to be
+    # installed. The reverse order made these errors environment-dependent.
     input_path = input.strip()
     body = content
     if not input_path and not body.strip():
@@ -224,6 +221,12 @@ def quarto_render(
     fmt = to.strip() or "html"
     if fmt not in _QUARTO_FORMATS:
         raise ValueError(f"unsupported format {fmt!r} (allowed: {', '.join(sorted(_QUARTO_FORMATS))})")
+
+    if not quarto_available():
+        raise RuntimeError(
+            "quarto CLI not found on PATH. Install via `brew install quarto` "
+            "(macOS) or see https://quarto.org/docs/get-started/."
+        )
 
     # CREATE-AND-RENDER: materialize content to disk before invoking quarto.
     if body.strip():

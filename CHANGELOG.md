@@ -52,6 +52,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Fixed
 
+- **numpy was a hard, undeclared runtime requirement of the whisper subpackage** -- `whisper/streaming.py` and `whisper/cli.py` imported numpy at module scope, and `whisper_cpp.py` imports `.streaming`, so on a bare `pip install inferna` (which declares no runtime dependencies) every whisper import raised `ImportError: No module named numpy`. numpy is now never imported as a requirement anywhere in the package. The native `full()` binding takes an `nb::ndarray`, which nanobind fills from any 1-D C-contiguous float32 buffer, so the audio path uses `array('f')` / `memoryview` via the new `whisper/_audio.py` helpers. numpy remains fully supported as *input* -- a float32 ndarray passes through zero-copy, other dtypes are converted -- and is used opportunistically to accelerate resampling when installed, with an identical-output pure-Python fallback. `tests/test_no_numpy.py` runs the import and audio paths in a subprocess with numpy masked to keep it that way.
+
+- **`sample_audio_path` test fixture never resolved** -- it looked for `samples/jfk.wav` relative to the CWD, which only exists when pytest runs from `tests/`, so every test depending on it skipped unconditionally (including the one covering `load_wav_file`). Now resolved from `__file__`, which brings 6 previously-dormant tests into the run.
+
+- **Windows build broken by the sd.cpp bump** -- `src/stable-diffusion.cpp` grew past MSVC's 65,536-section object limit at `master-817`, failing with `error C1128: number of sections exceeded object file format limit`. Upstream's sd.cpp `CMakeLists.txt` sets `/MP` and `/utf-8` for MSVC but not `/bigobj` (llama.cpp's does), so `StableDiffusionCppBuilder.build` now injects `/bigobj` into `CMAKE_C_FLAGS` / `CMAKE_CXX_FLAGS` on Windows.
+
+- **`quarto_render` argument errors depended on the environment** -- the tool probed for the `quarto` binary before validating its arguments, so a malformed call raised `RuntimeError: quarto CLI not found` instead of the documented `ValueError` on any machine without quarto installed. Validation now runs first. This also unbreaks `tests/test_agents_quarto.py::TestQuartoRenderArgValidation` on CI runners, where quarto is absent.
+
+- **numpy capped below 2.3 for the dev group** -- numpy 2.3.0 dropped `manylinux_2_17` wheels, so inside the `manylinux2014` build image pip fell back to a source build and hit numpy's `GCC >= 10.3` floor (the image ships 10.2.1), killing the test step before any test ran. Capped for Python < 3.14; on 3.14+ no numpy release ships a `manylinux_2_17` wheel at all, so that combination needs the `manylinux_2_28` image rather than a version pin.
+
 - **`LlamaSampler.add_penalties` rejected keyword arguments** -- the binding declared no parameter names, so the keyword call in `ConstrainedAgent` (`penalty_last_n=`, `penalty_repeat=`, ...) raised `TypeError` whenever a constrained agent was configured with `repeat_penalty != 1.0`. The parameters are now named (`n_vocab`, `penalty_last_n`, `penalty_repeat`, `penalty_freq`, `penalty_present`).
 
 ## [0.1.9]
