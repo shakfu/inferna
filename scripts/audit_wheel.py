@@ -124,17 +124,50 @@ def _extract_wheel(wheel: Path, into: Path) -> None:
         zf.extractall(into)
 
 
+# The wheel's distribution tag is not always the key used by the exclude
+# lists in manage.py: the published variants are versioned (`cuda12`,
+# `cuda13`) or named for the vendor SDK rather than the ggml backend
+# (`rocm` builds the `hip` backend). Anything not listed here is assumed to
+# already be an exclude-list key. Keep in sync with ALLOWED_VARIANTS in
+# scripts/ci_rename_package.py.
+_WHEEL_TAG_TO_BACKEND: dict[str, str] = {
+    "cuda12": "cuda",
+    "cuda13": "cuda",
+    "rocm": "hip",
+}
+
+
+class UnknownBackendError(ValueError):
+    """The wheel carries a backend tag that maps to no exclude list."""
+
+
 def _detect_backend(wheel_name: str) -> str:
     """Pull the backend tag out of the wheel filename.
 
     Convention (matches both inferna and cyllama): ``<pkg>[_<backend>]-<version>-...``.
     Returns ``""`` for plain CPU/base wheels (no backend suffix).
+
+    Raises UnknownBackendError when a backend tag is present but maps to no
+    exclude list. Falling back to ``""`` there would audit a GPU wheel against
+    the CPU list, which allows nothing -- every legitimately runtime-supplied
+    driver library then reports as an unexpected dependency, blaming the wheel
+    for what is really a gap in this mapping.
     """
-    m = re.match(r"[A-Za-z0-9]+(?:_([a-z]+))?-\d", wheel_name)
+    # The tag may contain digits (`cuda12`), so it cannot be `[a-z]+`.
+    m = re.match(r"[A-Za-z0-9]+(?:_([a-z][a-z0-9]*))?-\d", wheel_name)
     if not m:
         return ""
-    backend = m.group(1) or ""
-    return backend if backend in manage.WHEEL_REPAIR_EXCLUDES_LINUX else ""
+    tag = m.group(1) or ""
+    if not tag:
+        return ""
+    backend = _WHEEL_TAG_TO_BACKEND.get(tag, tag)
+    if backend not in manage.WHEEL_REPAIR_EXCLUDES_LINUX:
+        raise UnknownBackendError(
+            f"wheel {wheel_name!r} has backend tag {tag!r}, which maps to no entry in "
+            f"manage.py:WHEEL_REPAIR_EXCLUDES_LINUX (tried {backend!r}). Add it to "
+            f"_WHEEL_TAG_TO_BACKEND in this script, or pass --backend explicitly."
+        )
+    return backend
 
 
 def _wheel_platform(wheel_name: str) -> str:
@@ -266,7 +299,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: wheel not found: {wheel}", file=sys.stderr)
         return 2
 
-    backend = args.backend if args.backend is not None else _detect_backend(wheel.name)
+    try:
+        backend = args.backend if args.backend is not None else _detect_backend(wheel.name)
+    except UnknownBackendError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
     plat = args.platform or _wheel_platform(wheel.name)
     if not plat:
         print(f"ERROR: cannot classify platform from filename: {wheel.name}", file=sys.stderr)
