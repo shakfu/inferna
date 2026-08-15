@@ -97,6 +97,8 @@ from .stable_diffusion import (
     set_log_callback,
     set_progress_callback,
     set_preview_callback,
+    # Upstream capability flags
+    SUPPORTS_REF_IMAGE_ARGS,
 )
 
 __all__ = [
@@ -138,4 +140,6 @@ __all__ = [
     "set_log_callback",
     "set_progress_callback",
     "set_preview_callback",
+    # Upstream capability flags
+    "SUPPORTS_REF_IMAGE_ARGS",
 ]

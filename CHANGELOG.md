@@ -22,6 +22,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- **GPU wheel builds broken by the `master-817` stable-diffusion.cpp pin** -- every dynamic GPU job (CUDA, ROCm, Vulkan, SYCL) failed to compile sd.cpp with `'ggml_mul_mat_i8_tensorwise' was not declared in this scope` and `'ggml_quantize_i8_convrot' was not declared in this scope`. sd.cpp vendors [leejet's ggml *fork*](https://github.com/leejet/ggml), not upstream ggml, and `master-817-bcc7e29` ("feat: support INT8 ConvRot safetensors", [leejet/stable-diffusion.cpp#1857](https://github.com/leejet/stable-diffusion.cpp/pull/1857)) started calling ops that exist only in that fork. Dynamic builds set `SD_USE_VENDORED_GGML=0`, which makes `StableDiffusionCppBuilder._sync_ggml_abi()` replace the fork with llama.cpp's ggml so both sides share one ABI -- deleting exactly the ops the new code needs. `SDCPP_VERSION` is reverted to `master-775-b5d8120`, the newest pin compatible with shared ggml, and the constraint is documented as a ceiling at the pin so a future routine bump does not silently reintroduce it. Static/vendored builds were never affected.
+
+- **`_sync_ggml_abi()` left the checkout unrecoverable for a subsequent vendored build** -- it deleted sd.cpp's vendored ggml outright, and `verify_checkout()` only compares HEAD shas, so it could not tell that `ggml/` had been swapped. A dynamic build followed by a static one on the same checkout would compile sd.cpp against llama.cpp's ggml. The swap is now reversible: the vendored tree is moved to `.ggml-vendored` rather than deleted, the installed copy is stamped with a provenance marker, and a vendored build restores it (failing loudly if the backup is missing rather than building against the wrong ggml). Covered by `tests/test_build_ggml_sync.py`, the first tests to exercise `scripts/manage.py`.
+
+### Changed
+
+- **`SDImageGenParams` reference-image bindings now compile against either upstream shape** -- `sd_img_gen_params_t` carries the `auto_resize_ref_image` / `increase_ref_index` booleans before sd.cpp `master-800` and the `ref_image_args` string after it, and the pin now sits on the older side. Rather than track one shape, `_sd_native.cpp` detects which the header provides and sets whichever exists. The Python API is unchanged in both directions: all three properties stay available and round-trip. The new `inferna.sd.SUPPORTS_REF_IMAGE_ARGS` flag reports which form was compiled -- when `False`, `ref_image_args` keys other than the two the booleans encode (`resize_before_vae`, `ref_index_mode`) round-trip through Python but have no upstream field to reach.
+
 ## [0.1.10]
 
 ### Added

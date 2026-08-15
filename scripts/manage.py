@@ -2224,6 +2224,10 @@ class StableDiffusionCppBuilder(GgmlBuilder):
         # llama.cpp's own CMakeLists adds /bigobj for MSVC; sd.cpp's sets only
         # /MP and /utf-8, so we supply it here. Windows builds in this project
         # are always MSVC (see the vswhere/dumpbin paths above).
+        #
+        # Kept even though SDCPP_VERSION now sits below master-817: the flag
+        # only raises a limit, costs nothing at the current pin, and its
+        # absence is what broke Windows the last time the pin moved up.
         extra: dict[str, str] = {}
         if PLATFORM == "Windows":
             extra["CMAKE_C_FLAGS"] = "/bigobj"

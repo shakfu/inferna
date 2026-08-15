@@ -1097,6 +1097,28 @@ class TestSDImageGenParamsExtended:
         params.ref_image_args = "preset=flux_kontext,vlm_max_size=512"
         assert params.ref_image_args == "preset=flux_kontext,vlm_max_size=512"
 
+    def test_supports_ref_image_args_flag(self):
+        """The binding compiles against either shape of the upstream struct.
+
+        sd.cpp master-800 replaced the two booleans with the ref_image_args
+        string. The pin has to straddle that boundary (see SDCPP_VERSION in
+        scripts/manage.py), so the binding detects which the header provides
+        and reports it here. The Python API is the same either way; on an older
+        pin, keys other than the two booleans round-trip but are not forwarded.
+        """
+        from inferna.sd import SUPPORTS_REF_IMAGE_ARGS
+
+        assert isinstance(SUPPORTS_REF_IMAGE_ARGS, bool)
+
+        # Whichever branch was compiled, all three properties must work.
+        params = SDImageGenParams()
+        params.ref_image_args = "preset=qwen"
+        params.auto_resize_ref_image = False
+        params.increase_ref_index = True
+        assert params.ref_image_args == "preset=qwen"
+        assert params.auto_resize_ref_image is False
+        assert params.increase_ref_index is True
+
     def test_ref_image_bool_flags_are_independent(self):
         """The legacy booleans compose into ref_image_args without clobbering it.
 

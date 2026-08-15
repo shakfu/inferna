@@ -21,6 +21,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "stable-diffusion.h"
@@ -45,6 +47,50 @@ extern "C" {
 
 namespace nb = nanobind;
 using namespace nb::literals;
+
+// =============================================================================
+// Upstream API compatibility
+// =============================================================================
+//
+// sd.cpp master-800 replaced the `auto_resize_ref_image` / `increase_ref_index`
+// booleans in sd_img_gen_params_t with a single key=value string,
+// `ref_image_args`. inferna's pin has to straddle that boundary: the shared-ggml
+// dynamic builds (every GPU wheel) are held at master-775 because master-817
+// depends on ggml ops that exist only in leejet's ggml fork, and that fork is
+// swapped out for llama.cpp's ggml in those builds (see SDCPP_VERSION in
+// scripts/manage.py).
+//
+// Rather than pin the binding to one side, detect which form the header
+// provides and set whichever exists. The Python API is identical either way.
+template <typename T, typename = void>
+struct sd_has_ref_image_args : std::false_type {};
+
+template <typename T>
+struct sd_has_ref_image_args<T, std::void_t<decltype(std::declval<T&>().ref_image_args)>>
+    : std::true_type {};
+
+// True when the pinned sd.cpp takes arbitrary key=value reference-image args.
+// When false, only the two legacy booleans can be forwarded; any other key a
+// caller puts in `ref_image_args` round-trips through Python but has no upstream
+// field to land in. Exported as `SUPPORTS_REF_IMAGE_ARGS` so callers can tell.
+inline constexpr bool SD_SUPPORTS_REF_IMAGE_ARGS =
+    sd_has_ref_image_args<sd_img_gen_params_t>::value;
+
+// P is a template parameter so the discarded `if constexpr` branch is never
+// instantiated -- referring to a field the header lacks would be a hard error
+// in a non-template context.
+template <typename P>
+inline void sd_apply_ref_image_args(P& p,
+                                    const std::string& args,
+                                    bool auto_resize_ref_image,
+                                    bool increase_ref_index) {
+    if constexpr (sd_has_ref_image_args<P>::value) {
+        p.ref_image_args = args.c_str();
+    } else {
+        p.auto_resize_ref_image = auto_resize_ref_image;
+        p.increase_ref_index    = increase_ref_index;
+    }
+}
 
 // =============================================================================
 // SDImage
@@ -170,7 +216,10 @@ struct SDImageGenParamsW {
     // `auto_resize_ref_image` / `increase_ref_index` booleans with a single
     // key=value string, `ref_image_args`. We keep the booleans as a
     // compatibility view and compose the effective string the same way the
-    // upstream CLI does, appending them after whatever the caller set.
+    // upstream CLI does, appending them after whatever the caller set. On a
+    // pre-master-800 header the composition still runs (so the Python API is
+    // unchanged) but the booleans go to their own fields -- see
+    // sd_apply_ref_image_args.
     bool auto_resize_ref_image = true;
     bool increase_ref_index    = false;
     std::string ref_image_args_user;
@@ -184,7 +233,8 @@ struct SDImageGenParamsW {
         };
         if (!auto_resize_ref_image) append("resize_before_vae=0");
         if (increase_ref_index)     append("ref_index_mode=increase");
-        p.ref_image_args = ref_image_args_effective.c_str();
+        sd_apply_ref_image_args(p, ref_image_args_effective,
+                                auto_resize_ref_image, increase_ref_index);
     }
 
     // Owning storage for arrays referenced by the C struct.
@@ -214,7 +264,8 @@ struct SDImageGenParamsW {
         // Inherit the default sample params we just constructed.
         p.sample_params = sample.p;
         // Point p.ref_image_args at our own storage instead of the string
-        // literal sd_img_gen_params_init() installs.
+        // literal sd_img_gen_params_init() installs (a no-op on a header that
+        // still uses the two booleans, which init already defaulted).
         rebuild_ref_image_args();
     }
 
@@ -530,6 +581,11 @@ static nb::dict make_enum_dict() {
 
 NB_MODULE(_sd_native, m) {
     m.attr("ENUMS") = make_enum_dict();
+
+    // False on a pre-master-800 sd.cpp, where SDImageGenParams.ref_image_args
+    // still round-trips but only the resize_before_vae / ref_index_mode keys
+    // (i.e. the two legacy booleans) reach the generator.
+    m.attr("SUPPORTS_REF_IMAGE_ARGS") = SD_SUPPORTS_REF_IMAGE_ARGS;
 
     // -------------------------------------------------------------------------
     // SDImage

@@ -43,6 +43,18 @@ except ImportError:
 
 
 # =============================================================================
+# Upstream capability flags
+# =============================================================================
+
+# Whether the pinned stable-diffusion.cpp accepts arbitrary key=value
+# reference-image arguments. On an older pin it only understands the
+# auto_resize_ref_image / increase_ref_index booleans, so any other key set on
+# SDImageGenParams.ref_image_args round-trips through Python but does not reach
+# the generator. See the compatibility note in _sd_native.cpp.
+SUPPORTS_REF_IMAGE_ARGS: bool = _n.SUPPORTS_REF_IMAGE_ARGS
+
+
+# =============================================================================
 # Enums (sourced from the native module's ENUMS dict — single source of truth)
 # =============================================================================
 
