@@ -24,15 +24,13 @@ These three items are the residue of cyllama's `AGENT_TOOL_REVIEW.md` after ever
 
 - [ ] **Stop-pattern migration in `_extract_answer`** -- `src/inferna/agents/react.py` keeps a hand-maintained list of ~24 hallucination stop-patterns (code blocks, `Note:`, `Let's`, `def `, `class `, etc.) and post-processes generated text against them. The principled fix is to extend `GenerationConfig.stop_sequences` for the answer-extraction generation step instead; the default config already wires `stop_sequences` for `Observation:` patterns (`react.py:200-206`) and `LLM.__call__` honors them. Sketch: `cfg = replace(self.generation_config, stop_sequences=self.generation_config.stop_sequences + [...])` for the answer turn only; the regex strip becomes a fallback for models that ignore stop sequences. Trigger: refactor the next time the stop-pattern list grows from a new model-specific failure mode -- accreting another regex is the wrong response.
 
-- [ ] **MCP SSE transport** -- `src/inferna/agents/mcp.py` implements `McpStdioConnection` (line 148) and `McpHttpConnection` (line 271) but `McpTransportType.SSE` (line 38) is reserved-but-unwired. A symmetric `McpSseConnection` would slot in next to the HTTP one, dispatched from `McpClient._connect_server` (line 400). Bulk of the cost is an integration test harness with a real SSE-speaking MCP server; the protocol class itself is small. If/when this lands, remember to extend `tests/test_llama_cpp_surface.py` if any new sampler symbols become load-bearing (the nanobind shim drift concern). Trigger: an MCP server you want to use exposes SSE-only. The ecosystem is mostly stdio/HTTP today, so this is unlikely soon.
+- [ ] **MCP SSE transport** -- `src/inferna/agents/mcp.py` implements `McpStdioConnection` (line 148) and `McpHttpConnection` (line 271) but `McpTransportType.SSE` (line 38) is reserved-but-unwired. A symmetric `McpSseConnection` would slot in next to the HTTP one, dispatched from `McpClient._connect_server` (line 400). Bulk of the cost is an integration test harness with a real SSE-speaking MCP server; the protocol class itself is small. If/when this lands, remember to extend `tests/test_llama_cpp_surface.py` if any new sampler symbols become structural (the nanobind shim drift concern). Trigger: an MCP server you want to use exposes SSE-only. The ecosystem is mostly stdio/HTTP today, so this is unlikely soon.
 
 - [ ] **ACP protocol-version negotiation** -- `src/inferna/agents/acp.py` hardcodes `ACP_PROTOCOL_VERSION = "2025-01-01"` (line 53) and embeds it directly in initialize responses (line 480). The module is marked experimental for this and other reasons, so the warning currently buys time -- but if ACP graduates from POC to a genuinely-used integration point, parameterize on the client's announced version (negotiate during initialize). Trigger: an ACP client surfaces with a different version. (A reference-client conformance test was also flagged but doesn't belong in a TODO until a harness target exists.)
 
 ### Pattern gaps (from `docs/agents/patterns.md`)
 
-The five pattern gaps identified in the original audit have all landed.
-See [`docs/agents/patterns.md`](docs/agents/patterns.md) for the full
-catalog plus the patterns intentionally not supported.
+The five pattern gaps identified in the original audit have all landed. See [`docs/agents/patterns.md`](docs/agents/patterns.md) for the full catalog plus the patterns intentionally not supported.
 
 - [x] **#1 -- `ReflectionLoop` helper** -- landed in `src/inferna/agents/composition.py`. Worker + critic loop with configurable acceptance marker, custom revision template, and per-pass `source`/`parent_event_id` annotations on streamed events. 6 tests in `tests/test_agents_composition.py::TestReflection*`.
 
@@ -51,9 +49,13 @@ These are residual refinements documented under each pattern's "Gap" line in `do
 **Note:** every entry in this section should land in `cyllama` too. The two projects share the agent layer byte-identical modulo namespace; refinements ported one-way only would drift the surfaces.
 
 - [ ] **Streaming sub-agent events across MCP** -- `mcp_agent_tool` returns a single value per call; streaming would require the MCP server-streaming RFC to stabilize.
+
 - [ ] **Streaming RAG results to the agent** -- `rag_as_tool` returns a single concatenated observation today.
+
 - [ ] **Filtered deletion in `SemanticMemory`** -- `forget()` raises `NotImplementedError` pending a RAG-side metadata-filtered delete API.
+
 - [ ] **Parallel critic ensembles in `ReflectionLoop`** -- multiple critics voting, reward-model-based acceptance.
+
 - [ ] **Unified streaming for `plan_and_execute` steps** -- one iterator surfacing events from all steps in sequence (e.g. an `aplan_and_execute` async-generator variant, or a `stream=True` flag on the existing helper). `cyllama-desktop`'s sidecar bypasses the wrapper today and reimplements the loop with `planner.stream()` / `executor.stream()` precisely to get incremental events flowing into its SSE channel; a streaming variant in inferna would let that ~100 LoC of reimplementation go away. Trigger: the next consumer (after cyllama-desktop) that needs per-step events.
 
 - [ ] **`ReflectionLoop.stream()` per-attempt `source` labels.** Today `composition.py` sets `event.source = "worker"` / `"critic"` (role only). Downstream consumers (cyllama-desktop today) want `worker-1` / `critic-1` / `worker-2` / etc. so the trace renderer can distinguish attempts. ~5 LoC change: `f"worker-{attempt + 1}"` in the source-tagging block. Trigger: a consumer wants per-attempt distinction (cyllama-desktop already does -- it currently reimplements the loop in the sidecar for this reason).
@@ -222,7 +224,7 @@ Items distilled from the second wrapper-code review (2026-05). Correctness fixes
 
 - [ ] **Model registry / `inferna.list_models()`.** Cache parsed GGUF metadata under `~/.cache/inferna/`. Quality-of-life.
 
-- [ ] **Observability / OpenTelemetry.** Span generation around `_generate_stream`, structured server logs, sampler perf via logger. Cheap but not load-bearing.
+- [ ] **Observability / OpenTelemetry.** Span generation around `_generate_stream`, structured server logs, sampler perf via logger. Cheap but not structural.
 
 - [ ] **Stable-diffusion gaps.** ControlNet (high-level wrappers); async `convert_model`; inpainting mask helpers.
 
@@ -243,4 +245,3 @@ Items distilled from the second wrapper-code review (2026-05). Correctness fixes
 - [ ] Batch query processing in RAG pipeline
 
 - [ ] Sharding for 1M+ vector workloads
-

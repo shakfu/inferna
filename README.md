@@ -3,7 +3,9 @@
 Inferna is a multimodal Python inference library for running local AI text, speech, and image models. It wraps three established C++ inference engines behind a single high-level API:
 
 - **[llama.cpp](https://github.com/ggml-org/llama.cpp)** - Text generation, chat, embeddings, and text-to-speech
+
 - **[whisper.cpp](https://github.com/ggerganov/whisper.cpp)** - Speech-to-text transcription and translation
+
 - **[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)** - Image and video generation
 
 The bindings are built with [nanobind](https://github.com/wjakob/nanobind), and the package itself has no required Python dependencies.
@@ -108,12 +110,7 @@ inferna has zero hard dependencies beyond its compiled core. Features built on t
 
 ### Build from source with a specific backend
 
-A source install is a two-phase build: the third-party C++ libraries
-(`llama.cpp`, `whisper.cpp`, `stable-diffusion.cpp`) must be built first
-because they are intentionally excluded from the sdist (see
-`pyproject.toml`'s `sdist.exclude` entry for `thirdparty/*/lib/`). The
-nanobind extensions in `pip install` then link against those prebuilt
-libraries.
+A source install is a two-phase build: the third-party C++ libraries (`llama.cpp`, `whisper.cpp`, `stable-diffusion.cpp`) must be built first because they are intentionally excluded from the sdist (see `pyproject.toml`'s `sdist.exclude` entry for `thirdparty/*/lib/`). The nanobind extensions in `pip install` then link against those prebuilt libraries.
 
 ```sh
 # 1. Clone the repo and build the third-party deps in place.
@@ -124,11 +121,7 @@ GGML_CUDA=1 python scripts/manage.py build --all --deps-only --no-sd-examples
 GGML_CUDA=1 pip install . --no-build-isolation
 ```
 
-`pip install inferna --no-binary inferna` (sdist-only, no clone) will
-**not** work because the deps build step has no place to run. Use the
-prebuilt wheels from PyPI, or follow the two-phase flow above. CI uses
-the same `manage.py build --deps-only` step via cibuildwheel's
-`before-build` hook.
+`pip install inferna --no-binary inferna` (sdist-only, no clone) will **not** work because the deps build step has no place to run. Use the prebuilt wheels from PyPI, or follow the two-phase flow above. CI uses the same `manage.py build --deps-only` step via cibuildwheel's `before-build` hook.
 
 ## Command-Line Interface
 
@@ -741,7 +734,7 @@ To build `inferna` from source:
 
 3. We use [uv](https://github.com/astral-sh/uv) for package management:
 
-    If you don't have it see the link above to install it, otherwise:
+   If you don't have it see the link above to install it, otherwise:
 
     ```sh
     uv sync
@@ -749,10 +742,12 @@ To build `inferna` from source:
 
 4. Type `make` in the terminal.
 
-    This will:
+   This will:
 
     1. Download and build `llama.cpp`, `whisper.cpp` and `stable-diffusion.cpp`
+
     2. Install them into the `thirdparty` folder
+
     3. Build `inferna` using scikit-build-core + CMake
 
 ### Build Commands

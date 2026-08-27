@@ -1,4 +1,4 @@
-Reproducible in whisper.cpp on Apple Metal 
+Reproducible in whisper.cpp on Apple Metal
 
 For transparency: AI was used to help analyze and write up this issue. The defect itself was independently reproduced in two projects, [cyllama](https://github.com/shakfu/cyllama) and [inferna](https://github.com/shakfu/inferna), both of which consume llama.cpp's ggml via llama.cpp, whisper.cpp, and stable-diffusion.cpp.
 
@@ -9,6 +9,7 @@ For transparency: AI was used to help analyze and write up this issue. The defec
 The Metal `im2col` **kernel** and **dispatch geometry** are selected using different predicates:
 
 * `ggml-metal-device.cpp` selects `kernel_im2col_ext` when `ne00 * ne01 > 1024` (`KW * IC` for 1-D convs).
+
 * `ggml-metal-ops.cpp` uses `_ext` dispatch geometry only when `KH * KW > max_threads_per_threadgroup`.
 
 For 1-D convolutions with large channel counts, these predicates can disagree, causing `kernel_im2col_ext` to run with the base kernel's grid layout and produce incorrect output.
@@ -17,13 +18,13 @@ For 1-D convolutions with large channel counts, these predicates can disagree, c
 
 Whisper's encoder uses a 1-D convolution with:
 
-```
+```text
 KW=3, KH=1, IC=512
 ```
 
 This yields:
 
-```
+```text
 KW * IC = 1536 > 1024   -> selects kernel_im2col_ext
 KH * KW = 3             -> uses base dispatch geometry
 ```
@@ -31,7 +32,9 @@ KH * KW = 3             -> uses base dispatch geometry
 On Metal, activations become corrupted and decoding fails:
 
 * `whisper_full()` returns `rc=0`
+
 * zero segments
+
 * empty transcript
 
 The same graph produces correct output on CPU. 2-D convolutions are unaffected because both selection sites use `KH * KW`.
@@ -52,8 +55,7 @@ Expected:
 
 > "And so my fellow Americans..."
 
-Actual on Metal: 0 segments, empty transcript.
-Actual on CPU (`-ng`): correct transcription.
+Actual on Metal: 0 segments, empty transcript. Actual on CPU (`-ng`): correct transcription.
 
 Same binary, same graph -- flipping only the backend toggles the bug, which isolates the defect to the Metal `im2col` path.
 
@@ -102,6 +104,7 @@ Make dispatch selection follow the same criterion used for pipeline selection:
 
 ```diff
 - if (KH * KW <= max_threads_per_threadgroup) {
+
 + if (ne00 * ne01 <= 1024) {
 ```
 
@@ -111,13 +114,13 @@ Preferably, derive the geometry directly from the selected pipeline so the predi
 
 Add a Metal-vs-CPU `GGML_OP_IM2COL` test covering the mismatch case:
 
-```
+```text
 KW=3, KH=1, IC=512
 ```
 
 where:
 
-```
+```text
 KW * IC > 1024
 KH * KW <= max_threads_per_threadgroup
 ```

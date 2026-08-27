@@ -91,8 +91,8 @@ Files under `jinja2/` and `markupsafe/` are read-only — any local
 modifications will be lost on the next re-vendor. If a vendored
 library needs a fix:
 
-1. File the fix upstream (https://github.com/pallets/jinja or
-   https://github.com/pallets/markupsafe).
+1. File the fix upstream (<https://github.com/pallets/jinja> or
+   <https://github.com/pallets/markupsafe>).
 2. Wait for it to ship in a release.
 3. Re-run `scripts/vendor_jinja2.sh` to pull in the new version.
 4. Verify inferna's tests still pass.

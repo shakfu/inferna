@@ -132,8 +132,11 @@ make build  # Whisper is built automatically
 Inferna uses **scikit-build-core** with CMake for building the nanobind extensions. The build process:
 
 1. **Dependencies**: `make` downloads and builds llama.cpp, whisper.cpp (and optionally stable-diffusion.cpp)
+
 2. **nanobind compilation**: CMake compiles the hand-written `_*_native.cpp` files (one extension per upstream)
+
 3. **Extension linking**: C++ extensions are linked against the static libraries
+
 4. **Installation**: Extensions are installed in editable mode
 
 ### Build Commands

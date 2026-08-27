@@ -17,16 +17,23 @@ The webui is opt-in. Library callers control it via `ServerConfig(serve_webui=Tr
 ### 1. Embedded Server (`EmbeddedServer`)
 
 - C networking via the [Mongoose](https://mongoose.ws/) library, bound to Python through nanobind
+
 - Single-threaded poll loop on the main thread; per-stream worker threads for concurrent token generation
+
 - Mounts the upstream [llama.cpp](https://github.com/ggml-org/llama.cpp/tree/master/tools/ui) web UI at `GET /` when `serve_webui=True` (a gzipped snapshot vendored in the package, served with `Content-Encoding: gzip`)
+
 - When `serve_webui=False` (the default), webui routes (`/`, `/index.html`, `/bundle.{css,js}`, `/loading.html`, `/props`, `/slots`, `/metrics`) return 404 — the OpenAI-compatible API and `/health` remain available
+
 - Compiled as part of the standard `make build`
 
 ### 2. Python Server (`PythonServer`)
 
 - Pure Python HTTP server (stdlib `http.server`)
+
 - No compiled mongoose dependency
+
 - Never serves the webui (the static asset routes simply do not exist in this backend)
+
 - Useful for development and environments where the embedded extension can't be loaded
 
 ## Basic Usage
@@ -43,7 +50,7 @@ inferna server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf
 inferna server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf -w
 ```
 
-Open http://127.0.0.1:8080/ in a browser to use the chat UI.
+Open <http://127.0.0.1:8080/> in a browser to use the chat UI.
 
 ### Use the Python Server (no webui, no native extension)
 
@@ -99,7 +106,7 @@ python -m inferna.llama.server -m models/llama.gguf --log-level 3
 
 By default the server emits one access-log line per HTTP request on the `inferna.llama.server.embedded.access` stdlib logger:
 
-```
+```text
 INFO:inferna.llama.server.embedded.access:GET /props 200 285B 0.1ms
 INFO:inferna.llama.server.embedded.access:POST /v1/chat/completions 200 242B 0.4ms
 INFO:inferna.llama.server.embedded.access:stream-done conn=14a82e4f0 model=Llama-3.2-1B-Instruct-Q8_0 bytes=8563 elapsed=917.2ms
@@ -199,7 +206,7 @@ curl -N -X POST http://127.0.0.1:8080/v1/chat/completions \
 
 The response is OpenAI-shape Server-Sent Events:
 
-```
+```text
 data: {"id":"chatcmpl-...","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],...}
 
 data: {"id":"chatcmpl-...","choices":[{"index":0,"delta":{"content":" 1"},"finish_reason":null}],...}
@@ -301,14 +308,19 @@ with PythonServer(config) as server:
 ### Use `EmbeddedServer` (default) when
 
 - You want the built-in web UI
+
 - Multiple concurrent users / streams
+
 - Production deployments
+
 - Throughput matters
 
 ### Use `PythonServer` when
 
 - The compiled mongoose extension isn't available (sdist install on a platform without a wheel, etc.)
+
 - Debugging the HTTP layer with stdlib tooling
+
 - You don't need the web UI
 
 The two servers expose the same JSON API (`/v1/models`, `/v1/chat/completions`, `/v1/embeddings`, `/health`); only `EmbeddedServer` serves the web UI and the `/props` / `/slots` / `/metrics` endpoints the UI requires.

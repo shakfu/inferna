@@ -1,21 +1,29 @@
 # Inferna API Reference
 
-**Version**: 0.2.11
-**Date**: April 2026
+**Version**: 0.2.11 **Date**: April 2026
 
 Complete API reference for inferna, a high-performance Python library for LLM inference built on llama.cpp.
 
 ## Table of Contents
 
 1. [High-Level Generation API](#high-level-generation-api)
+
 2. [Async API](#async-api)
+
 3. [Framework Integrations](#framework-integrations)
+
 4. [Memory Utilities](#memory-utilities)
+
 5. [Core llama.cpp API](#core-llamacpp-api)
+
 6. [Advanced Features](#advanced-features)
+
 7. [Server Implementations](#server-implementations)
+
 8. [Multimodal Support](#multimodal-support)
+
 9. [Whisper Integration](#whisper-integration)
+
 10. [Stable Diffusion Integration](#stable-diffusion-integration)
 
 ---
@@ -1842,14 +1850,19 @@ set_preview_callback(None)
 **`SampleMethod`**
 
 - `EULER`, `EULER_A`, `HEUN`, `DPM2`, `DPMPP2S_A`, `DPMPP2M`, `DPMPP2Mv2`
+
 - `IPNDM`, `IPNDM_V`, `LCM`, `DDIM_TRAILING`, `TCD`
+
 - `RES_MULTISTEP`, `RES_2S`, `ER_SDE`
+
 - `COUNT` (auto-detect sentinel)
 
 **`Scheduler`**
 
 - `DISCRETE`, `KARRAS`, `EXPONENTIAL`, `AYS`, `GITS`
+
 - `SGM_UNIFORM`, `SIMPLE`, `SMOOTHSTEP`, `KL_OPTIMAL`, `LCM`, `BONG_TANGENT`
+
 - `COUNT` (auto-detect sentinel)
 
 **`Prediction`**
@@ -1859,8 +1872,11 @@ set_preview_callback(None)
 **`SDType`**: Data types for model weights / quantization
 
 - `F32`, `F16`, `BF16`
+
 - `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`
+
 - `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K`
+
 - `COUNT` (auto-detect sentinel)
 
 **`RngType`**: `STD_DEFAULT`, `CUDA`, `CPU`
@@ -1874,8 +1890,11 @@ set_preview_callback(None)
 **`HiresUpscaler`**: hires-fix upscaler modes
 
 - `NONE`
+
 - `LATENT`, `LATENT_NEAREST`, `LATENT_NEAREST_EXACT`, `LATENT_ANTIALIASED`, `LATENT_BICUBIC`, `LATENT_BICUBIC_ANTIALIASED`
+
 - `LANCZOS`, `NEAREST`
+
 - `MODEL` (external upscaler model — set `hires_model_path`)
 
 ### Utility Functions
@@ -2085,5 +2104,4 @@ for chunk in complete("Write a long essay", model_path="model.gguf",
 
 ---
 
-**Last Updated**: April 2026
-**Inferna Version**: 0.2.11
+**Last Updated**: April 2026 **Inferna Version**: 0.2.11
