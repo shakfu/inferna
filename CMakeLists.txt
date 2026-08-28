@@ -439,6 +439,14 @@ else()
         message(STATUS "  Static lib (embedded server): ${LIB_CPP_HTTPLIB}")
     endif()
 
+    # vendor-hash: mtmd calls hash_sha256_hex() from it as of llama.cpp v0.3.0.
+    # Optional so older pins, which have no vendor/hash target, still link.
+    static_lib(LIB_VENDOR_HASH "${LLAMACPP_LIB}" "vendor-hash")
+    if(EXISTS "${LIB_VENDOR_HASH}")
+        list(APPEND STATIC_LIBS "${LIB_VENDOR_HASH}")
+        message(STATUS "  Static lib (mtmd hashing): ${LIB_VENDOR_HASH}")
+    endif()
+
     # Backend-specific static libraries
     if(GGML_METAL)
         static_lib(LIB_GGML_BLAS "${LLAMACPP_LIB}" "ggml-blas")

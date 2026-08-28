@@ -54,10 +54,9 @@ using namespace nb::literals;
 //
 // sd.cpp master-800 replaced the `auto_resize_ref_image` / `increase_ref_index`
 // booleans in sd_img_gen_params_t with a single key=value string,
-// `ref_image_args`. inferna's pin has to straddle that boundary: the shared-ggml
-// dynamic builds (every GPU wheel) are held at master-775 because master-817
-// depends on ggml ops that exist only in leejet's ggml fork, and that fork is
-// swapped out for llama.cpp's ggml in those builds (see SDCPP_VERSION in
+// `ref_image_args`. The default pin (master-816) is on the new side, but
+// SDCPP_VERSION is overridable and capped at master-816 for the shared-ggml
+// dynamic builds, so both forms stay reachable (see SDCPP_VERSION in
 // scripts/manage.py).
 //
 // Rather than pin the binding to one side, detect which form the header

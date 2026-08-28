@@ -425,7 +425,7 @@ class McpClient:
                 "capabilities": {
                     "roots": {"listChanged": False},
                 },
-                "clientInfo": {"name": "inferna", "version": "0.1.11"},
+                "clientInfo": {"name": "inferna", "version": "0.1.12"},
             },
         )
         logger.info("MCP server '%s' initialized: %s", name, result.get("serverInfo", {}))

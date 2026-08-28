@@ -155,7 +155,7 @@ class ACPAgent:
     Agent Client Protocol over stdio.
     """
 
-    VERSION = "0.1.11"
+    VERSION = "0.1.12"
 
     def __init__(
         self,

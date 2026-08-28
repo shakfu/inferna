@@ -22,6 +22,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.1.12]
+
+### Added
+
+- **Live HTTP tests for the server** (`tests/test_server_live_http.py`) -- the existing 87 server tests are in-process: config round-trips, mocked slots, and the web UI snapshot checked as gzip blobs against the route table. Two start `EmbeddedServer` on a real socket, then sleep and stop it without sending a request, so nothing covered the wire. The new file runs the shipped CLI as a subprocess and asserts over TCP: the JSON and web UI routes with their content types, an SSE stream that delivers deltas and terminates with `[DONE]`, the cache-busting query `index.html` actually requests, and a SIGINT shutdown whose log carries no `GGML_ASSERT` and no nanobind leak report.
+
+### Changed
+
+- **llama.cpp sync to `b10621`** -- bumped `LLAMACPP_VERSION` in `scripts/manage.py` (`b10369` -> `b10621`). Upstream moved mtmd's image-id hashing into a new `vendor/hash` target: `mtmd_helper_bitmap_init_from_buf` now calls `hash_sha256_hex`, which lives in `libvendor-hash.a` and in no library the wrapper already linked, so `_llama_native` failed to link with an undefined symbol. `LlamaCppBuilder.build()` now copies that archive alongside `cpp-httplib`, and `CMakeLists.txt` appends it to `STATIC_LIBS` when present. Both are conditional, so an older `LLAMACPP_VERSION` override (no `vendor/hash` target) still builds.
+
+  The pin is the `bNNNNN` nightly tag, not the `v0.3.0` semver tag upstream cut on the same commit (`c1d0e7a`). Only the nightly tags carry prebuilt binary assets, and `download_release()` -- every dynamic GPU wheel -- builds its URL from `LLAMACPP_VERSION`, so a `vN.N.N` pin 404s.
+
+- **stable-diffusion.cpp sync to `master-816-487de75`** -- bumped `SDCPP_VERSION` in `scripts/manage.py` (`master-775-b5d8120` -> `master-816-487de75`). `master-816` is the commit before `master-817-bcc7e29`, so it is the newest pin still under the shared-ggml ceiling; no SD source at this revision references a ggml symbol absent from llama.cpp's ggml. `inferna.sd.SUPPORTS_REF_IMAGE_ARGS` is `True` again, since the pin is now past `master-800`.
+
+### Fixed
+
+- **The sd.cpp pin guard failed on any bump, not just an unsafe one** -- `test_sd_pin_is_compatible_with_shared_ggml` asserted `SDCPP_VERSION` equalled one literal string, so it rejected every pin below the ceiling it was written to defend. It now parses the `master-<n>` counter and requires `n < 817`.
+
 ## [0.1.11]
 
 ### Added

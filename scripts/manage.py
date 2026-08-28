@@ -169,7 +169,11 @@ PY_VER_MINOR = sys.version_info.minor
 # LLAMACPP_VERSION=master) if you need to test against a newer revision.
 # (Previously gated behind a STABLE_BUILD flag whose two branches carried
 # identical values — the flag was a no-op.)
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b10369") # from: b9979
+# Pin the bNNNNN nightly tag, not the semver tag it duplicates: upstream
+# publishes the prebuilt binary assets only under bNNNNN, so `download_release()`
+# (every dynamic GPU wheel) 404s on a vN.N.N pin. b10621 and v0.3.0 are the same
+# commit, c1d0e7a.
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b10621") # from: b10369
 WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.2") # from: v1.9.1
 
 # As of upstream b9352 llama.cpp no longer ships a prebuilt server SPA under
@@ -200,9 +204,9 @@ LLAMACPP_WEBUI_HF_BASE = "https://huggingface.co/buckets/ggml-org/llama-ui/resol
 # Files the upstream index.html hard-references. If a future pin drops one we
 # want to fail loudly rather than ship a broken UI.
 LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html")
-# CEILING: master-775-b5d8120 is the newest sd.cpp pin compatible with the
+# CEILING: master-816-487de75 is the newest sd.cpp pin compatible with the
 # shared-ggml dynamic builds (SD_USE_VENDORED_GGML=0, i.e. every GPU wheel).
-# sd.cpp vendors leejet's ggml *fork*, not upstream ggml. Up to master-775 the
+# sd.cpp vendors leejet's ggml *fork*, not upstream ggml. Up to master-816 the
 # fork stayed within the upstream ggml API, so `_sync_ggml_abi()` could swap in
 # llama.cpp's ggml and everything still compiled. master-817-bcc7e29
 # ("feat: support INT8 ConvRot safetensors", leejet/stable-diffusion.cpp#1857)
@@ -211,14 +215,14 @@ LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html"
 # and not in llama.cpp's ggml at any version. Under --dynamic the sync deletes
 # the fork, so all four GPU jobs fail to compile.
 #
-# Moving past master-775 therefore means giving up the one-ggml-per-process
+# Moving past master-816 therefore means giving up the one-ggml-per-process
 # model: SD would have to statically link its vendored fork alongside
 # llama.cpp's shared ggml, which is exactly the divergence `_sync_ggml_abi()`
 # exists to prevent (mismatched ggml_op/ggml_type ids, duplicate backend
 # registration). That needs per-backend runtime validation, not just a green
 # build. Static/vendored builds are unaffected and could take a newer pin, but
 # the version is global, so the ceiling is set by the dynamic path.
-SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-775-b5d8120") # from master-817-bcc7e29
+SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-816-487de75") # from master-775-b5d8120
 SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "1.0.0")
 
 # ---------------------------------------------------------------------------
@@ -1542,6 +1546,9 @@ class LlamaCppBuilder(GgmlBuilder):
         # Copy core libraries from build directory (platform-aware)
         self.copy_lib(self.build_dir, "common", "llama-common", self.lib)
         self.copy_lib(self.build_dir, "vendor/cpp-httplib", "cpp-httplib", self.lib, required=False)
+        # vendor-hash: mtmd calls hash_sha256_hex() from it as of v0.3.0.
+        # Optional so older LLAMACPP_VERSION pins (no vendor/hash) still build.
+        self.copy_lib(self.build_dir, "vendor/hash", "vendor-hash", self.lib, required=False)
         self.copy_lib(self.build_dir, "src", "llama", self.lib)
         self.copy_lib(self.build_dir, "ggml/src", "ggml", self.lib)
         self.copy_lib(self.build_dir, "ggml/src", "ggml-base", self.lib)

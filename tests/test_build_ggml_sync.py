@@ -15,6 +15,7 @@ cloning or building anything.
 """
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -150,6 +151,11 @@ def test_sync_is_skipped_when_llama_ggml_is_absent(builder):
     assert state(builder) == VENDORED
 
 
+# First sd.cpp master counter that calls fork-only ggml ops (INT8 ConvRot,
+# leejet/stable-diffusion.cpp#1857). See the CEILING comment in manage.py.
+SDCPP_FIRST_BROKEN_MASTER = 817
+
+
 def test_sd_pin_is_compatible_with_shared_ggml():
     """Guard the pin ceiling documented next to SDCPP_VERSION.
 
@@ -157,4 +163,9 @@ def test_sd_pin_is_compatible_with_shared_ggml():
     leejet's ggml fork, so it cannot be built with llama.cpp's ggml swapped in.
     Bumping past the ceiling breaks every dynamic GPU wheel build.
     """
-    assert manage.SDCPP_VERSION == "master-775-b5d8120"
+    match = re.fullmatch(r"master-(\d+)-[0-9a-f]+", manage.SDCPP_VERSION)
+    assert match, (
+        f"SDCPP_VERSION {manage.SDCPP_VERSION!r} is not a master-<n>-<sha> pin; "
+        "re-check it against the shared-ggml ceiling by hand."
+    )
+    assert int(match.group(1)) < SDCPP_FIRST_BROKEN_MASTER
