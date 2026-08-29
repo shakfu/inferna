@@ -63,7 +63,7 @@ These are deliberately excluded as they serve niche hardware. If demand arises, 
 | `LLAMA_BUILD_EXAMPLES` | `False` | `False` (inherited) | ON | No need for example binaries. |
 | `GGML_OPENMP` | ON (disable with `--no-openmp` or `GGML_OPENMP=0`) | Not set (ON) | ON | Forwarded to all three builders. `CMakeLists.txt` does `find_package(OpenMP)` on Linux. |
 | `GGML_BACKEND_DL` | Not set (OFF) | Not set (OFF) | OFF | Dynamic backend loading at runtime. Not used. |
-| `SD_USE_VENDORED_GGML` | `0` (dynamic targets) | `0` (dynamic) / `1` (static) | ON | When `0`, SD shares llama.cpp's ggml dylibs instead of statically embedding them. Requires `GGML_MAX_NAME=128` propagation; see `docs/dev/ggml-unification.md`. |
+| `SD_USE_VENDORED_GGML` | `0` (dynamic targets) | `0` (dynamic) / `1` (static) | ON | When `0`, SD shares llama.cpp's ggml dylibs instead of statically embedding them. Requires propagating stable-diffusion.cpp's `GGML_MAX_NAME` to the llama.cpp and whisper.cpp builds (`StableDiffusionCppBuilder.GGML_MAX_NAME` in `scripts/manage.py`). |
 
 ### CUDA-Specific Options
 
@@ -110,7 +110,7 @@ These are set in `manage.py:LlamaCppBuilder.build()` and do not appear in upstre
 
 The `--dynamic` flag changes Phase 1 behavior:
 
-1. **If `SD_USE_VENDORED_GGML=0`**, always build from source with `BUILD_SHARED_LIBS=ON`. Upstream pre-built releases are skipped because they're compiled with the default `GGML_MAX_NAME=64`, which is ABI-incompatible with stable-diffusion.cpp's required `GGML_MAX_NAME=128`. Building from source lets `manage.py` inject the correct define via `CMAKE_C_FLAGS`. See `docs/dev/ggml_max_name.md`.
+1. **If `SD_USE_VENDORED_GGML=0`**, always build from source with `BUILD_SHARED_LIBS=ON`. Upstream pre-built releases are skipped because they're compiled with the default `GGML_MAX_NAME=64`, which is ABI-incompatible with the value stable-diffusion.cpp sets. Building from source lets `manage.py` inject the correct define via `CMAKE_C_FLAGS`; `StableDiffusionCppBuilder._verify_ggml_max_name()` fails the build if the pin and upstream disagree.
 
 2. **Otherwise, if a pre-built release asset exists** for the platform/backend combo, it downloads that archive (DLLs/`.so`/`.dylib` files) from llama.cpp GitHub releases.
 

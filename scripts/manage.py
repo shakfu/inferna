@@ -68,6 +68,7 @@ Environment variables:
 
 import argparse
 import cProfile
+import hashlib
 import logging
 import os
 import platform
@@ -683,6 +684,50 @@ class ShellCmd:
             self.cmd("brew update")
         self.cmd(f"brew install {_pkgs}")
 
+    # Name of the file recording the configure arguments a build dir was
+    # generated from. Lives inside the build dir, so wiping the dir takes it.
+    CMAKE_ARGS_STAMP = ".cmake-configure-args"
+
+    @staticmethod
+    def _cmake_value(v: Union[str, bool, int]) -> Union[str, int]:
+        """Convert a Python option value to its CMake spelling."""
+        if isinstance(v, bool):
+            return "ON" if v else "OFF"
+        return v
+
+    def _invalidate_stale_build_dir(
+        self,
+        build_dir: Path,
+        signature: str,
+    ) -> None:
+        """Wipe `build_dir` when it was generated from different arguments.
+
+        A CMake cache persists across configures and a re-configure only
+        overwrites the entries it is handed; options dropped from the command
+        line keep their old values. `build()` and `build_shared()` share one
+        build dir per builder, and `build_shared()` sets `GGML_BACKEND_DL=ON`
+        that `build()` never clears, so a dynamic build followed by a static one
+        reconfigures a `GGML_BACKEND_DL=ON` cache with `BUILD_SHARED_LIBS=OFF`
+        and ggml fails outright: "GGML_BACKEND_DL requires BUILD_SHARED_LIBS".
+
+        The signature covers the whole option set rather than a link-mode flag,
+        because link mode is not what poisons the cache -- `GGML_BACKEND_DL` is,
+        and it only co-varies with link mode today. Any future option that
+        diverges between the two paths is caught without another special case.
+
+        A build dir with a cache but no stamp predates this check, so its
+        arguments are unknown and it is discarded rather than trusted. That
+        costs one full rebuild per builder, once.
+        """
+        stamp = build_dir / self.CMAKE_ARGS_STAMP
+        if not (build_dir / "CMakeCache.txt").exists():
+            return
+        if stamp.exists() and stamp.read_text() == signature:
+            return
+        reason = "configure arguments changed" if stamp.exists() else "no argument stamp (predates this check)"
+        self.log.info(f"discarding {build_dir}: {reason}")
+        shutil.rmtree(build_dir)
+
     def cmake_config(
         self,
         src_dir: Pathlike,
@@ -695,19 +740,29 @@ class ShellCmd:
         build_dir = Path(build_dir)
         if not src_dir.exists():
             raise FileNotFoundError(f"CMake source directory not found: {src_dir}")
+
+        # Hash the resolved arguments, not the command string: the latter
+        # carries absolute paths that are stable per machine anyway, and the
+        # dict form normalises bools through the same conversion cmake sees.
+        signature = hashlib.sha256(
+            repr(
+                (
+                    str(src_dir.resolve()),
+                    tuple(scripts),
+                    tuple(sorted((k, self._cmake_value(v)) for k, v in options.items())),
+                )
+            ).encode()
+        ).hexdigest()
+        self._invalidate_stale_build_dir(build_dir, signature)
+
         build_dir.mkdir(parents=True, exist_ok=True)
         _cmds = [f"cmake -S {src_dir} -B {build_dir}"]
         if scripts:
             _cmds.append(" ".join(f"-C {path}" for path in scripts))
         if options:
-            # Convert Python bools to CMake ON/OFF
-            def cmake_value(v: Union[str, bool, int]) -> Union[str, int]:
-                if isinstance(v, bool):
-                    return "ON" if v else "OFF"
-                return v
 
             def cmake_flag(k: str, v: Union[str, bool, int]) -> str:
-                val = cmake_value(v)
+                val = self._cmake_value(v)
                 # Quote values containing semicolons (e.g. architecture lists)
                 if isinstance(val, str) and ";" in val:
                     return f'-D{k}="{val}"'
@@ -715,6 +770,9 @@ class ShellCmd:
 
             _cmds.append(" ".join(cmake_flag(k, v) for k, v in options.items()))
         self.cmd(" ".join(_cmds))
+        # Only after a successful configure: a failed one leaves a partial
+        # cache that must not be mistaken for a match on the next run.
+        (build_dir / self.CMAKE_ARGS_STAMP).write_text(signature)
 
     def cmake_build(self, build_dir: Pathlike, release: bool = False) -> None:
         """activate cmake build stage"""
@@ -1283,6 +1341,77 @@ class GgmlBuilder(Builder):
             options["GGML_OPENMP"] = "ON" if openmp == "1" else "OFF"
             self.log.info(f"  GGML_OPENMP={options['GGML_OPENMP']}")
 
+    def _ggml_max_name_flags(self) -> dict[str, str]:
+        """CMAKE_{C,CXX}_FLAGS carrying SD's GGML_MAX_NAME, or {} when unused.
+
+        Only meaningful when SD shares llama.cpp's ggml; see the note on
+        `StableDiffusionCppBuilder.GGML_MAX_NAME` for what a mismatch does to
+        `struct ggml_tensor`.
+
+        `-DCMAKE_CXX_FLAGS=...` on the command line *replaces* the cache entry
+        CMake would otherwise initialise, so on Windows the MSVC defaults have
+        to be restated or they are lost -- dropping `/EHsc` and building
+        llama.cpp, whisper.cpp and SD (all of which throw) without an exception
+        model. Neither upstream sets `/EHsc` itself; both rely on CMake's init.
+        """
+        if not StableDiffusionCppBuilder.uses_shared_ggml():
+            return {}
+        _def = f"-DGGML_MAX_NAME={StableDiffusionCppBuilder.GGML_MAX_NAME}"
+        if PLATFORM == "Windows":
+            # cmake/Modules/Platform/Windows-MSVC.cmake, CMake >= 3.20.
+            return {
+                "CMAKE_C_FLAGS": f"/DWIN32 /D_WINDOWS {_def}",
+                "CMAKE_CXX_FLAGS": f"/DWIN32 /D_WINDOWS /EHsc {_def}",
+            }
+        return {"CMAKE_C_FLAGS": _def, "CMAKE_CXX_FLAGS": _def}
+
+    def _apply_source_patches(self) -> None:
+        """Apply local fixes to the vendored source before building.
+
+        Two sets of ``scripts/patches/*.patch`` files are applied (with ``-p1``,
+        a/ b/ prefixes) to the cloned source tree: ``ggml-*.patch``, which fix
+        the ggml copy that every ggml-backed project vendors, and
+        ``<project>-*.patch`` (e.g. ``stable-diffusion.cpp-*.patch``), which are
+        specific to one upstream. The tree is wiped and re-fetched by ``make
+        reset``/``remake``, so these must run on every build. Each patch is
+        applied idempotently and is self-disabling: if it is already applied, or
+        no longer applies (upstream merged an equivalent fix, or refactored the
+        context), it is skipped as a no-op. The ``.patch`` files are the single
+        source of truth and double as the upstream PR payload; see
+        ``scripts/patches/README.md`` for the rationale and upstream refs.
+        """
+        patch_dir = Path(__file__).resolve().parent / "patches"
+        patches = sorted(patch_dir.glob("ggml-*.patch")) + sorted(patch_dir.glob(f"{self.name}-*.patch"))
+        for patch in patches:
+            self._apply_patch(patch)
+
+    def _apply_patch(self, patch: Path) -> None:
+        """Apply a single unified diff to ``self.src_dir`` if it isn't already.
+
+        Uses ``git apply`` (which works with or without a git repo) and its
+        ``--check`` / ``--reverse --check`` dry-runs to decide between apply,
+        already-applied, and no-longer-applies -- without aborting the build in
+        the latter two cases (unlike ``self.cmd``).
+        """
+
+        def _git_apply(*flags: str) -> bool:
+            return (
+                subprocess.run(
+                    ["git", "apply", *flags, str(patch)],
+                    cwd=str(self.src_dir),
+                    capture_output=True,
+                ).returncode
+                == 0
+            )
+
+        if _git_apply("--check"):
+            subprocess.run(["git", "apply", str(patch)], cwd=str(self.src_dir), check=True)
+            self.log.info(f"applied patch: {patch.name}")
+        elif _git_apply("--reverse", "--check"):
+            self.log.debug(f"patch already applied, skipping: {patch.name}")
+        else:
+            self.log.info(f"patch no longer applies, skipping: {patch.name}")
+
 
 class LlamaCppBuilder(GgmlBuilder):
     """build llama.cpp"""
@@ -1513,6 +1642,7 @@ class LlamaCppBuilder(GgmlBuilder):
         else:
             self.verify_checkout()
         self.log.info(f"building {self.name}")
+        self._apply_source_patches()
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
         self._copy_headers()
@@ -1522,13 +1652,9 @@ class LlamaCppBuilder(GgmlBuilder):
         backend_options = self.get_backend_cmake_options()
 
         # When SD shares llama.cpp's ggml dylibs, the ggml_tensor struct
-        # layout must match.  SD requires GGML_MAX_NAME=128; propagate it
-        # to the llama.cpp build so both sides agree.
-        extra = {}
-        if StableDiffusionCppBuilder.uses_shared_ggml():
-            _def = f"-DGGML_MAX_NAME={StableDiffusionCppBuilder.GGML_MAX_NAME}"
-            extra["CMAKE_C_FLAGS"] = _def
-            extra["CMAKE_CXX_FLAGS"] = _def
+        # layout must match. Propagate SD's GGML_MAX_NAME to the llama.cpp
+        # build so both sides agree.
+        extra = self._ggml_max_name_flags()
 
         self.cmake_config(
             src_dir=self.src_dir,
@@ -1583,6 +1709,7 @@ class LlamaCppBuilder(GgmlBuilder):
         else:
             self.verify_checkout()
         self.log.info(f"building {self.name} (shared)")
+        self._apply_source_patches()
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
         self._copy_headers()
@@ -1595,19 +1722,27 @@ class LlamaCppBuilder(GgmlBuilder):
             backend_options["GGML_NATIVE"] = "OFF"
 
         # Match SD's GGML_MAX_NAME so ggml_tensor struct layout is identical
-        extra = {}
-        if StableDiffusionCppBuilder.uses_shared_ggml():
-            _def = f"-DGGML_MAX_NAME={StableDiffusionCppBuilder.GGML_MAX_NAME}"
-            extra["CMAKE_C_FLAGS"] = _def
-            extra["CMAKE_CXX_FLAGS"] = _def
+        extra = self._ggml_max_name_flags()
 
-        # macOS x86_64 + Vulkan: with GGML_BACKEND_DL=ON, ggml backends are
-        # built as CMake MODULE libs (MH_BUNDLE on Apple) which cannot be
-        # linked against at build time — the downstream inferna extensions
-        # link the backend dylibs directly, so we need MH_DYLIB output.
-        # Disable BACKEND_DL on this path to get proper SHARED dylibs.
+        # macOS: with GGML_BACKEND_DL=ON, ggml builds each backend as a CMake
+        # MODULE library, which on Apple is an MH_BUNDLE -- `ld` links only
+        # MH_OBJECT and MH_DYLIB. That is a property of the CMake target type
+        # and the Mach-O format, so it holds for every arch and every backend;
+        # the condition here previously named x86_64 and Vulkan, which
+        # described the one configuration someone had hit rather than the
+        # constraint, and arm64 + Metal failed the same way:
+        #
+        #   ld: unsupported mach-o filetype (only MH_OBJECT and MH_DYLIB can
+        #       be linked) in .../dynamic/libggml-metal.dylib
+        #
+        # Turning BACKEND_DL off is not a choice between dlopen'd and
+        # direct-linked backends on this path: the copy step below already
+        # globs the MODULE `.so` files (SHARED_LIB_GLOBS carries `**/*.so` on
+        # Darwin for exactly that) and renames them to `.dylib` so CMakeLists'
+        # dylib glob finds them, which puts them on the extension's link line
+        # either way. The only alternative is a build that does not link.
         use_backend_dl = True
-        if PLATFORM == "Darwin" and ARCH == "x86_64" and backend_options.get("GGML_VULKAN") == "ON":
+        if PLATFORM == "Darwin":
             use_backend_dl = False
 
         self.cmake_config(
@@ -2048,12 +2183,26 @@ class WhisperCppBuilder(GgmlBuilder):
         else:
             self.verify_checkout()
         self.log.info(f"building {self.name}")
+        self._apply_source_patches()
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
         self.glob_copy(self.src_dir / "examples", self.include, patterns=["*.h", "*.hpp"])
 
         # Get backend options
         backend_options = self.get_backend_cmake_options()
+
+        # whisper.cpp builds its own ggml, but only the macOS static build
+        # links it: everywhere else CMakeLists.txt takes the ggml libs from
+        # ${LLAMACPP_LIB}, so `libwhisper.a` and `libcommon.a` end up calling
+        # llama.cpp's ggml. That makes this the third tree that has to agree on
+        # GGML_MAX_NAME -- see the note on StableDiffusionCppBuilder for what a
+        # mismatch does to `struct ggml_tensor`. Whisper has been getting away
+        # with the default (64 against llama.cpp's 160) only because it never
+        # touches `extra`, the one field that moves; that is luck, not design.
+        # Passing it here also keeps the macOS whisper-own-ggml build
+        # self-consistent, since the define reaches whisper's ggml and its own
+        # translation units alike.
+        extra = self._ggml_max_name_flags()
 
         self.cmake_config(
             src_dir=self.src_dir,
@@ -2064,6 +2213,7 @@ class WhisperCppBuilder(GgmlBuilder):
             CMAKE_C_VISIBILITY_PRESET="hidden",
             CMAKE_VISIBILITY_INLINES_HIDDEN=True,
             CMAKE_INSTALL_LIBDIR="lib",  # Prevent lib64 on 64-bit Linux
+            **extra,
             **backend_options,
         )
         self.cmake_build(build_dir=self.build_dir, release=True)
@@ -2083,11 +2233,62 @@ class StableDiffusionCppBuilder(GgmlBuilder):
     base_libs: list[str] = ["stable-diffusion"]
     extra_libs: list[str] = []
 
-    # stable-diffusion.cpp requires GGML_MAX_NAME=128 (see its CMakeLists.txt:233
-    # and ggml_extend.hpp:94). llama.cpp defaults to 64. When SD shares
-    # llama.cpp's ggml dylibs (SD_USE_VENDORED_GGML=0), both sides must agree on
-    # this value or the ggml_tensor struct layout diverges and tensor copies crash.
-    GGML_MAX_NAME: int = 128
+    # stable-diffusion.cpp raises GGML_MAX_NAME (`add_definitions()` near the top
+    # of its CMakeLists.txt) because its tensor names are long. llama.cpp
+    # defaults to 64. When SD shares llama.cpp's ggml dylibs
+    # (SD_USE_VENDORED_GGML=0, which is every GPU build) both sides must be
+    # compiled with the *same* value: `name` is an inline `char[GGML_MAX_NAME]`
+    # in `struct ggml_tensor`, so a mismatch moves every field after it. `extra`
+    # is the field right after `name` and the last one, so SD writing
+    # `tensor->extra` lands past the end of the real struct -- on top of the
+    # following `ggml_object` header in the context arena. The graph-cut
+    # segmented path writes it on every segment boundary
+    # (`reset_segment_runtime_tensors`), which truncates the compute context's
+    # object list mid-run; with the params backend on the CPU it corrupts the
+    # malloc arena instead. Nothing warns: the headers are identical, only the
+    # -D differs.
+    #
+    # `_verify_ggml_max_name()` re-reads the value out of the cloned tree on
+    # every build, because this pin silently went stale once already: it sat at
+    # 128 while upstream had moved to 160.
+    GGML_MAX_NAME: int = 160
+
+    def _verify_ggml_max_name(self) -> None:
+        """Abort the build if upstream's GGML_MAX_NAME no longer matches the pin.
+
+        llama.cpp's ggml is configured with `GGML_MAX_NAME` *before* SD is even
+        cloned, so the value cannot simply be read from the source at that
+        point -- it has to be pinned. This check closes the loop from the other
+        side: once SD's tree is on disk, confirm the pin still describes it.
+        The failure mode it guards against is silent memory corruption, not a
+        compile error, so it fails the build rather than warning.
+        """
+        if not self.uses_shared_ggml():
+            return
+        cmakelists = self.src_dir / "CMakeLists.txt"
+        if not cmakelists.exists():
+            return
+        match = re.search(r"add_definitions\(\s*-DGGML_MAX_NAME=(\d+)\s*\)", cmakelists.read_text())
+        if match is None:
+            self.log.warning(
+                "%s: no GGML_MAX_NAME definition found in CMakeLists.txt; "
+                "assuming the pinned %d still matches llama.cpp's ggml",
+                self.name,
+                self.GGML_MAX_NAME,
+            )
+            return
+        upstream = int(match.group(1))
+        if upstream != self.GGML_MAX_NAME:
+            raise RuntimeError(
+                f"{self.name} {self.version} sets GGML_MAX_NAME={upstream}, but llama.cpp's ggml "
+                f"was built with {self.GGML_MAX_NAME}. Sharing one ggml across both requires the "
+                f"same value: it sizes `name` inside `struct ggml_tensor`, so a mismatch shifts "
+                f"`extra` and SD's writes to it land on the next ggml_object header (silent heap "
+                f"corruption, not a link error). Set "
+                f"StableDiffusionCppBuilder.GGML_MAX_NAME = {upstream} in scripts/manage.py and "
+                f"the matching add_definitions() in inferna's own CMakeLists.txt, then rebuild "
+                f"llama.cpp so its ggml picks up the new value."
+            )
 
     @staticmethod
     def uses_shared_ggml() -> bool:
@@ -2176,6 +2377,7 @@ class StableDiffusionCppBuilder(GgmlBuilder):
             "(SD_USE_VENDORED_GGML=0). SD's vendored ggml is parked in "
             "../.ggml-vendored.\n"
         )
+        self._drop_stale_build_dir("llama.cpp's ggml")
         self.log.info("Replaced SD's vendored ggml with llama.cpp's ggml for ABI compatibility")
 
     def _restore_vendored_ggml(self) -> None:
@@ -2199,7 +2401,26 @@ class StableDiffusionCppBuilder(GgmlBuilder):
 
         shutil.rmtree(self._ggml_dir)
         shutil.move(str(self._vendored_ggml_backup), str(self._ggml_dir))
+        self._drop_stale_build_dir("SD's vendored ggml")
         self.log.info("Restored SD's vendored ggml (was llama.cpp's from an earlier build)")
+
+    def _drop_stale_build_dir(self, now_holding: str) -> None:
+        """Discard SD's cmake build tree after the ggml sources are swapped.
+
+        The swap replaces `ggml/` wholesale, but `shutil.copytree` copies
+        mtimes along with the contents, so the incoming sources are not newer
+        than objects compiled from the tree that was just moved aside -- make
+        reuses them and links two ggml generations together. llama.cpp v0.3.0
+        split the Metal library per op-source, so an `ggml-metal-device.m.o`
+        left from a vendored build resolves `ggml_metallib_start` against a
+        tree that now only defines `ggml_metallib_<name>_start`, and SD fails
+        to link. Anything cmake generated from the old tree is suspect, so the
+        whole build dir goes rather than a hand-picked subset.
+        """
+        if not self.build_dir.exists():
+            return
+        shutil.rmtree(self.build_dir)
+        self.log.info(f"Dropped {self.build_dir} (built against a different ggml; now holding {now_holding})")
 
     def build(self, shared: bool = False, examples: bool = True) -> None:
         """stable-diffusion.cpp main build function"""
@@ -2216,9 +2437,16 @@ class StableDiffusionCppBuilder(GgmlBuilder):
         # statically, so syncing would overwrite the vendored source --
         # and if an earlier dynamic build already did, undo it.
         if self.uses_shared_ggml():
+            self._verify_ggml_max_name()
             self._sync_ggml_abi()
         else:
             self._restore_vendored_ggml()
+
+        # After the ggml swap, so the ggml-*.patch files land on whichever ggml
+        # this build will actually compile. The sd.cpp patches touch headers
+        # (`ggml_extend.hpp`, `conditioner.hpp`) that the glob_copy below
+        # installs, so this has to precede it too.
+        self._apply_source_patches()
 
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
@@ -2235,21 +2463,12 @@ class StableDiffusionCppBuilder(GgmlBuilder):
         # Get backend options
         backend_options = self.get_backend_cmake_options()
 
-        # MSVC caps a COFF object at 65,536 sections. As of upstream
-        # master-817, src/stable-diffusion.cpp (one very large TU, heavy on
-        # templates and inline model definitions) exceeds that and fails with
-        # `error C1128: number of sections exceeded object file format limit`.
-        # llama.cpp's own CMakeLists adds /bigobj for MSVC; sd.cpp's sets only
-        # /MP and /utf-8, so we supply it here. Windows builds in this project
-        # are always MSVC (see the vswhere/dumpbin paths above).
-        #
-        # Kept even though SDCPP_VERSION now sits below master-817: the flag
-        # only raises a limit, costs nothing at the current pin, and its
-        # absence is what broke Windows the last time the pin moved up.
-        extra: dict[str, str] = {}
-        if PLATFORM == "Windows":
-            extra["CMAKE_C_FLAGS"] = "/bigobj"
-            extra["CMAKE_CXX_FLAGS"] = "/bigobj"
+        # MSVC's /bigobj (src/stable-diffusion.cpp exceeds the COFF section
+        # limit) now comes from stable-diffusion.cpp-msvc-bigobj.patch, which
+        # adds it to upstream's own `if (MSVC)` block. Setting CMAKE_CXX_FLAGS
+        # here instead replaced the cache entry CMake initialises and silently
+        # dropped `/EHsc`, leaving a translation unit full of `throw` with no
+        # exception model.
 
         self.cmake_config(
             src_dir=self.src_dir,
@@ -2261,7 +2480,6 @@ class StableDiffusionCppBuilder(GgmlBuilder):
             CMAKE_VISIBILITY_INLINES_HIDDEN=True,
             CMAKE_INSTALL_LIBDIR="lib",  # Prevent lib64 on 64-bit Linux
             SD_BUILD_EXAMPLES=examples,
-            **extra,
             **backend_options,
         )
         self.cmake_build(build_dir=self.build_dir, release=True)
@@ -2833,16 +3051,17 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 assert isinstance(builder, LlamaCppBuilder)
                 asset = builder._release_asset_name()
                 # When SD shares llama.cpp's ggml, the shared libs must be
-                # built with GGML_MAX_NAME=128 so ggml_tensor's layout matches
+                # built with SD's GGML_MAX_NAME so ggml_tensor's layout matches
                 # what SD was compiled with. Upstream pre-built releases use
-                # the default GGML_MAX_NAME=64, so skip them and build from
-                # source to propagate the define.
+                # the default (64), so skip them and build from source to
+                # propagate the define.
                 if asset is None or StableDiffusionCppBuilder.uses_shared_ggml():
                     if asset is not None:
                         self.log.info(
                             "SD_USE_VENDORED_GGML=0: building llama.cpp from "
-                            "source to propagate GGML_MAX_NAME=128 (skipping "
-                            "upstream pre-built release)"
+                            f"source to propagate GGML_MAX_NAME="
+                            f"{StableDiffusionCppBuilder.GGML_MAX_NAME} "
+                            "(skipping upstream pre-built release)"
                         )
                     else:
                         self.log.warning(

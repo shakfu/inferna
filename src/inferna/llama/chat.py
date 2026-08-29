@@ -142,9 +142,16 @@ class Chat:
                 self.vocab.n_vocab,
                 [(int(tok), float(bias)) for tok, bias in logit_bias.items()],
             )
-        if repeat_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0:
+        # penalty_last_n = -1 means "scan the whole context", but
+        # llama_sampler_init_penalties clamps a negative window to 0, its
+        # *disabled* value; resolve it against n_ctx first.
+        if (repeat_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0) and penalty_last_n != 0:
             self.sampler.add_penalties(
-                self.vocab.n_vocab, penalty_last_n, repeat_penalty, frequency_penalty, presence_penalty
+                self.vocab.n_vocab,
+                n_ctx if penalty_last_n < 0 else penalty_last_n,
+                repeat_penalty,
+                frequency_penalty,
+                presence_penalty,
             )
         if mirostat != 0:
             self.sampler.add_temp(temperature)

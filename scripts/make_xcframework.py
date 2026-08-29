@@ -302,8 +302,8 @@ def _build_shared_cmake(
         "-DBUILD_SHARED_LIBS=ON",
         "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
         "-DGGML_NATIVE=OFF",
-        "-DCMAKE_C_FLAGS=-DGGML_MAX_NAME=128",
-        "-DCMAKE_CXX_FLAGS=-DGGML_MAX_NAME=128",
+        "-DCMAKE_C_FLAGS=-DGGML_MAX_NAME=160",
+        "-DCMAKE_CXX_FLAGS=-DGGML_MAX_NAME=160",
         f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MIN_MACOS}",
         *extra_cmake,
     ]

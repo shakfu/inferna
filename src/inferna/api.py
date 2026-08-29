@@ -1370,10 +1370,20 @@ class LLM:
         # Penalties: applied before the sampling tail. Skip the call entirely
         # when all three knobs are at their disabled values to avoid an
         # unnecessary chain stage.
-        if config.repeat_penalty != 1.0 or config.frequency_penalty != 0.0 or config.presence_penalty != 0.0:
+        #
+        # `penalty_last_n = -1` documents "scan the whole context", but
+        # llama_sampler_init_penalties clamps a negative window to 0, which is
+        # its *disabled* value. Upstream resolved -1 one layer up in
+        # common/sampling.cpp, which inferna does not link. Resolve it here,
+        # where the context size is known. `_ensure_context` runs before
+        # `_ensure_sampler`, so `_ctx_size` is set.
+        context_window = self._ctx_size or self.model.n_ctx_train
+        if (
+            config.repeat_penalty != 1.0 or config.frequency_penalty != 0.0 or config.presence_penalty != 0.0
+        ) and config.penalty_last_n != 0:
             sampler.add_penalties(
                 self.vocab.n_vocab,
-                config.penalty_last_n,
+                context_window if config.penalty_last_n < 0 else config.penalty_last_n,
                 config.repeat_penalty,
                 config.frequency_penalty,
                 config.presence_penalty,

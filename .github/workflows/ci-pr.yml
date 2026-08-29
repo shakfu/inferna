@@ -70,7 +70,7 @@ jobs:
         if: steps.cache-model.outputs.cache-hit != 'true'
         run: |
           mkdir -p models
-          curl -sL https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf \
+          curl -fsSL --retry 3 --retry-all-errors https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf \
             -o models/Llama-3.2-1B-Instruct-Q8_0.gguf
 
       - name: Smoke test - imports

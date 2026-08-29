@@ -286,10 +286,16 @@ class BatchGenerator:
                 [(int(tok), float(bias)) for tok, bias in config.logit_bias.items()],
             )
 
-        if config.repeat_penalty != 1.0 or config.frequency_penalty != 0.0 or config.presence_penalty != 0.0:
+        # penalty_last_n = -1 means "scan the whole context", but
+        # llama_sampler_init_penalties clamps a negative window to 0, its
+        # *disabled* value. Resolve it against the context size here; see the
+        # same resolution in LLM._ensure_sampler.
+        if (
+            config.repeat_penalty != 1.0 or config.frequency_penalty != 0.0 or config.presence_penalty != 0.0
+        ) and config.penalty_last_n != 0:
             sampler.add_penalties(
                 self.vocab.n_vocab,
-                config.penalty_last_n,
+                self.n_ctx if config.penalty_last_n < 0 else config.penalty_last_n,
                 config.repeat_penalty,
                 config.frequency_penalty,
                 config.presence_penalty,
