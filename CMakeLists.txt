@@ -441,9 +441,11 @@ else()
 
     # vendor-hash: mtmd calls hash_sha256_hex() from it as of llama.cpp v0.3.0.
     # Optional so older pins, which have no vendor/hash target, still link.
+    set(MTMD_EXTRA_LIBS "")
     static_lib(LIB_VENDOR_HASH "${LLAMACPP_LIB}" "vendor-hash")
     if(EXISTS "${LIB_VENDOR_HASH}")
         list(APPEND STATIC_LIBS "${LIB_VENDOR_HASH}")
+        list(APPEND MTMD_EXTRA_LIBS "${LIB_VENDOR_HASH}")
         message(STATUS "  Static lib (mtmd hashing): ${LIB_VENDOR_HASH}")
     endif()
 
@@ -701,7 +703,7 @@ elseif(UNIX AND NOT APPLE)
     # _GGML_LIBS is built once in the static-linking block above.
     target_link_libraries(_llama_native PRIVATE
         -Wl,--whole-archive ${_GGML_LIBS} -Wl,--no-whole-archive
-        ${LIB_LLAMA} ${LIB_MTMD}
+        ${LIB_LLAMA} ${LIB_MTMD} ${MTMD_EXTRA_LIBS}
         ${SYSTEM_LIBS}
     )
 else()

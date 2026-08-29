@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Linux abi3 wheels failed to import**: `_llama_native.abi3.so` carried an undefined `hash_sha256_hex(void const*, unsigned long)`. `libvendor-hash.a` was appended to `STATIC_LIBS`, but `_llama_native` on Linux does not link `STATIC_LIBS` -- it has its own `target_link_libraries` call that whole-archives ggml and then names `llama` and `mtmd` explicitly, so the archive holding the symbol was never on the link line. ELF shared objects allow undefined symbols, so the link succeeded and the failure moved to `dlopen`; macOS and Windows take the `STATIC_LIBS` branch and were unaffected. The vendor-hash block now also exports `MTMD_EXTRA_LIBS`, which the Linux branch appends after `mtmd`.
+
 ## [0.1.12]
 
 ### Added
