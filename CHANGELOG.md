@@ -26,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **Linux abi3 wheels failed to import**: `_llama_native.abi3.so` carried an undefined `hash_sha256_hex(void const*, unsigned long)`. `libvendor-hash.a` was appended to `STATIC_LIBS`, but `_llama_native` on Linux does not link `STATIC_LIBS` -- it has its own `target_link_libraries` call that whole-archives ggml and then names `llama` and `mtmd` explicitly, so the archive holding the symbol was never on the link line. ELF shared objects allow undefined symbols, so the link succeeded and the failure moved to `dlopen`; macOS and Windows take the `STATIC_LIBS` branch and were unaffected. The vendor-hash block now also exports `MTMD_EXTRA_LIBS`, which the Linux branch appends after `mtmd`.
 
+- **Linux Vulkan wheel build broke on a floating shaderc**: `_ci_build_shaderc()` cloned `google/shaderc` at `main`, so every CI run picked up whatever glslang `git-sync-deps` resolved that day. glslang `eaff806e` (2026-08-24) began emitting the `LocalSizeId` execution mode for any shader declaring `local_size_*_id` when targeting SPIR-V >= 1.2. llama.cpp compiles its Vulkan shaders with `--target-env=vulkan1.2` and 46 of its 140 shaders declare `local_size_x_id`, so spirv-opt's validator rejected the first one it reached (`argmax_f32`): LocalSizeId requires Vulkan 1.3 or the `maintenance4` feature. New `SHADERC_VERSION` constant pins the clone to `v2026.3`, whose glslang revision predates the change. Pinning shaderc rather than patching llama.cpp's `--target-env` keeps the toolchain reproducible and matches upstream, which still targets vulkan1.2 on master.
+
 ## [0.1.12]
 
 ### Added

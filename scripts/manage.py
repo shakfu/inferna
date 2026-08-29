@@ -225,6 +225,17 @@ LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html"
 SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-816-487de75") # from master-775-b5d8120
 SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "1.0.0")
 
+# glslc for the Linux Vulkan wheel, built from source by `_ci_build_shaderc()`
+# because manylinux_2_28 has no glslc package. Pinned, not tracking main:
+# glslang eaff806e (2026-08-24, KhronosGroup/glslang#4052) started emitting the
+# LocalSizeId execution mode for any `local_size_*_id` shader targeting SPIR-V
+# >= 1.2. llama.cpp compiles its Vulkan shaders with --target-env=vulkan1.2, and
+# 46 of its 140 shaders declare local_size_x_id, so spirv-opt's validator now
+# rejects them ("LocalSizeId mode is not allowed by the current environment") --
+# LocalSizeId needs Vulkan 1.3 or the maintenance4 feature. v2026.3 pins glslang
+# 168d452a (2026-07-14), which predates that change.
+SHADERC_VERSION = os.getenv("SHADERC_VERSION", "v2026.3")
+
 # ---------------------------------------------------------------------------
 # Per-backend wheel-repair exclude lists.
 #
@@ -3365,14 +3376,23 @@ class Application(ShellCmd, metaclass=MetaCommander):
         """Build glslc + spirv-headers from source (Vulkan dep not in distro).
 
         manylinux_2_28 ships vulkan-headers/vulkan-loader-devel but no glslc;
-        upstream shaderc is the canonical source. Mirrors the inline shell
-        previously embedded in _gpu-build-vulkan-linux.yml.
+        upstream shaderc is the canonical source. Pinned to SHADERC_VERSION;
+        see that constant for why main is not usable.
         """
         shaderc_src = Path("/tmp/shaderc")
         spirv_build = Path("/tmp/spirv-headers-build")
         try:
             subprocess.check_call(
-                ["git", "clone", "--depth", "1", "https://github.com/google/shaderc.git", str(shaderc_src)]
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    SHADERC_VERSION,
+                    "https://github.com/google/shaderc.git",
+                    str(shaderc_src),
+                ]
             )
             subprocess.check_call(["python3", "utils/git-sync-deps"], cwd=str(shaderc_src))
             subprocess.check_call(
