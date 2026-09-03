@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- **A missing framework header failed only for the consumer** -- `_copy_headers` logged `warn: missing header` and continued, so a rename or removal in the pinned upstream still staged, linked and packaged an xcframework, and the error arrived when someone compiled against it. The list is hand-maintained against the pin, so it now fails the build, naming every missing header rather than one per run. Every header the four components list resolves against `b10621`, including the transitive includes of each.
+
+### Changed
+
+- **The xcframework umbrella dylibs link with `-headerpad_max_install_names`** -- cmake supplies it by default and a bare `clang` link does not, so any later `install_name_tool` rewrite into a longer `@rpath/<Framework>.framework/...` path has no room. No rewrite reaches an umbrella today: `_normalize_libs()` runs before `_build_umbrella()`, and the umbrella's install name and rpath are set at link time. cyllama hit the failure on a hand-linked dylib once that ordering changed; the pad costs a header page and removes it as a precondition.
+
 ## [0.2.0]
 
 Audit of inferna against the sibling cyllama project after its `0.4.1`, which traced a set of stable-diffusion failures to a stale build-time constant. Both projects share a `manage.py` lineage and the same upstream pins, and inferna carried the same defect: `GGML_MAX_NAME` sized `struct ggml_tensor` differently in stable-diffusion.cpp than in the ggml it links, in every GPU wheel, with no compile or link error. whisper.cpp turned out to be a third disagreeing tree. Local fixes to the vendored C++ sources are now applied as patches rather than absorbed in the wrapper -- see Added -- which covers two stable-diffusion runtime aborts and a Metal shader failure the wrapper cannot reach. Verifying all of it surfaced three more build-system bugs, each of which reuses artifacts across a configuration change; those are fixed here too.
