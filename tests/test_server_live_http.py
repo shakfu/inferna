@@ -109,7 +109,11 @@ def _spawn(model_path: str, log_path: Path):
         "--webui",
     ]
     log = open(log_path, "wb")
-    proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
+    # On Windows the child needs its own process group so the test can
+    # send it CTRL_BREAK_EVENT without the event also reaching pytest.
+    # See _interrupt_and_wait.
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT, creationflags=creationflags)
     return proc, f"http://127.0.0.1:{port}", log
 
 
@@ -131,16 +135,25 @@ def _await_ready(proc, base: str, log_path: Path) -> None:
 
 
 def _interrupt_and_wait(proc) -> int:
-    """Deliver SIGINT (what Ctrl+C sends) and wait for the process to exit."""
+    """Deliver the platform's Ctrl+C signal and wait for the process to exit.
+
+    Windows cannot deliver SIGINT to a specific child: Popen accepts only
+    CTRL_C_EVENT/CTRL_BREAK_EVENT there, and CTRL_C_EVENT goes to the whole
+    console group, which would take pytest down with it. CTRL_BREAK_EVENT
+    targets just the child's group (_spawn gives it one via
+    CREATE_NEW_PROCESS_GROUP) and arrives as SIGBREAK, which the server
+    handles alongside SIGINT/SIGTERM. Same graceful path either way.
+    """
     if proc.poll() is not None:
         return proc.returncode
-    proc.send_signal(signal.SIGINT)
+    sig = signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGINT
+    proc.send_signal(sig)
     try:
         return proc.wait(timeout=SHUTDOWN_TIMEOUT)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=30)
-        pytest.fail(f"server did not exit within {SHUTDOWN_TIMEOUT}s of SIGINT")
+        pytest.fail(f"server did not exit within {SHUTDOWN_TIMEOUT}s of {sig!r}")
 
 
 @pytest.fixture(scope="module")
@@ -348,6 +361,13 @@ def test_shutdown_releases_native_state(model_path, tmp_path):
         log.close()
 
     output = log_path.read_text(errors="replace")
+    # Positive check first: every other assertion here is a "not in", which
+    # a process that died abruptly would also satisfy. SIGBREAK's default
+    # action on Windows is to terminate, so without this the test would pass
+    # vacuously the moment the server stopped handling the signal.
+    assert "Exiting on signal" in output, (
+        f"server did not shut down through its signal handler -- it was killed outright:\n{output[-2000:]}"
+    )
     assert "GGML_ASSERT" not in output, (
         f"ggml assertion fired during shutdown -- a native context outlived backend teardown:\n{output[-2000:]}"
     )

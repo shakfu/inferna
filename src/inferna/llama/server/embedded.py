@@ -250,6 +250,8 @@ class EmbeddedServer:
         # shutdown and tripping a Metal GGML_ASSERT (rsets not empty).
         self._prev_sigint: _SignalHandler = None
         self._prev_sigterm: _SignalHandler = None
+        # Windows only; None everywhere else. See _setup_signal_handlers.
+        self._prev_sigbreak: _SignalHandler = None
 
     # ------------------------------------------------------------------ props
 
@@ -331,7 +333,18 @@ class EmbeddedServer:
         # LlamaContext + LlamaSampler — until interpreter shutdown.
         self._prev_sigint = signal.signal(signal.SIGINT, self._signal_handler)
         self._prev_sigterm = signal.signal(signal.SIGTERM, self._signal_handler)
-        self._logger.debug("Signal handlers registered for SIGINT and SIGTERM")
+        registered = "SIGINT and SIGTERM"
+        # On Windows neither SIGINT nor SIGTERM can be delivered to this
+        # process by another one: CTRL_C_EVENT goes to the whole console
+        # group, and terminate() is a hard TerminateProcess that runs no
+        # handler. Ctrl+Break -- which arrives as SIGBREAK -- is the only
+        # signal a supervisor can target at us, so it is the sole route
+        # to a graceful shutdown there. SIGBREAK does not exist on POSIX.
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if sigbreak is not None:
+            self._prev_sigbreak = signal.signal(sigbreak, self._signal_handler)
+            registered = "SIGINT, SIGTERM and SIGBREAK"
+        self._logger.debug(f"Signal handlers registered for {registered}")
 
     def _restore_signal_handlers(self) -> None:
         # Only restore if we actually installed our handler. Calling
@@ -352,6 +365,12 @@ class EmbeddedServer:
             except (ValueError, TypeError):
                 pass
             self._prev_sigterm = None
+        if self._prev_sigbreak is not None:
+            try:
+                signal.signal(signal.SIGBREAK, self._prev_sigbreak)
+            except (ValueError, TypeError, AttributeError):
+                pass
+            self._prev_sigbreak = None
 
     # ------------------------------------------------------------- start/stop
 
