@@ -188,7 +188,8 @@ CLAUDE.md
 
 site/
 
-# wheel tester (scripts/rwt.py): the sd cases write their images into the
-# project root, and the backend shorthands put their venvs beside .venv.
+# wheel tester (scripts/rwt.py): the cases write into the project root, and the
+# backend shorthands put their venvs beside .venv.
 z_turbo_*.png
+vector.db
 .venv-*

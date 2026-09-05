@@ -202,9 +202,9 @@ class Env:
         "cuda": {"GGML_CUDA": "1"},
         "rocm": {"GGML_HIP": "1"},
         "sycl": {"GGML_SYCL": "1"},
-        # Same reasoning, plus: pin Vulkan to a specific device by default;
-        # override with GGML_VK_VISIBLE_DEVICES=... in the caller's env if needed.
-        "vulkan": {"GGML_VULKAN": "1", "GGML_VK_VISIBLE_DEVICES": "1"},
+        # Same reasoning. Vulkan's device pin is not here because it is not a
+        # constant: see _vulkan_discrete_device().
+        "vulkan": {"GGML_VULKAN": "1"},
     }
 
     _DETECT_SRC = """
@@ -393,10 +393,49 @@ for dist, backend in {distributions!r}.items():
                 continue
         return None
 
+    @staticmethod
+    def _vulkan_discrete_device() -> str | None:
+        """Index of the first discrete Vulkan GPU, or None if it cannot be told.
+
+        Vulkan enumerates every device the loader can see -- an integrated GPU, a
+        discrete one, and llvmpipe (a software rasteriser) all appear -- and the
+        order is the loader's, not a ranking. On this project's dev box the
+        discrete card is index 1, behind an integrated Radeon; elsewhere it is 0.
+        A hardcoded index is therefore wrong on some machine either way, and the
+        failure is quiet: the run succeeds on an iGPU at a fraction of the speed.
+
+        `vulkaninfo` is the only thing that can answer before ggml initialises,
+        which is when the filter has to be set. If it is not installed, return
+        None and leave the choice to ggml rather than guessing an index.
+        """
+        vulkaninfo = shutil.which("vulkaninfo")
+        if not vulkaninfo:
+            return None
+        try:
+            proc = subprocess.run([vulkaninfo, "--summary"], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        index: str | None = None
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            matched = re.fullmatch(r"GPU(\d+):", line)
+            if matched:
+                index = matched.group(1)
+            elif index is not None and line.startswith("deviceType"):
+                if line.endswith("PHYSICAL_DEVICE_TYPE_DISCRETE_GPU"):
+                    return index
+                index = None
+        return None
+
     def env_for(self, backend: str) -> dict[str, str]:
         """Return default env overrides for a backend, skipping keys the
         caller has already set in the surrounding environment."""
-        defaults = self.BACKEND_ENV_DEFAULTS.get(backend, {})
+        defaults = dict(self.BACKEND_ENV_DEFAULTS.get(backend, {}))
+        if backend == "vulkan" and "GGML_VK_VISIBLE_DEVICES" not in os.environ:
+            device = self._vulkan_discrete_device()
+            if device is not None:
+                print(f"vulkan: testing on discrete device {device}", flush=True)
+                defaults["GGML_VK_VISIBLE_DEVICES"] = device
         return {k: v for k, v in defaults.items() if k not in os.environ}
 
     def require_backend(self, requested: str | None) -> str:
@@ -757,9 +796,14 @@ class TestSuite:
         """
         return f"z_turbo_{n}.png"
 
+    def rag_db(self) -> Path:
+        """Vector store the persistent rag case builds. Named here for the same
+        reason as :meth:`sd_output`: `clean` sweeps it, and only what it writes."""
+        return self.env.paths.root / "vector.db"
+
     def outputs(self) -> list[Path]:
         """Every file the suite leaves in the project root."""
-        return [self.env.paths.root / self.sd_output(n) for n in sorted(self.families["sd"])]
+        return [self.env.paths.root / self.sd_output(n) for n in sorted(self.families["sd"])] + [self.rag_db()]
 
     def sd_1(self, backend: str, timeout: float | None) -> int:
         """z_turbo te-on-cpu."""
@@ -997,7 +1041,7 @@ class TestSuite:
         """persistent sqlite vector store (build + reopen)."""
         paths = self.models.ensure_models(ModelRegistry.RAG_REQUIREMENTS)
         corpus = self.models.ensure_corpus()
-        db = self.env.paths.root / "vector.db"
+        db = self.rag_db()
         if db.exists():
             db.unlink()  # start from nothing so the create path is covered
 
@@ -1132,7 +1176,7 @@ class MakefileRenderer:
         add('\t@echo "  Setup:"')
         add('\t@echo "    sync         - uv sync dependencies"')
         add('\t@echo "    info         - show inferna backend info"')
-        add('\t@echo "    clean        - remove .venv and any test images"')
+        add('\t@echo "    clean        - remove .venv and any files the tests wrote"')
         add('\t@echo "    reset        - clean + sync"')
         for b in backends:
             dist = self.env.BACKENDS[b]
@@ -1250,8 +1294,8 @@ class Cli:
         if venv.exists():
             print(f"removing {venv}")
             shutil.rmtree(venv)
-        # The sd cases write their images into the project root, so a run leaves
-        # z_turbo_*.png behind for the next `git status` to report.
+        # The cases run with the project root as cwd, so a run leaves z_turbo_*.png
+        # and vector.db behind there for the next `git status` to report.
         for out in self.suite.outputs():
             if out.exists():
                 print(f"removing {out}")
@@ -1603,7 +1647,7 @@ class Cli:
 
         sub.add_parser("info", help="show python/backend/models info").set_defaults(func=self.cmd_info)
         sub.add_parser("sync", help="uv sync project dependencies").set_defaults(func=self.cmd_sync)
-        sub.add_parser("clean", help="remove the venv and any images the sd tests left behind").set_defaults(
+        sub.add_parser("clean", help="remove the venv and any files the tests left behind").set_defaults(
             func=self.cmd_clean
         )
         sub.add_parser("reset", help="clean + sync").set_defaults(func=self.cmd_reset)

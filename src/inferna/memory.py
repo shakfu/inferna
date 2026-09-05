@@ -57,9 +57,12 @@ def get_file_host_endian(file_path: Union[str, Path]) -> Tuple[str, str]:
 def dump_metadata_json(model_path: Union[str, Path]) -> Dict[str, Any]:
     """Extract metadata from GGUF model file."""
     try:
-        from .llama.llama_cpp import LlamaModel, LlamaModelParams
+        from .llama.llama_cpp import LlamaModel, LlamaModelParams, ggml_backend_load_all
 
-        # Load model to extract metadata
+        # Load model to extract metadata. The backend load is required even for a
+        # metadata-only read: the wheels ship the CPU backend as a separate shared
+        # object too, so without it there is no device to load onto at all.
+        ggml_backend_load_all()
         params = LlamaModelParams()
         model = LlamaModel(str(model_path), params)
 

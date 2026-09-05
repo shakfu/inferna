@@ -286,8 +286,10 @@ class EmbeddedServer:
     def load_model(self) -> bool:
         try:
             self._logger.info(f"Loading model: {self._config.model_path}")
-            from ..llama_cpp import LlamaModel
+            from ..llama_cpp import LlamaModel, ggml_backend_load_all
 
+            # Backends live in separate shared objects in the published wheels; see Embedder.__init__.
+            ggml_backend_load_all()
             self._model = LlamaModel(path_model=self._config.model_path)
             self._slots = [ServerSlot(i, self._model, self._config) for i in range(self._config.n_parallel)]
             self._logger.info(f"Model loaded successfully with {len(self._slots)} slots")

@@ -17,6 +17,7 @@ from ..llama.llama_cpp import (
     LlamaModel,
     LlamaModelParams,
     disable_logging,
+    ggml_backend_load_all,
 )
 from .types import EmbeddingResult
 
@@ -190,6 +191,14 @@ class Embedder(EmbedderProtocol):
         if pooling.lower() not in pooling_map:
             raise ValueError(f"Invalid pooling type: {pooling}. Must be one of: {list(pooling_map.keys())}")
         self._pooling_type = pooling_map[pooling.lower()]
+
+        # Load backends. Required before any LlamaModel: the published wheels build
+        # ggml with backend-dl, so CUDA/Vulkan/... live in separate shared objects
+        # that nothing has opened yet, and llama.cpp reports the miss as a failure
+        # to load the *model* ("no backends are loaded"). A source build links them
+        # statically and works without this, which is why it survived so long.
+        # `LLM.__init__` does the same; the call is idempotent.
+        ggml_backend_load_all()
 
         # Load model
         model_params = LlamaModelParams()

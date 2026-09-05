@@ -381,8 +381,19 @@ class Reranker(RerankerProtocol):
     def _ensure_model(self) -> None:
         """Load model on first use."""
         if self._model is None:
-            from ..llama import LlamaModel, LlamaContext, LlamaModelParams, LlamaContextParams
+            # From llama_cpp, not the `..llama` package: its __getattr__ resolves only
+            # the CLI and server names, so `from ..llama import LlamaModel` has always
+            # raised ImportError here -- this method could never have run.
+            from ..llama.llama_cpp import (
+                LlamaModel,
+                LlamaContext,
+                LlamaModelParams,
+                LlamaContextParams,
+                ggml_backend_load_all,
+            )
 
+            # Backends live in separate shared objects in the published wheels; see Embedder.__init__.
+            ggml_backend_load_all()
             params = LlamaModelParams()
             params.n_gpu_layers = self.n_gpu_layers
 

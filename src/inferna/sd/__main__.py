@@ -209,6 +209,12 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
 
     # Memory/performance options. Upstream replaced the dedicated offload
     # struct fields with backend-assignment specs; translate accordingly.
+    #
+    # An explicit --params-backend is set first so apply_cpu_offload() prepends the
+    # boolean toggles to it rather than replacing it: the two are combinable, and a
+    # spec given by hand should survive them.
+    if getattr(args, "params_backend", None):
+        params.params_backend = args.params_backend
     params.apply_cpu_offload(
         offload_params=bool(getattr(args, "offload_to_cpu", False)),
         clip_on_cpu=bool(getattr(args, "clip_on_cpu", False)),
@@ -912,6 +918,15 @@ def add_common_memory_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--clip-on-cpu", dest="clip_on_cpu", action="store_true", help="Keep CLIP on CPU")
     parser.add_argument("--vae-on-cpu", dest="vae_on_cpu", action="store_true", help="Keep VAE on CPU")
     parser.add_argument("--control-net-cpu", dest="control_net_cpu", action="store_true", help="Keep ControlNet on CPU")
+    parser.add_argument(
+        "--params-backend",
+        dest="params_backend",
+        metavar="SPEC",
+        help="Where each module's weights live, as a comma-separated assignment spec "
+        '(e.g. "te=cpu", "*=cpu,vae=cuda0"). Unlike --clip-on-cpu and friends, which '
+        "move a module's computation, this moves only its parameters -- the module "
+        'still computes on the GPU. --offload-to-cpu is the shorthand for "*=cpu".',
+    )
     parser.add_argument(
         "--diffusion-fa", dest="diffusion_fa", action="store_true", help="Use flash attention in diffusion"
     )

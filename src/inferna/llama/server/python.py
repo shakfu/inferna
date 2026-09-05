@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 import uuid
 
 # Import our existing inferna bindings
-from ..llama_cpp import LlamaModel, LlamaContext, LlamaSampler, llama_batch_get_one
+from ..llama_cpp import LlamaModel, LlamaContext, LlamaSampler, ggml_backend_load_all, llama_batch_get_one
 
 
 class ChatRole(str, enum.Enum):
@@ -288,7 +288,8 @@ class PythonServer:
         try:
             self.logger.info(f"Loading model: {self.config.model_path}")
 
-            # Load model
+            # Load model. Backends live in separate shared objects in the published wheels; see Embedder.__init__.
+            ggml_backend_load_all()
             self.model = LlamaModel(path_model=self.config.model_path)
 
             # Create slots
