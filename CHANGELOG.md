@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.2.1]
+
 ### Added
 
 - **The wheel tester runs against a named venv instead of `uv run`** (`scripts/rwt.py --venv`) -- every subprocess now executes that interpreter directly. `uv run` re-syncs whichever project owns the cwd, so run from this checkout it rebuilt the extension from source and tested *that*, never the wheel; the one thing the script exists to check was the one thing it could not see. The backend shorthands (`--cpu` / `--metal` / `--cuda` / `--vulkan` / `--rocm` / `--sycl`) point `--venv` at `.venv-<backend>` and name the distribution to install, so `rwt.py install --cuda && rwt.py test --cuda test-all` needs nothing else; an explicit `--venv` wins, and against one the backend is detected from what it has installed. Passing no `--venv` restores the old `uv run` behaviour.
