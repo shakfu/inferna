@@ -187,3 +187,8 @@ cython_debug/
 CLAUDE.md
 
 site/
+
+# wheel tester (scripts/rwt.py): the sd cases write their images into the
+# project root, and the backend shorthands put their venvs beside .venv.
+z_turbo_*.png
+.venv-*

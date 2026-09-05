@@ -260,7 +260,7 @@ class TestThinkBlockStripperRealistic:
     """Shapes that match real Qwen3 / DeepSeek output."""
 
     def test_qwen3_summarize_shape(self):
-        """The exact failure shape from `scripts/case/rag-chat1.sh`:
+        """The exact failure shape from an interactive `inferna rag` session:
         Qwen3 emits its <think> block, then the actual answer. With
         the post-close-tag lstrip in place, the user sees the answer
         with no leading blank line."""
