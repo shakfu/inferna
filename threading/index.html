@@ -1512,8 +1512,7 @@
 
 <h1 id="threading-and-concurrency-in-inferna">Threading and concurrency in inferna<a class="headerlink" href="#threading-and-concurrency-in-inferna" title="Permanent link">&para;</a></h1>
 <blockquote>
-<p><strong>The rule:</strong> Always use one context per thread. Do not share the same context across threads.</p>
-<p>Applies to every <code>LLM</code>, <code>WhisperContext</code>, <code>SDContext</code>, and <code>Embedder</code> instance. inferna enforces this at runtime for all four — sharing one across threads raises a clear <code>RuntimeError</code> instead of silently corrupting state.</p>
+<p><strong>The rule:</strong> Always use one context per thread. Do not share the same context across threads. &gt; &gt; Applies to every <code>LLM</code>, <code>WhisperContext</code>, <code>SDContext</code>, and <code>Embedder</code> instance. inferna enforces this at runtime for all four — sharing one across threads raises a clear <code>RuntimeError</code> instead of silently corrupting state.</p>
 </blockquote>
 <p>This page is for users writing multi-threaded or async code with inferna. It covers:</p>
 <ul>
@@ -1530,7 +1529,7 @@
 <p>Async-specific guidance (<code>AsyncLLM</code>, <code>asyncio.to_thread</code>)</p>
 </li>
 <li>
-<p>Where to look if you want the design rationale (spoiler: <a href="dev/runtime-guard.md"><code>docs/dev/runtime-guard.md</code></a>)</p>
+<p>Where to look if you want the design rationale (spoiler: <a href="../dev/runtime-guard/"><code>docs/dev/runtime-guard.md</code></a>)</p>
 </li>
 </ul>
 <h2 id="whats-safe-to-share">What's safe to share<a class="headerlink" href="#whats-safe-to-share" title="Permanent link">&para;</a></h2>
@@ -1779,7 +1778,7 @@
 </code></pre></div>
 <p>Or, if all your workers are reading and you want a thread-pool pattern, give each worker its own long-lived <code>SqliteVectorStore</code> instance (analogous to the LLM <code>threading.local()</code> pattern above).</p>
 <h2 id="backend-specific-caveats">Backend-specific caveats<a class="headerlink" href="#backend-specific-caveats" title="Permanent link">&para;</a></h2>
-<p>Per the upstream llama.cpp maintainers (see <a href="dev/runtime-guard.md"><code>docs/dev/runtime-guard.md</code></a> for the citations), thread safety across <em>separate</em> contexts varies by backend:</p>
+<p>Per the upstream llama.cpp maintainers (see <a href="../dev/runtime-guard/"><code>docs/dev/runtime-guard.md</code></a> for the citations), thread safety across <em>separate</em> contexts varies by backend:</p>
 <ul>
 <li>
 <p><strong>CPU, Metal, CUDA</strong>: thread-safe across separate contexts. The "one LLM per worker" pattern works as expected.</p>
@@ -1789,7 +1788,7 @@
 </li>
 </ul>
 <h2 id="want-the-rationale">Want the rationale?<a class="headerlink" href="#want-the-rationale" title="Permanent link">&para;</a></h2>
-<p>This page is "what to do." For "why we did it this way" — the design analysis, the alternatives we rejected (strict thread-id matching, blocking lock / serialize, per-thread context pool, docs-only, fix-upstream), the upstream issue references that establish the contract, and the implementation details — see <a href="dev/runtime-guard.md"><code>docs/dev/runtime-guard.md</code></a>.</p>
+<p>This page is "what to do." For "why we did it this way" — the design analysis, the alternatives we rejected (strict thread-id matching, blocking lock / serialize, per-thread context pool, docs-only, fix-upstream), the upstream issue references that establish the contract, and the implementation details — see <a href="../dev/runtime-guard/"><code>docs/dev/runtime-guard.md</code></a>.</p>
 
 
 

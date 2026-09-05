@@ -1707,7 +1707,7 @@
 <h1 id="mcp-client">MCP Client<a class="headerlink" href="#mcp-client" title="Permanent link">&para;</a></h1>
 <p>inferna's <code>LLM</code> class can attach to one or more <a href="https://modelcontextprotocol.io">Model Context Protocol</a> servers and use their tools and resources during a chat-driven tool loop. The integration is a thin layer over <code>inferna.agents.mcp</code> and drives a text-based <code>ReActAgent</code>, so it works on any GGUF without requiring a model trained for OpenAI-style structured tool calls.</p>
 <blockquote>
-<p><strong>Scope.</strong> Only the <em>client</em> direction is exposed on <code>LLM</code> today — inferna consumes external MCP servers. The <em>server</em> direction (exposing inferna inference as MCP tools) is tracked as a design in <a href="dev/mcp.md"><code>docs/dev/mcp.md</code></a> and is not yet implemented.</p>
+<p><strong>Scope.</strong> Only the <em>client</em> direction is exposed on <code>LLM</code> today — inferna consumes external MCP servers. The <em>server</em> direction (exposing inferna inference as MCP tools) is tracked as a design in <a href="../dev/mcp/"><code>docs/dev/mcp.md</code></a> and is not yet implemented.</p>
 </blockquote>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">inferna</span><span class="w"> </span><span class="kn">import</span> <span class="n">LLM</span>
@@ -1826,7 +1826,7 @@
 <p><a href="../agents_overview/">Agents Overview</a> — <code>ReActAgent</code> and the <code>Tool</code> abstraction</p>
 </li>
 <li>
-<p><a href="dev/mcp.md"><code>docs/dev/mcp.md</code></a> — design draft, including the deferred server direction</p>
+<p><a href="../dev/mcp/"><code>docs/dev/mcp.md</code></a> — design draft, including the deferred server direction</p>
 </li>
 <li>
 <p><code>inferna.agents.mcp</code> — <code>McpClient</code>, <code>McpServerConfig</code>, <code>McpTransportType</code>, <code>McpConnectionProtocol</code></p>

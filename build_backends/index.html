@@ -2525,8 +2525,12 @@
 <h2 id="advanced-custom-cmake-flags">Advanced: Custom CMake Flags<a class="headerlink" href="#advanced-custom-cmake-flags" title="Permanent link">&para;</a></h2>
 <p>Inferna has a two-stage build process:</p>
 <ol>
-<li><strong>Dependency build</strong> (<code>scripts/manage.py</code>): Builds llama.cpp, whisper.cpp, stable-diffusion.cpp as static libraries</li>
-<li><strong>Extension build</strong> (<code>CMakeLists.txt</code>): Builds nanobind extension modules with scikit-build-core, linking against the static libraries</li>
+<li>
+<p><strong>Dependency build</strong> (<code>scripts/manage.py</code>): Builds llama.cpp, whisper.cpp, stable-diffusion.cpp as static libraries</p>
+</li>
+<li>
+<p><strong>Extension build</strong> (<code>CMakeLists.txt</code>): Builds nanobind extension modules with scikit-build-core, linking against the static libraries</p>
+</li>
 </ol>
 <h3 id="customizing-dependency-build">Customizing Dependency Build<a class="headerlink" href="#customizing-dependency-build" title="Permanent link">&para;</a></h3>
 <p>Use <code>scripts/manage.py</code> with environment variables or flags:</p>

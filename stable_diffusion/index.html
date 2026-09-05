@@ -2781,21 +2781,28 @@
 <a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a><span class="n">params</span><span class="o">.</span><span class="n">chroma_t5_mask_pad</span> <span class="o">=</span> <span class="mi">0</span>                 <span class="c1"># Chroma T5 mask pad</span>
 <a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>
 <a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a><span class="c1"># Boolean flags</span>
-<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a><span class="n">params</span><span class="o">.</span><span class="n">vae_decode_only</span> <span class="o">=</span> <span class="kc">True</span>                 <span class="c1"># VAE decode only (faster)</span>
-<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a><span class="n">params</span><span class="o">.</span><span class="n">enable_mmap</span> <span class="o">=</span> <span class="kc">True</span>                     <span class="c1"># Enable memory-mapped loading</span>
-<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a><span class="n">params</span><span class="o">.</span><span class="n">offload_params_to_cpu</span> <span class="o">=</span> <span class="kc">False</span>          <span class="c1"># Offload to CPU (low VRAM)</span>
-<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a><span class="n">params</span><span class="o">.</span><span class="n">keep_clip_on_cpu</span> <span class="o">=</span> <span class="kc">False</span>               <span class="c1"># Keep CLIP on CPU</span>
-<a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a><span class="n">params</span><span class="o">.</span><span class="n">keep_vae_on_cpu</span> <span class="o">=</span> <span class="kc">False</span>                <span class="c1"># Keep VAE on CPU</span>
-<a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a><span class="n">params</span><span class="o">.</span><span class="n">keep_control_net_on_cpu</span> <span class="o">=</span> <span class="kc">False</span>        <span class="c1"># Keep ControlNet on CPU</span>
-<a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a><span class="n">params</span><span class="o">.</span><span class="n">diffusion_flash_attn</span> <span class="o">=</span> <span class="kc">False</span>           <span class="c1"># Flash attention</span>
-<a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a><span class="n">params</span><span class="o">.</span><span class="n">diffusion_conv_direct</span> <span class="o">=</span> <span class="kc">False</span>          <span class="c1"># Direct convolution</span>
-<a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a><span class="n">params</span><span class="o">.</span><span class="n">vae_conv_direct</span> <span class="o">=</span> <span class="kc">False</span>                <span class="c1"># VAE direct convolution</span>
-<a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a><span class="n">params</span><span class="o">.</span><span class="n">tae_preview_only</span> <span class="o">=</span> <span class="kc">False</span>               <span class="c1"># TAESD for preview only</span>
-<a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a><span class="n">params</span><span class="o">.</span><span class="n">circular_x</span> <span class="o">=</span> <span class="kc">False</span>                     <span class="c1"># Circular padding X (tileable)</span>
-<a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a><span class="n">params</span><span class="o">.</span><span class="n">circular_y</span> <span class="o">=</span> <span class="kc">False</span>                     <span class="c1"># Circular padding Y (tileable)</span>
-<a id="__codelineno-5-43" name="__codelineno-5-43" href="#__codelineno-5-43"></a><span class="n">params</span><span class="o">.</span><span class="n">qwen_image_zero_cond_t</span> <span class="o">=</span> <span class="kc">False</span>         <span class="c1"># Zero conditioning for Qwen</span>
-<a id="__codelineno-5-44" name="__codelineno-5-44" href="#__codelineno-5-44"></a><span class="n">params</span><span class="o">.</span><span class="n">chroma_use_dit_mask</span> <span class="o">=</span> <span class="kc">True</span>             <span class="c1"># DiT mask for Chroma</span>
-<a id="__codelineno-5-45" name="__codelineno-5-45" href="#__codelineno-5-45"></a><span class="n">params</span><span class="o">.</span><span class="n">chroma_use_t5_mask</span> <span class="o">=</span> <span class="kc">False</span>             <span class="c1"># T5 mask for Chroma</span>
+<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a><span class="n">params</span><span class="o">.</span><span class="n">enable_mmap</span> <span class="o">=</span> <span class="kc">True</span>                     <span class="c1"># Enable memory-mapped loading</span>
+<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a><span class="n">params</span><span class="o">.</span><span class="n">stream_layers</span> <span class="o">=</span> <span class="kc">False</span>                  <span class="c1"># Residency+prefetch streaming (needs max_vram)</span>
+<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a><span class="n">params</span><span class="o">.</span><span class="n">diffusion_flash_attn</span> <span class="o">=</span> <span class="kc">False</span>           <span class="c1"># Flash attention</span>
+<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a><span class="n">params</span><span class="o">.</span><span class="n">diffusion_conv_direct</span> <span class="o">=</span> <span class="kc">False</span>          <span class="c1"># Direct convolution</span>
+<a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a><span class="n">params</span><span class="o">.</span><span class="n">vae_conv_direct</span> <span class="o">=</span> <span class="kc">False</span>                <span class="c1"># VAE direct convolution</span>
+<a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a><span class="n">params</span><span class="o">.</span><span class="n">tae_preview_only</span> <span class="o">=</span> <span class="kc">False</span>               <span class="c1"># TAESD for preview only</span>
+<a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a><span class="n">params</span><span class="o">.</span><span class="n">circular_x</span> <span class="o">=</span> <span class="kc">False</span>                     <span class="c1"># Circular padding X (tileable)</span>
+<a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a><span class="n">params</span><span class="o">.</span><span class="n">circular_y</span> <span class="o">=</span> <span class="kc">False</span>                     <span class="c1"># Circular padding Y (tileable)</span>
+<a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a><span class="n">params</span><span class="o">.</span><span class="n">qwen_image_zero_cond_t</span> <span class="o">=</span> <span class="kc">False</span>         <span class="c1"># Zero conditioning for Qwen</span>
+<a id="__codelineno-5-40" name="__codelineno-5-40" href="#__codelineno-5-40"></a><span class="n">params</span><span class="o">.</span><span class="n">chroma_use_dit_mask</span> <span class="o">=</span> <span class="kc">True</span>             <span class="c1"># DiT mask for Chroma</span>
+<a id="__codelineno-5-41" name="__codelineno-5-41" href="#__codelineno-5-41"></a><span class="n">params</span><span class="o">.</span><span class="n">chroma_use_t5_mask</span> <span class="o">=</span> <span class="kc">False</span>             <span class="c1"># T5 mask for Chroma</span>
+<a id="__codelineno-5-42" name="__codelineno-5-42" href="#__codelineno-5-42"></a>
+<a id="__codelineno-5-43" name="__codelineno-5-43" href="#__codelineno-5-43"></a><span class="c1"># CPU offload / low-VRAM. Upstream replaced the old offload_params_to_cpu /</span>
+<a id="__codelineno-5-44" name="__codelineno-5-44" href="#__codelineno-5-44"></a><span class="c1"># keep_*_on_cpu flags with backend-assignment specs; use the helper, which</span>
+<a id="__codelineno-5-45" name="__codelineno-5-45" href="#__codelineno-5-45"></a><span class="c1"># fills in params.backend / params.params_backend for you.</span>
+<a id="__codelineno-5-46" name="__codelineno-5-46" href="#__codelineno-5-46"></a><span class="n">params</span><span class="o">.</span><span class="n">apply_cpu_offload</span><span class="p">(</span>
+<a id="__codelineno-5-47" name="__codelineno-5-47" href="#__codelineno-5-47"></a>    <span class="n">offload_params</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>       <span class="c1"># params_backend &quot;*=cpu&quot;</span>
+<a id="__codelineno-5-48" name="__codelineno-5-48" href="#__codelineno-5-48"></a>    <span class="n">clip_on_cpu</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>          <span class="c1"># backend &quot;te=cpu&quot;</span>
+<a id="__codelineno-5-49" name="__codelineno-5-49" href="#__codelineno-5-49"></a>    <span class="n">vae_on_cpu</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>           <span class="c1"># backend &quot;vae=cpu&quot;</span>
+<a id="__codelineno-5-50" name="__codelineno-5-50" href="#__codelineno-5-50"></a>    <span class="n">control_net_on_cpu</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>   <span class="c1"># backend &quot;controlnet=cpu&quot;</span>
+<a id="__codelineno-5-51" name="__codelineno-5-51" href="#__codelineno-5-51"></a><span class="p">)</span>
+<a id="__codelineno-5-52" name="__codelineno-5-52" href="#__codelineno-5-52"></a><span class="n">params</span><span class="o">.</span><span class="n">max_vram</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>           <span class="c1"># GiB budget / backend-assignment spec (string, &quot;&quot; = disabled)</span>
 </code></pre></div>
 <h3 id="sdimage">SDImage<a class="headerlink" href="#sdimage" title="Permanent link">&para;</a></h3>
 <p>Image wrapper with numpy and PIL integration, plus file I/O.</p>
@@ -3706,14 +3713,30 @@
 </code></pre></div>
 <h2 id="performance-tips">Performance Tips<a class="headerlink" href="#performance-tips" title="Permanent link">&para;</a></h2>
 <ol>
-<li><strong>Use turbo models</strong> for fast generation (1-4 steps, cfg_scale=1.0)</li>
-<li><strong>Quantize models</strong> to Q4_0 or Q8_0 for memory efficiency</li>
-<li><strong>Reuse SDContext</strong> when generating multiple images</li>
-<li><strong>Set n_threads</strong> to match physical CPU cores</li>
-<li><strong>Use <code>--offload-to-cpu</code></strong> for low VRAM GPUs</li>
-<li><strong>Enable <code>--diffusion-fa</code></strong> (flash attention) for faster inference</li>
-<li><strong>Use <code>--vae-tiling</code></strong> for generating large images</li>
-<li><strong>Use progress callback</strong> to track long generations</li>
+<li>
+<p><strong>Use turbo models</strong> for fast generation (1-4 steps, cfg_scale=1.0)</p>
+</li>
+<li>
+<p><strong>Quantize models</strong> to Q4_0 or Q8_0 for memory efficiency</p>
+</li>
+<li>
+<p><strong>Reuse SDContext</strong> when generating multiple images</p>
+</li>
+<li>
+<p><strong>Set n_threads</strong> to match physical CPU cores</p>
+</li>
+<li>
+<p><strong>Use <code>--offload-to-cpu</code></strong> for low VRAM GPUs</p>
+</li>
+<li>
+<p><strong>Enable <code>--diffusion-fa</code></strong> (flash attention) for faster inference</p>
+</li>
+<li>
+<p><strong>Use <code>--vae-tiling</code></strong> for generating large images</p>
+</li>
+<li>
+<p><strong>Use progress callback</strong> to track long generations</p>
+</li>
 </ol>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <h3 id="model-loading-errors">Model Loading Errors<a class="headerlink" href="#model-loading-errors" title="Permanent link">&para;</a></h3>

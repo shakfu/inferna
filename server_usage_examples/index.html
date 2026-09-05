@@ -755,10 +755,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#start-the-embedded-server-default" class="md-nav__link">
+  <a href="#start-the-api-server-no-webui" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Start the Embedded Server (default)
+        Start the API server (no webui)
       
     </span>
   </a>
@@ -766,10 +766,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#use-the-python-server" class="md-nav__link">
+  <a href="#start-the-api-server-with-the-browser-ui" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Use the Python Server
+        Start the API server with the browser UI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-the-python-server-no-webui-no-native-extension" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use the Python Server (no webui, no native extension)
       
     </span>
   </a>
@@ -827,10 +838,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#verbose-mongoose-tracing-for-http-debugging" class="md-nav__link">
+  <a href="#verbose-http-layer-tracing-for-debugging" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verbose mongoose tracing for HTTP debugging
+        Verbose HTTP-layer tracing for debugging
       
     </span>
   </a>
@@ -1771,10 +1782,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#start-the-embedded-server-default" class="md-nav__link">
+  <a href="#start-the-api-server-no-webui" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Start the Embedded Server (default)
+        Start the API server (no webui)
       
     </span>
   </a>
@@ -1782,10 +1793,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#use-the-python-server" class="md-nav__link">
+  <a href="#start-the-api-server-with-the-browser-ui" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Use the Python Server
+        Start the API server with the browser UI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-the-python-server-no-webui-no-native-extension" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use the Python Server (no webui, no native extension)
       
     </span>
   </a>
@@ -1843,10 +1865,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#verbose-mongoose-tracing-for-http-debugging" class="md-nav__link">
+  <a href="#verbose-http-layer-tracing-for-debugging" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verbose mongoose tracing for HTTP debugging
+        Verbose HTTP-layer tracing for debugging
       
     </span>
   </a>
@@ -2073,28 +2095,83 @@
 
 
 <h1 id="inferna-server-usage-examples">Inferna Server Usage Examples<a class="headerlink" href="#inferna-server-usage-examples" title="Permanent link">&para;</a></h1>
-<p>Inferna ships an embedded OpenAI-compatible HTTP server with a built-in chat web UI (a rebrand of llama.cpp's reference webui), plus a pure-Python fallback for environments without the compiled mongoose extension.</p>
+<p>Inferna ships an embedded OpenAI-compatible HTTP server with an optional built-in chat web UI (a vendored snapshot of llama.cpp's reference webui), plus a pure-Python fallback for environments without the compiled mongoose extension.</p>
+<p>A single subcommand, <code>inferna server</code>, drives all three configurations:</p>
+<table>
+<thead>
+<tr>
+<th>Invocation</th>
+<th>Backend</th>
+<th>Webui routes</th>
+<th>API routes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inferna server</code></td>
+<td>embedded</td>
+<td>404</td>
+<td>served</td>
+</tr>
+<tr>
+<td><code>inferna server -w</code> (<code>--webui</code>)</td>
+<td>embedded</td>
+<td>served</td>
+<td>served</td>
+</tr>
+<tr>
+<td><code>inferna server --server-type python</code></td>
+<td>python</td>
+<td>n/a (never served)</td>
+<td>served</td>
+</tr>
+</tbody>
+</table>
+<p>The webui is opt-in. Library callers control it via <code>ServerConfig(serve_webui=True)</code>; the dataclass default is <code>False</code> to match the CLI default.</p>
 <h2 id="server-types">Server Types<a class="headerlink" href="#server-types" title="Permanent link">&para;</a></h2>
 <h3 id="1-embedded-server-embeddedserver">1. Embedded Server (<code>EmbeddedServer</code>)<a class="headerlink" href="#1-embedded-server-embeddedserver" title="Permanent link">&para;</a></h3>
 <ul>
-<li>C networking via the <a href="https://mongoose.ws/">Mongoose</a> library, bound to Python through nanobind</li>
-<li>Single-threaded poll loop on the main thread; per-stream worker threads for concurrent token generation</li>
-<li>Serves the upstream <a href="https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui">llama-server</a> web UI at <code>GET /</code> (gzipped at build time, served with <code>Content-Encoding: gzip</code>)</li>
-<li>Compiled as part of the standard <code>make build</code></li>
+<li>
+<p>C networking via the <a href="https://mongoose.ws/">Mongoose</a> library, bound to Python through nanobind</p>
+</li>
+<li>
+<p>Single-threaded poll loop on the main thread; per-stream worker threads for concurrent token generation</p>
+</li>
+<li>
+<p>Mounts the upstream <a href="https://github.com/ggml-org/llama.cpp/tree/master/tools/ui">llama.cpp</a> web UI at <code>GET /</code> when <code>serve_webui=True</code> (a gzipped snapshot vendored in the package, served with <code>Content-Encoding: gzip</code>)</p>
+</li>
+<li>
+<p>When <code>serve_webui=False</code> (the default), webui routes (<code>/</code>, <code>/index.html</code>, <code>/bundle.{css,js}</code>, <code>/loading.html</code>, <code>/props</code>, <code>/slots</code>, <code>/metrics</code>) return 404 — the OpenAI-compatible API and <code>/health</code> remain available</p>
+</li>
+<li>
+<p>Compiled as part of the standard <code>make build</code></p>
+</li>
 </ul>
 <h3 id="2-python-server-pythonserver">2. Python Server (<code>PythonServer</code>)<a class="headerlink" href="#2-python-server-pythonserver" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Pure Python HTTP server (stdlib <code>http.server</code>)</li>
-<li>No compiled mongoose dependency</li>
-<li>Useful for development and environments where the embedded extension can't be loaded</li>
+<li>
+<p>Pure Python HTTP server (stdlib <code>http.server</code>)</p>
+</li>
+<li>
+<p>No compiled mongoose dependency</p>
+</li>
+<li>
+<p>Never serves the webui (the static asset routes simply do not exist in this backend)</p>
+</li>
+<li>
+<p>Useful for development and environments where the embedded extension can't be loaded</p>
+</li>
 </ul>
 <h2 id="basic-usage">Basic Usage<a class="headerlink" href="#basic-usage" title="Permanent link">&para;</a></h2>
-<h3 id="start-the-embedded-server-default">Start the Embedded Server (default)<a class="headerlink" href="#start-the-embedded-server-default" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>-m<span class="w"> </span>inferna.llama.server<span class="w"> </span>-m<span class="w"> </span>models/Llama-3.2-1B-Instruct-Q8_0.gguf
+<h3 id="start-the-api-server-no-webui">Start the API server (no webui)<a class="headerlink" href="#start-the-api-server-no-webui" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/Llama-3.2-1B-Instruct-Q8_0.gguf
 </code></pre></div>
-<p>Open http://127.0.0.1:8080/ in a browser to use the chat UI.</p>
-<h3 id="use-the-python-server">Use the Python Server<a class="headerlink" href="#use-the-python-server" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>-m<span class="w"> </span>inferna.llama.server<span class="w"> </span>-m<span class="w"> </span>models/Llama-3.2-1B-Instruct-Q8_0.gguf<span class="w"> </span>--server-type<span class="w"> </span>python
+<h3 id="start-the-api-server-with-the-browser-ui">Start the API server with the browser UI<a class="headerlink" href="#start-the-api-server-with-the-browser-ui" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/Llama-3.2-1B-Instruct-Q8_0.gguf<span class="w"> </span>-w
+</code></pre></div>
+<p>Open <a href="http://127.0.0.1:8080/">http://127.0.0.1:8080/</a> in a browser to use the chat UI.</p>
+<h3 id="use-the-python-server-no-webui-no-native-extension">Use the Python Server (no webui, no native extension)<a class="headerlink" href="#use-the-python-server-no-webui-no-native-extension" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/Llama-3.2-1B-Instruct-Q8_0.gguf<span class="w"> </span>--server-type<span class="w"> </span>python
 </code></pre></div>
 <h2 id="cli-flags">CLI Flags<a class="headerlink" href="#cli-flags" title="Permanent link">&para;</a></h2>
 <table>
@@ -2142,44 +2219,49 @@
 <td>Identifier shown in the UI's "Model" field and <code>/v1/models[].id</code>. Defaults to the model filename without extension.</td>
 </tr>
 <tr>
-<td><code>--mongoose-log-level</code></td>
+<td><code>--log-level</code></td>
 <td><code>1</code> (errors only)</td>
-<td>Mongoose internal log verbosity. <code>0</code>=none, <code>1</code>=errors only (default), <code>2</code>=info, <code>3</code>=debug (every accept/read/write/close — useful for HTTP-level debugging), <code>4</code>=verbose</td>
+<td>HTTP-layer log verbosity. <code>0</code>=none, <code>1</code>=errors only (default), <code>2</code>=info, <code>3</code>=debug (every accept/read/write/close — useful for HTTP-level debugging), <code>4</code>=verbose</td>
 </tr>
 <tr>
 <td><code>--server-type</code></td>
 <td><code>embedded</code></td>
 <td><code>embedded</code> or <code>python</code></td>
 </tr>
+<tr>
+<td><code>-w, --webui</code></td>
+<td>off</td>
+<td>Mount the browser webui on the embedded backend. No effect on <code>--server-type=python</code></td>
+</tr>
 </tbody>
 </table>
 <h2 id="advanced-configuration">Advanced Configuration<a class="headerlink" href="#advanced-configuration" title="Permanent link">&para;</a></h2>
 <h3 id="lan-accessible-server-with-multiple-slots">LAN-accessible server with multiple slots<a class="headerlink" href="#lan-accessible-server-with-multiple-slots" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>-m<span class="w"> </span>inferna.llama.server<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>-m<span class="w"> </span>models/Llama-3.2-1B-Instruct-Q8_0.gguf<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>--n-parallel<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span>--ctx-size<span class="w"> </span><span class="m">4096</span>
-</code></pre></div>
-<h3 id="gpu-offload-custom-display-name">GPU offload + custom display name<a class="headerlink" href="#gpu-offload-custom-display-name" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>-m<span class="w"> </span>inferna.llama.server<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>-m<span class="w"> </span>models/Llama-3.2-1B-Instruct-Q8_0.gguf<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--gpu-layers<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>--ctx-size<span class="w"> </span><span class="m">4096</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span>--model-alias<span class="w"> </span>my-llama
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span>--n-parallel<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span>--ctx-size<span class="w"> </span><span class="m">4096</span>
 </code></pre></div>
-<h3 id="verbose-mongoose-tracing-for-http-debugging">Verbose mongoose tracing for HTTP debugging<a class="headerlink" href="#verbose-mongoose-tracing-for-http-debugging" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>-m<span class="w"> </span>inferna.llama.server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>--mongoose-log-level<span class="w"> </span><span class="m">3</span>
+<h3 id="gpu-offload-custom-display-name">GPU offload + custom display name<a class="headerlink" href="#gpu-offload-custom-display-name" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>-m<span class="w"> </span>inferna.llama.server<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span>-m<span class="w"> </span>models/Llama-3.2-1B-Instruct-Q8_0.gguf<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span>--gpu-layers<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span>--ctx-size<span class="w"> </span><span class="m">4096</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span>--model-alias<span class="w"> </span>my-llama
+</code></pre></div>
+<h3 id="verbose-http-layer-tracing-for-debugging">Verbose HTTP-layer tracing for debugging<a class="headerlink" href="#verbose-http-layer-tracing-for-debugging" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>python<span class="w"> </span>-m<span class="w"> </span>inferna.llama.server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>--log-level<span class="w"> </span><span class="m">3</span>
 </code></pre></div>
 <h2 id="logging">Logging<a class="headerlink" href="#logging" title="Permanent link">&para;</a></h2>
 <p>By default the server emits one access-log line per HTTP request on the <code>inferna.llama.server.embedded.access</code> stdlib logger:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>INFO:inferna.llama.server.embedded.access:GET /props 200 285B 0.1ms
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>INFO:inferna.llama.server.embedded.access:POST /v1/chat/completions 200 242B 0.4ms
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>INFO:inferna.llama.server.embedded.access:stream-done conn=14a82e4f0 model=Llama-3.2-1B-Instruct-Q8_0 bytes=8563 elapsed=917.2ms
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>INFO:inferna.llama.server.embedded.access:GET /props 200 285B 0.1ms
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>INFO:inferna.llama.server.embedded.access:POST /v1/chat/completions 200 242B 0.4ms
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>INFO:inferna.llama.server.embedded.access:stream-done conn=14a82e4f0 model=Llama-3.2-1B-Instruct-Q8_0 bytes=8563 elapsed=917.2ms
 </code></pre></div>
 <p>Streaming chat completions emit two lines: one when the dispatcher returns (covers headers + the role-only opener), and a second <code>stream-done</code> (or <code>stream-cancel</code> if the client dropped) when the SSE stream finishes, with the cumulative byte count and end-to-end timing.</p>
-<p>Mongoose's built-in tracer is silenced by default — raise it with <code>--mongoose-log-level 3</code> if you need to see the underlying connection events.</p>
+<p>The HTTP-layer tracer is silenced by default — raise it with <code>--log-level 3</code> if you need to see the underlying connection events.</p>
 <h2 id="web-ui">Web UI<a class="headerlink" href="#web-ui" title="Permanent link">&para;</a></h2>
 <p>Open the server's root URL (<code>/</code>) in a browser. The UI is the upstream llama-server SPA, served from the inferna package as gzipped static assets:</p>
 <table>
@@ -2211,118 +2293,118 @@
 <p>The UI calls <code>/props</code>, <code>/v1/models</code>, and <code>/v1/chat/completions</code> (with <code>stream: true</code>) to operate. Cancellation, conversation history (in IndexedDB), and per-conversation parameter overrides are upstream features that work out of the box.</p>
 <h2 id="api-endpoints">API Endpoints<a class="headerlink" href="#api-endpoints" title="Permanent link">&para;</a></h2>
 <h3 id="health">Health<a class="headerlink" href="#health" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/health
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/health
 </code></pre></div>
 <h3 id="server-properties-ui-bootstrap">Server properties (UI bootstrap)<a class="headerlink" href="#server-properties-ui-bootstrap" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/props<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/props<span class="w"> </span><span class="p">|</span><span class="w"> </span>python3<span class="w"> </span>-m<span class="w"> </span>json.tool
 </code></pre></div>
 <p>Returns model metadata the UI uses to render its sidebar:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;default_generation_settings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;n_ctx&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2048</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;top_p&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.9</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;min_p&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.05</span><span class="p">},</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;total_slots&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;model_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;models/Llama-3.2-1B-Instruct-Q8_0.gguf&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;model_alias&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Llama-3.2-1B-Instruct-Q8_0&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nt">&quot;chat_template&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">&quot;build_info&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;inferna&quot;</span><span class="p">,</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">&quot;n_ctx&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2048</span><span class="p">,</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">&quot;n_ctx_train&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2048</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;default_generation_settings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;n_ctx&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2048</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;top_p&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.9</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;min_p&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.05</span><span class="p">},</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;total_slots&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">&quot;model_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;models/Llama-3.2-1B-Instruct-Q8_0.gguf&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span><span class="nt">&quot;model_alias&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Llama-3.2-1B-Instruct-Q8_0&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="nt">&quot;chat_template&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span><span class="nt">&quot;build_info&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;inferna&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">  </span><span class="nt">&quot;n_ctx&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2048</span><span class="p">,</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">  </span><span class="nt">&quot;n_ctx_train&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2048</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="p">}</span>
 </code></pre></div>
 <h3 id="slots">Slots<a class="headerlink" href="#slots" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/slots
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/slots
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">[{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;is_processing&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;task_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">[{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;is_processing&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;task_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">}]</span>
 </code></pre></div>
 <h3 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/metrics
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/metrics
 </code></pre></div>
 <p>Returns an empty Prometheus exposition (200 with <code>Content-Type: text/plain; version=0.0.4</code>). The UI calls this; populating it with real series is a future enhancement.</p>
 <h3 id="models">Models<a class="headerlink" href="#models" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/v1/models
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>curl<span class="w"> </span>http://127.0.0.1:8080/v1/models
 </code></pre></div>
 <h3 id="chat-completion-non-streaming">Chat completion (non-streaming)<a class="headerlink" href="#chat-completion-non-streaming" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/v1/chat/completions<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="s1">    &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;What is 2+2?&quot;}],</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="s1">    &quot;max_tokens&quot;: 100</span>
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="s1">  }&#39;</span>
-</code></pre></div>
-<h3 id="chat-completion-streaming">Chat completion (streaming)<a class="headerlink" href="#chat-completion-streaming" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>curl<span class="w"> </span>-N<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/v1/chat/completions<span class="w"> </span><span class="se">\</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/v1/chat/completions<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="s1">    &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Count to 5&quot;}],</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="s1">    &quot;stream&quot;: true</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="s1">    &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;What is 2+2?&quot;}],</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="s1">    &quot;max_tokens&quot;: 100</span>
 <a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="s1">  }&#39;</span>
 </code></pre></div>
+<h3 id="chat-completion-streaming">Chat completion (streaming)<a class="headerlink" href="#chat-completion-streaming" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>curl<span class="w"> </span>-N<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/v1/chat/completions<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="s1">    &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Count to 5&quot;}],</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="s1">    &quot;stream&quot;: true</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="s1">  }&#39;</span>
+</code></pre></div>
 <p>The response is OpenAI-shape Server-Sent Events:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>data: {&quot;id&quot;:&quot;chatcmpl-...&quot;,&quot;choices&quot;:[{&quot;index&quot;:0,&quot;delta&quot;:{&quot;role&quot;:&quot;assistant&quot;},&quot;finish_reason&quot;:null}],...}
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>data: {&quot;id&quot;:&quot;chatcmpl-...&quot;,&quot;choices&quot;:[{&quot;index&quot;:0,&quot;delta&quot;:{&quot;content&quot;:&quot; 1&quot;},&quot;finish_reason&quot;:null}],...}
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>data: {&quot;id&quot;:&quot;chatcmpl-...&quot;,&quot;choices&quot;:[{&quot;index&quot;:0,&quot;delta&quot;:{&quot;content&quot;:&quot;, 2&quot;},&quot;finish_reason&quot;:null}],...}
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>...
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>data: {&quot;id&quot;:&quot;chatcmpl-...&quot;,&quot;choices&quot;:[{&quot;index&quot;:0,&quot;delta&quot;:{},&quot;finish_reason&quot;:&quot;stop&quot;}],...}
-<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>
-<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>data: [DONE]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>data: {&quot;id&quot;:&quot;chatcmpl-...&quot;,&quot;choices&quot;:[{&quot;index&quot;:0,&quot;delta&quot;:{&quot;role&quot;:&quot;assistant&quot;},&quot;finish_reason&quot;:null}],...}
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>data: {&quot;id&quot;:&quot;chatcmpl-...&quot;,&quot;choices&quot;:[{&quot;index&quot;:0,&quot;delta&quot;:{&quot;content&quot;:&quot; 1&quot;},&quot;finish_reason&quot;:null}],...}
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>data: {&quot;id&quot;:&quot;chatcmpl-...&quot;,&quot;choices&quot;:[{&quot;index&quot;:0,&quot;delta&quot;:{&quot;content&quot;:&quot;, 2&quot;},&quot;finish_reason&quot;:null}],...}
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>...
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>data: {&quot;id&quot;:&quot;chatcmpl-...&quot;,&quot;choices&quot;:[{&quot;index&quot;:0,&quot;delta&quot;:{},&quot;finish_reason&quot;:&quot;stop&quot;}],...}
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a>data: [DONE]
 </code></pre></div>
 <p>Tokens arrive on the wire as they're generated (worker-thread + main-poll-loop drain), so SSE clients see real-time streaming.</p>
 <p><code>max_tokens</code> defaults to "until EOS or context limit" when omitted, <code>null</code>, <code>0</code>, or any negative value (the upstream webui's <code>-1</code> "unlimited" convention is honored). Pass a positive integer to cap.</p>
 <h3 id="embeddings">Embeddings<a class="headerlink" href="#embeddings" title="Permanent link">&para;</a></h3>
 <p>The <code>/v1/embeddings</code> endpoint is available when the server is started with <code>embedding=True</code> in <code>ServerConfig</code> (Python API; the CLI does not yet expose this flag).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Single text</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/v1/embeddings<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;input&quot;: &quot;hello world&quot;, &quot;model&quot;: &quot;nomic-embed-text&quot;}&#39;</span>
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="c1"># Batch input</span>
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/v1/embeddings<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;input&quot;: [&quot;first text&quot;, &quot;second text&quot;], &quot;model&quot;: &quot;nomic-embed-text&quot;}&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Single text</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/v1/embeddings<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;input&quot;: &quot;hello world&quot;, &quot;model&quot;: &quot;nomic-embed-text&quot;}&#39;</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="c1"># Batch input</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://127.0.0.1:8080/v1/embeddings<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;input&quot;: [&quot;first text&quot;, &quot;second text&quot;], &quot;model&quot;: &quot;nomic-embed-text&quot;}&#39;</span>
 </code></pre></div>
 <p>Response format:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="p">{</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nt">&quot;object&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;object&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;embedding&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">0.1</span><span class="p">,</span><span class="w"> </span><span class="mf">0.2</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;index&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">}</span>
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">  </span><span class="p">],</span>
-<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">  </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nomic-embed-text&quot;</span><span class="p">,</span>
-<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">  </span><span class="nt">&quot;usage&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;prompt_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;total_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
-<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="p">{</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span><span class="nt">&quot;object&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;object&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;embedding&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">0.1</span><span class="p">,</span><span class="w"> </span><span class="mf">0.2</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="p">],</span><span class="w"> </span><span class="nt">&quot;index&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">}</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">  </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;nomic-embed-text&quot;</span><span class="p">,</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="w">  </span><span class="nt">&quot;usage&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;prompt_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;total_tokens&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="p">}</span>
 </code></pre></div>
 <h2 id="embedding-server-configuration">Embedding Server Configuration<a class="headerlink" href="#embedding-server-configuration" title="Permanent link">&para;</a></h2>
 <p>To serve embeddings, enable the <code>embedding</code> flag on <code>ServerConfig</code> and optionally specify a dedicated embedding model:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">inferna.llama.server.python</span><span class="w"> </span><span class="kn">import</span> <span class="n">ServerConfig</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">inferna.llama.server.embedded</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddedServer</span>
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>
-<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="n">config</span> <span class="o">=</span> <span class="n">ServerConfig</span><span class="p">(</span>
-<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>    <span class="n">model_path</span><span class="o">=</span><span class="s2">&quot;models/Llama-3.2-1B-Instruct-Q8_0.gguf&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>    <span class="n">embedding</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>
-<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>    <span class="c1"># Optional: dedicated embedding model (defaults to model_path)</span>
-<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>    <span class="n">embedding_model_path</span><span class="o">=</span><span class="s2">&quot;models/bge-small-en-v1.5-q8_0.gguf&quot;</span><span class="p">,</span>
-<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>
-<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>    <span class="c1"># Embedding-specific parameters (same options as the Embedder class)</span>
-<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>    <span class="n">embedding_n_ctx</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span>          <span class="c1"># Context size (match model training)</span>
-<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a>    <span class="n">embedding_n_batch</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span>
-<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a>    <span class="n">embedding_n_gpu_layers</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>    <span class="c1"># -1 = all</span>
-<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a>    <span class="n">embedding_pooling</span><span class="o">=</span><span class="s2">&quot;mean&quot;</span><span class="p">,</span>     <span class="c1"># mean, cls, last, none</span>
-<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a>    <span class="n">embedding_normalize</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a><span class="p">)</span>
-<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a>
-<a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a><span class="k">with</span> <span class="n">EmbeddedServer</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="k">as</span> <span class="n">server</span><span class="p">:</span>
-<a id="__codelineno-18-20" name="__codelineno-18-20" href="#__codelineno-18-20"></a>    <span class="n">server</span><span class="o">.</span><span class="n">wait_for_shutdown</span><span class="p">()</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">inferna.llama.server.python</span><span class="w"> </span><span class="kn">import</span> <span class="n">ServerConfig</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">inferna.llama.server.embedded</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddedServer</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="n">config</span> <span class="o">=</span> <span class="n">ServerConfig</span><span class="p">(</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    <span class="n">model_path</span><span class="o">=</span><span class="s2">&quot;models/Llama-3.2-1B-Instruct-Q8_0.gguf&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>    <span class="n">embedding</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>    <span class="c1"># Optional: dedicated embedding model (defaults to model_path)</span>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>    <span class="n">embedding_model_path</span><span class="o">=</span><span class="s2">&quot;models/bge-small-en-v1.5-q8_0.gguf&quot;</span><span class="p">,</span>
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a>
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a>    <span class="c1"># Embedding-specific parameters (same options as the Embedder class)</span>
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a>    <span class="n">embedding_n_ctx</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span>          <span class="c1"># Context size (match model training)</span>
+<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>    <span class="n">embedding_n_batch</span><span class="o">=</span><span class="mi">512</span><span class="p">,</span>
+<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a>    <span class="n">embedding_n_gpu_layers</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span>    <span class="c1"># -1 = all</span>
+<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a>    <span class="n">embedding_pooling</span><span class="o">=</span><span class="s2">&quot;mean&quot;</span><span class="p">,</span>     <span class="c1"># mean, cls, last, none</span>
+<a id="__codelineno-19-16" name="__codelineno-19-16" href="#__codelineno-19-16"></a>    <span class="n">embedding_normalize</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-19-17" name="__codelineno-19-17" href="#__codelineno-19-17"></a><span class="p">)</span>
+<a id="__codelineno-19-18" name="__codelineno-19-18" href="#__codelineno-19-18"></a>
+<a id="__codelineno-19-19" name="__codelineno-19-19" href="#__codelineno-19-19"></a><span class="k">with</span> <span class="n">EmbeddedServer</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="k">as</span> <span class="n">server</span><span class="p">:</span>
+<a id="__codelineno-19-20" name="__codelineno-19-20" href="#__codelineno-19-20"></a>    <span class="n">server</span><span class="o">.</span><span class="n">wait_for_shutdown</span><span class="p">()</span>
 </code></pre></div>
 <p>The same config works with <code>PythonServer</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">inferna.llama.server.python</span><span class="w"> </span><span class="kn">import</span> <span class="n">PythonServer</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="k">with</span> <span class="n">PythonServer</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="k">as</span> <span class="n">server</span><span class="p">:</span>
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
-<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">inferna.llama.server.python</span><span class="w"> </span><span class="kn">import</span> <span class="n">PythonServer</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="k">with</span> <span class="n">PythonServer</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="k">as</span> <span class="n">server</span><span class="p">:</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>    <span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>    <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
 </code></pre></div>
 <h3 id="embedding-configuration-reference">Embedding Configuration Reference<a class="headerlink" href="#embedding-configuration-reference" title="Permanent link">&para;</a></h3>
 <table>
@@ -2374,16 +2456,30 @@
 <h2 id="when-to-use-each-server">When to Use Each Server<a class="headerlink" href="#when-to-use-each-server" title="Permanent link">&para;</a></h2>
 <h3 id="use-embeddedserver-default-when">Use <code>EmbeddedServer</code> (default) when<a class="headerlink" href="#use-embeddedserver-default-when" title="Permanent link">&para;</a></h3>
 <ul>
-<li>You want the built-in web UI</li>
-<li>Multiple concurrent users / streams</li>
-<li>Production deployments</li>
-<li>Throughput matters</li>
+<li>
+<p>You want the built-in web UI</p>
+</li>
+<li>
+<p>Multiple concurrent users / streams</p>
+</li>
+<li>
+<p>Production deployments</p>
+</li>
+<li>
+<p>Throughput matters</p>
+</li>
 </ul>
 <h3 id="use-pythonserver-when">Use <code>PythonServer</code> when<a class="headerlink" href="#use-pythonserver-when" title="Permanent link">&para;</a></h3>
 <ul>
-<li>The compiled mongoose extension isn't available (sdist install on a platform without a wheel, etc.)</li>
-<li>Debugging the HTTP layer with stdlib tooling</li>
-<li>You don't need the web UI</li>
+<li>
+<p>The compiled mongoose extension isn't available (sdist install on a platform without a wheel, etc.)</p>
+</li>
+<li>
+<p>Debugging the HTTP layer with stdlib tooling</p>
+</li>
+<li>
+<p>You don't need the web UI</p>
+</li>
 </ul>
 <p>The two servers expose the same JSON API (<code>/v1/models</code>, <code>/v1/chat/completions</code>, <code>/v1/embeddings</code>, <code>/health</code>); only <code>EmbeddedServer</code> serves the web UI and the <code>/props</code> / <code>/slots</code> / <code>/metrics</code> endpoints the UI requires.</p>
 

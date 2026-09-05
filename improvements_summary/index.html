@@ -1824,8 +1824,7 @@
 
 <h1 id="inferna-improvements-summary">Inferna Improvements Summary<a class="headerlink" href="#inferna-improvements-summary" title="Permanent link">&para;</a></h1>
 <p>Comprehensive summary of improvements made to inferna focusing on high-level APIs, integrations, performance, and documentation.</p>
-<p><strong>Date</strong>: November 21, 2025
-<strong>Version</strong>: 0.1.9 (proposed)</p>
+<p><strong>Date</strong>: November 21, 2025 <strong>Version</strong>: 0.1.9 (proposed)</p>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>Following the completion of all high-priority llama.cpp API wrappers (GGUF, JSON Schema, Download, N-gram Cache, Speculative Decoding), this update focuses on making inferna easier to use and integrate with popular frameworks.</p>
 <h2 id="what-was-added">What Was Added<a class="headerlink" href="#what-was-added" title="Permanent link">&para;</a></h2>
@@ -1989,7 +1988,9 @@
 <h2 id="test-coverage">Test Coverage<a class="headerlink" href="#test-coverage" title="Permanent link">&para;</a></h2>
 <h3 id="new-test-files">New Test Files<a class="headerlink" href="#new-test-files" title="Permanent link">&para;</a></h3>
 <ol>
-<li><strong><code>tests/test_generate.py</code> (tests for LLM, complete, chat)</strong> - 60+ tests for high-level generation API</li>
+<li>
+<p><strong><code>tests/test_generate.py</code> (tests for LLM, complete, chat)</strong> - 60+ tests for high-level generation API</p>
+</li>
 <li>
 <p>Configuration management</p>
 </li>
@@ -2111,12 +2112,24 @@
 <h2 id="api-design-principles">API Design Principles<a class="headerlink" href="#api-design-principles" title="Permanent link">&para;</a></h2>
 <p>All new APIs follow these principles:</p>
 <ol>
-<li><strong>Simple by default</strong>: One-line usage for common cases</li>
-<li><strong>Flexible when needed</strong>: Full control available via config objects</li>
-<li><strong>Pythonic</strong>: Use familiar Python patterns (dataclasses, context managers)</li>
-<li><strong>Type-safe</strong>: Full type hints for IDE support</li>
-<li><strong>Well-documented</strong>: Docstrings, examples, guides</li>
-<li><strong>Backward compatible</strong>: No breaking changes to existing code</li>
+<li>
+<p><strong>Simple by default</strong>: One-line usage for common cases</p>
+</li>
+<li>
+<p><strong>Flexible when needed</strong>: Full control available via config objects</p>
+</li>
+<li>
+<p><strong>Pythonic</strong>: Use familiar Python patterns (dataclasses, context managers)</p>
+</li>
+<li>
+<p><strong>Type-safe</strong>: Full type hints for IDE support</p>
+</li>
+<li>
+<p><strong>Well-documented</strong>: Docstrings, examples, guides</p>
+</li>
+<li>
+<p><strong>Backward compatible</strong>: No breaking changes to existing code</p>
+</li>
 </ol>
 <h2 id="usage-statistics">Usage Statistics<a class="headerlink" href="#usage-statistics" title="Permanent link">&para;</a></h2>
 <h3 id="lines-of-code-added">Lines of Code Added<a class="headerlink" href="#lines-of-code-added" title="Permanent link">&para;</a></h3>
@@ -2157,33 +2170,50 @@
 <p>Potential future improvements:</p>
 <h3 id="short-term-next-release">Short Term (Next Release)<a class="headerlink" href="#short-term-next-release" title="Permanent link">&para;</a></h3>
 <ol>
-<li><strong>Async Support</strong>: <code>async def generate_async()</code> for concurrent operations</li>
-<li><strong>Response Caching</strong>: Cache responses for identical prompts</li>
-<li><strong>Prompt Templates</strong>: Built-in template system</li>
-<li><strong>Progress Callbacks</strong>: Better progress reporting for long generations</li>
+<li>
+<p><strong>Async Support</strong>: <code>async def generate_async()</code> for concurrent operations</p>
+</li>
+<li>
+<p><strong>Response Caching</strong>: Cache responses for identical prompts</p>
+</li>
+<li>
+<p><strong>Prompt Templates</strong>: Built-in template system</p>
+</li>
+<li>
+<p><strong>Progress Callbacks</strong>: Better progress reporting for long generations</p>
+</li>
 </ol>
 <h3 id="medium-term">Medium Term<a class="headerlink" href="#medium-term" title="Permanent link">&para;</a></h3>
 <ol>
-<li><strong>RAG Support</strong>: Built-in retrieval-augmented generation utilities</li>
-<li><strong>Model Zoo</strong>: Pre-configured settings for popular models</li>
-<li><strong>Benchmarking Tools</strong>: Built-in performance profiling</li>
-<li><strong>Web UI</strong>: Simple web interface for testing</li>
+<li>
+<p><strong>RAG Support</strong>: Built-in retrieval-augmented generation utilities</p>
+</li>
+<li>
+<p><strong>Model Zoo</strong>: Pre-configured settings for popular models</p>
+</li>
+<li>
+<p><strong>Benchmarking Tools</strong>: Built-in performance profiling</p>
+</li>
+<li>
+<p><strong>Web UI</strong>: Simple web interface for testing</p>
+</li>
 </ol>
 <h3 id="long-term">Long Term<a class="headerlink" href="#long-term" title="Permanent link">&para;</a></h3>
 <ol>
-<li><strong>Distributed Inference</strong>: Multi-GPU/multi-node support</li>
-<li><strong>Model Quantization</strong>: Built-in quantization tools</li>
-<li><strong>Training Integration</strong>: Fine-tuning support</li>
+<li>
+<p><strong>Distributed Inference</strong>: Multi-GPU/multi-node support</p>
+</li>
+<li>
+<p><strong>Model Quantization</strong>: Built-in quantization tools</p>
+</li>
+<li>
+<p><strong>Training Integration</strong>: Fine-tuning support</p>
+</li>
 </ol>
 <h2 id="conclusion">Conclusion<a class="headerlink" href="#conclusion" title="Permanent link">&para;</a></h2>
 <p>These improvements transform inferna from a thin C++ wrapper into a comprehensive, user-friendly Python library for LLM inference. The additions maintain the project's core philosophy of staying close to llama.cpp while providing Pythonic convenience layers.</p>
 <h3 id="key-achievements">Key Achievements<a class="headerlink" href="#key-achievements" title="Permanent link">&para;</a></h3>
-<p>[x] High-level generation API (simple, streaming, configurable)
-[x] Batch processing utilities (fixed and fully functional with 13 comprehensive tests)
-[x] Framework integrations (OpenAI, LangChain)
-[x] Comprehensive documentation (guide, cookbook, examples)
-[x] Full test coverage (276 tests passing)
-[x] Zero breaking changes (backward compatible)</p>
+<p>[x] High-level generation API (simple, streaming, configurable) [x] Batch processing utilities (fixed and fully functional with 13 comprehensive tests) [x] Framework integrations (OpenAI, LangChain) [x] Comprehensive documentation (guide, cookbook, examples) [x] Full test coverage (276 tests passing) [x] Zero breaking changes (backward compatible)</p>
 <h3 id="impact">Impact<a class="headerlink" href="#impact" title="Permanent link">&para;</a></h3>
 <ul>
 <li>
@@ -2248,11 +2278,21 @@
 </ul>
 <h2 id="recommended-next-steps">Recommended Next Steps<a class="headerlink" href="#recommended-next-steps" title="Permanent link">&para;</a></h2>
 <ol>
-<li><strong>Update README.md</strong> - Add quick start examples using new APIs</li>
-<li><strong>Create Examples Directory</strong> - Add more standalone examples</li>
-<li><strong>Performance Benchmarks</strong> - Document performance improvements</li>
-<li><strong>Release v0.1.9</strong> - Tag release with these improvements</li>
-<li><strong>Announcement</strong> - Blog post or documentation showcasing new features</li>
+<li>
+<p><strong>Update README.md</strong> - Add quick start examples using new APIs</p>
+</li>
+<li>
+<p><strong>Create Examples Directory</strong> - Add more standalone examples</p>
+</li>
+<li>
+<p><strong>Performance Benchmarks</strong> - Document performance improvements</p>
+</li>
+<li>
+<p><strong>Release v0.1.9</strong> - Tag release with these improvements</p>
+</li>
+<li>
+<p><strong>Announcement</strong> - Blog post or documentation showcasing new features</p>
+</li>
 </ol>
 <h2 id="support">Support<a class="headerlink" href="#support" title="Permanent link">&para;</a></h2>
 <ul>

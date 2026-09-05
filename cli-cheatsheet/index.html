@@ -2265,10 +2265,7 @@
 <a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span>-d<span class="w"> </span>docs/<span class="w"> </span>-s<span class="w"> </span><span class="s2">&quot;Answer in one paragraph&quot;</span><span class="w"> </span>-k<span class="w"> </span><span class="m">3</span><span class="w"> </span>--threshold<span class="w"> </span><span class="m">0</span>.4
 </code></pre></div>
 <h3 id="persistent-index-db">Persistent index (<code>--db</code>)<a class="headerlink" href="#persistent-index-db" title="Permanent link">&para;</a></h3>
-<p>By default the vector index is held in memory and rebuilt on every
-run. For corpora large enough that re-embedding is expensive, pass
-<code>--db PATH</code> to persist the index to a SQLite file and reuse it on
-subsequent runs:</p>
+<p>By default the vector index is held in memory and rebuilt on every run. For corpora large enough that re-embedding is expensive, pass <code>--db PATH</code> to persist the index to a SQLite file and reuse it on subsequent runs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># First run: index the corpus into a file</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>inferna<span class="w"> </span>rag<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>-e<span class="w"> </span>models/bge-small.gguf<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span>-f<span class="w"> </span>docs/corpus.txt<span class="w"> </span>--db<span class="w"> </span>./rag.db
@@ -2285,17 +2282,9 @@ subsequent runs:</p>
 <a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>inferna<span class="w"> </span>rag<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>-e<span class="w"> </span>models/bge-small.gguf<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">    </span>-f<span class="w"> </span>docs/corpus.txt<span class="w"> </span>--db<span class="w"> </span>./rag.db<span class="w"> </span>--rebuild
 </code></pre></div>
-<p>The DB records the embedding model fingerprint (basename + file size),
-chunk size, and chunk overlap when it's first created. Reopening with a
-different embedding model, vector metric, or chunking config raises a
-clear error rather than silently producing wrong rankings — pass
-<code>--rebuild</code> to recreate the index against the new config.</p>
+<p>The DB records the embedding model fingerprint (basename + file size), chunk size, and chunk overlap when it's first created. Reopening with a different embedding model, vector metric, or chunking config raises a clear error rather than silently producing wrong rankings — pass <code>--rebuild</code> to recreate the index against the new config.</p>
 <h3 id="corpus-deduplication-automatic">Corpus deduplication (automatic)<a class="headerlink" href="#corpus-deduplication-automatic" title="Permanent link">&para;</a></h3>
-<p>Each indexed file is hashed (md5 of its raw bytes) and the hash is
-recorded in the DB's <code>embeddings_sources</code> table. Re-running with the
-same <code>-f</code> files is a no-op on the indexing side — the files are
-silently skipped and the user goes straight to query mode. The status
-line surfaces the skip count:</p>
+<p>Each indexed file is hashed (md5 of its raw bytes) and the hash is recorded in the DB's <code>embeddings_sources</code> table. Re-running with the same <code>-f</code> files is a no-op on the indexing side — the files are silently skipped and the user goes straight to query mode. The status line surfaces the skip count:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>$<span class="w"> </span>inferna<span class="w"> </span>rag<span class="w"> </span>-m<span class="w"> </span>...<span class="w"> </span>-e<span class="w"> </span>...<span class="w"> </span>-f<span class="w"> </span>corpus.txt<span class="w"> </span>--db<span class="w"> </span>./rag.db
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="m">128</span><span class="w"> </span>chunks<span class="w"> </span>indexed<span class="w"> </span>-&gt;<span class="w"> </span>./rag.db<span class="w">                          </span><span class="c1"># first run</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
@@ -2305,14 +2294,8 @@ line surfaces the skip count:</p>
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>$<span class="w"> </span>inferna<span class="w"> </span>rag<span class="w"> </span>-m<span class="w"> </span>...<span class="w"> </span>-e<span class="w"> </span>...<span class="w"> </span>-f<span class="w"> </span>corpus.txt<span class="w"> </span>-f<span class="w"> </span>new.txt<span class="w"> </span>--db<span class="w"> </span>./rag.db
 <a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="m">3</span><span class="w"> </span>new<span class="w"> </span>chunks<span class="w"> </span>appended<span class="w"> </span>to<span class="w"> </span>./rag.db<span class="w"> </span><span class="o">(</span><span class="m">128</span><span class="w"> </span>existing,<span class="w"> </span><span class="m">131</span><span class="w"> </span>total<span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="m">1</span><span class="w"> </span>unchanged<span class="o">)</span>
 </code></pre></div>
-<p>Editing a file in place (same basename, different content) is detected
-as a hash mismatch and refused with a clear error message — rename the
-file (treat it as a new source) or use <code>--rebuild</code> to recreate the
-whole index from the new content. This prevents the index from silently
-ending up with two versions of the same logical source.</p>
-<p><code>add_texts</code> (the directory-loading path used by <code>-d</code>) deduplicates the
-same way, using a <code>text:&lt;hash-prefix&gt;</code> synthetic label since text
-strings don't have a meaningful name.</p>
+<p>Editing a file in place (same basename, different content) is detected as a hash mismatch and refused with a clear error message — rename the file (treat it as a new source) or use <code>--rebuild</code> to recreate the whole index from the new content. This prevents the index from silently ending up with two versions of the same logical source.</p>
+<p><code>add_texts</code> (the directory-loading path used by <code>-d</code>) deduplicates the same way, using a <code>text:&lt;hash-prefix&gt;</code> synthetic label since text strings don't have a meaningful name.</p>
 <table>
 <thead>
 <tr>
@@ -2454,11 +2437,12 @@ strings don't have a meaningful name.</p>
 <p>At least one document source (<code>-f</code>/<code>-d</code>) <strong>or</strong> an existing <code>--db</code> is required.</p>
 <hr />
 <h2 id="inferna-server">inferna server<a class="headerlink" href="#inferna-server" title="Permanent link">&para;</a></h2>
-<p>Start an OpenAI-compatible HTTP server.</p>
+<p>Start an OpenAI-compatible HTTP server. <strong>API only by default</strong> — pass <code>-w</code>/<code>--webui</code> to also mount the browser chat UI at <code>GET /</code>.</p>
 <p><strong>Also</strong>: <code>python -m inferna.llama.server</code></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>--port<span class="w"> </span><span class="m">9090</span><span class="w"> </span>--server-type<span class="w"> </span>python
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>--model-alias<span class="w"> </span>my-llama<span class="w"> </span>--n-parallel<span class="w"> </span><span class="m">4</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w">                                   </span><span class="c1"># API only</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>-w<span class="w">                                </span><span class="c1"># API + browser UI at http://127.0.0.1:8080/</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>--port<span class="w"> </span><span class="m">9090</span><span class="w"> </span>--server-type<span class="w"> </span>python<span class="w">  </span><span class="c1"># pure-Python backend (no webui)</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>inferna<span class="w"> </span>server<span class="w"> </span>-m<span class="w"> </span>models/llama.gguf<span class="w"> </span>--model-alias<span class="w"> </span>my-llama<span class="w"> </span>--n-parallel<span class="w"> </span><span class="m">4</span>
 </code></pre></div>
 <table>
 <thead>
@@ -2510,23 +2494,29 @@ strings don't have a meaningful name.</p>
 <td><code>--model-alias</code></td>
 <td>string</td>
 <td>(filename stem)</td>
-<td>Identifier shown in the web UI's "Model" field and <code>/v1/models[].id</code></td>
+<td>Identifier shown in <code>/v1/models[].id</code> (and the web UI's "Model" field when <code>-w</code> is set)</td>
 </tr>
 <tr>
-<td><code>--mongoose-log-level</code></td>
+<td><code>--log-level</code></td>
 <td>int</td>
 <td>1</td>
-<td>Mongoose internal log verbosity (0=none, 1=errors, 2=info, 3=debug, 4=verbose). Default silences routine I/O chatter; raise to 3 to debug HTTP-level issues</td>
+<td>HTTP-layer log verbosity (0=none, 1=errors, 2=info, 3=debug, 4=verbose). Default silences routine I/O chatter; raise to 3 to debug HTTP-level issues</td>
 </tr>
 <tr>
 <td><code>--server-type</code></td>
 <td>choice</td>
 <td>embedded</td>
-<td>Server implementation: <code>python</code> or <code>embedded</code></td>
+<td>Server implementation: <code>embedded</code> (in-process Mongoose, C) or <code>python</code> (pure-Python <code>http.server</code>). <code>python</code> never serves the webui regardless of <code>-w</code></td>
+</tr>
+<tr>
+<td><code>-w, --webui</code></td>
+<td>flag</td>
+<td>off</td>
+<td>Mount the browser webui at <code>/</code>, plus the supporting routes <code>/bundle.{css,js}</code>, <code>/loading.html</code>, <code>/props</code>, <code>/slots</code>, <code>/metrics</code>. Embedded backend only</td>
 </tr>
 </tbody>
 </table>
-<p>The embedded server (default) serves a chat web UI at <code>GET /</code>. See <a href="../server_usage_examples/">Server Usage Examples</a> for the full endpoint surface and SSE streaming details.</p>
+<p>See <a href="../server_usage_examples/">Server Usage Examples</a> for the full endpoint surface and SSE streaming details.</p>
 <hr />
 <h2 id="inferna-transcribe">inferna transcribe<a class="headerlink" href="#inferna-transcribe" title="Permanent link">&para;</a></h2>
 <p>Transcribe audio files using whisper.cpp.</p>

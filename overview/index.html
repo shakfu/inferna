@@ -1758,10 +1758,18 @@
 </table>
 <h3 id="data-flow">Data Flow<a class="headerlink" href="#data-flow" title="Permanent link">&para;</a></h3>
 <ol>
-<li>User calls a high-level function (e.g., <code>complete("prompt", model_path="model.gguf")</code>)</li>
-<li>The API layer loads the model via the nanobind bindings, which allocate C++ context objects</li>
-<li>Tokens are sampled in C++ and streamed back through nanobind to Python callbacks</li>
-<li>Framework modules (agents, RAG) orchestrate multiple calls to the API layer, adding tool use, retrieval, or structured output on top</li>
+<li>
+<p>User calls a high-level function (e.g., <code>complete("prompt", model_path="model.gguf")</code>)</p>
+</li>
+<li>
+<p>The API layer loads the model via the nanobind bindings, which allocate C++ context objects</p>
+</li>
+<li>
+<p>Tokens are sampled in C++ and streamed back through nanobind to Python callbacks</p>
+</li>
+<li>
+<p>Framework modules (agents, RAG) orchestrate multiple calls to the API layer, adding tool use, retrieval, or structured output on top</p>
+</li>
 </ol>
 <h3 id="key-design-decisions">Key Design Decisions<a class="headerlink" href="#key-design-decisions" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1772,7 +1780,7 @@
 <p><strong>Zero Python dependencies</strong>: The core library has no runtime dependencies beyond Python itself. Optional integrations (LangChain, OpenAI compat) import lazily.</p>
 </li>
 <li>
-<p><strong>Dual server strategy</strong>: <code>EmbeddedServer</code> runs an in-process <a href="https://mongoose.ws/">Mongoose</a> HTTP server (vendored in <code>src/inferna/llama/server/mongoose.{c,h}</code> and exposed through nanobind) and serves the upstream <a href="https://github.com/ggml-org/llama.cpp/tree/master/tools/server/webui">llama-server</a> chat web UI alongside the OpenAI-compatible JSON API; <code>PythonServer</code> offers a pure-Python <code>http.server</code> alternative without the web UI for debugging or wheel-less environments. Both share the same <code>ServerConfig</code> and JSON endpoint surface.</p>
+<p><strong>Dual server strategy</strong>: <code>EmbeddedServer</code> runs an in-process <a href="https://mongoose.ws/">Mongoose</a> HTTP server (vendored in <code>src/inferna/llama/server/mongoose.{c,h}</code> and exposed through nanobind) and optionally serves the upstream <a href="https://github.com/ggml-org/llama.cpp/tree/master/tools/ui">llama.cpp</a> chat web UI alongside the OpenAI-compatible JSON API (gated by <code>ServerConfig.serve_webui</code>, opt-in; <code>inferna server -w</code> enables it from the CLI); <code>PythonServer</code> offers a pure-Python <code>http.server</code> alternative without the web UI for debugging or wheel-less environments. Both share the same <code>ServerConfig</code> and JSON endpoint surface.</p>
 </li>
 </ul>
 <h2 id="quick-example">Quick Example<a class="headerlink" href="#quick-example" title="Permanent link">&para;</a></h2>

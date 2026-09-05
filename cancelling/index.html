@@ -1450,33 +1450,33 @@
 
 
 <h1 id="cancelling-generation">Cancelling generation<a class="headerlink" href="#cancelling-generation" title="Permanent link">&para;</a></h1>
-<p><code>LLM</code> supports thread-safe cancellation of an in-flight generation at two
-layers:</p>
+<p><code>LLM</code> supports thread-safe cancellation of an in-flight generation at two layers:</p>
 <ul>
-<li><strong>Between tokens</strong> — a <code>threading.Event</code> polled in the per-token loop.
-  Sub-millisecond latency in steady-state generation.</li>
-<li><strong>Mid-decode</strong> — a nogil <code>ggml_abort_callback</code> reads a C-level flag and
-  aborts the in-progress <code>llama_decode</code> from inside ggml's compute graph.
-  This is what makes cancellation responsive during long prompt prefill,
-  where a single <code>decode</code> call may run for seconds.</li>
+<li>
+<p><strong>Between tokens</strong> — a <code>threading.Event</code> polled in the per-token loop. Sub-millisecond latency in steady-state generation.</p>
+</li>
+<li>
+<p><strong>Mid-decode</strong> — a nogil <code>ggml_abort_callback</code> reads a C-level flag and aborts the in-progress <code>llama_decode</code> from inside ggml's compute graph. This is what makes cancellation responsive during long prompt prefill, where a single <code>decode</code> call may run for seconds.</p>
+</li>
 </ul>
 <p>Both layers are wired by a single call: <code>llm.cancel()</code>.</p>
 <h2 id="what-abort-means">What "abort" means<a class="headerlink" href="#what-abort-means" title="Permanent link">&para;</a></h2>
-<p><code>ggml_abort_callback</code> is cooperative: when it returns non-zero, ggml stops
-scheduling further ops in the current graph and <code>llama_decode</code> returns
-early. <strong>The process is not killed.</strong> Control returns to Python normally,
-the partially-produced tokens are yielded, and the <code>LLM</code> object remains
-reusable for the next call. Only the in-progress batch is discarded.</p>
-<p>The cancel flag auto-clears at the start of each generation, so a stale
-<code>cancel()</code> does not leak into the next call.</p>
+<p><code>ggml_abort_callback</code> is cooperative: when it returns non-zero, ggml stops scheduling further ops in the current graph and <code>llama_decode</code> returns early. <strong>The process is not killed.</strong> Control returns to Python normally, the partially-produced tokens are yielded, and the <code>LLM</code> object remains reusable for the next call. Only the in-progress batch is discarded.</p>
+<p>The cancel flag auto-clears at the start of each generation, so a stale <code>cancel()</code> does not leak into the next call.</p>
 <h2 id="api">API<a class="headerlink" href="#api" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>LLM.cancel()</code> — request cancellation. Safe from any thread.</li>
-<li><code>LLM.cancel_requested</code> — read-only <code>bool</code> property.</li>
-<li><code>LLM.install_sigint_handler()</code> — opt-in Ctrl-C handler. Returns a
-  context manager / handle with <code>.restore()</code>.</li>
-<li><code>LlamaContext.cancel</code> — read/write <code>bool</code> mirror of the C-level flag,
-  for direct lower-level use.</li>
+<li>
+<p><code>LLM.cancel()</code> — request cancellation. Safe from any thread.</p>
+</li>
+<li>
+<p><code>LLM.cancel_requested</code> — read-only <code>bool</code> property.</p>
+</li>
+<li>
+<p><code>LLM.install_sigint_handler()</code> — opt-in Ctrl-C handler. Returns a context manager / handle with <code>.restore()</code>.</p>
+</li>
+<li>
+<p><code>LlamaContext.cancel</code> — read/write <code>bool</code> mirror of the C-level flag, for direct lower-level use.</p>
+</li>
 </ul>
 <h2 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h2>
 <h3 id="1-cancel-from-another-thread">1. Cancel from another thread<a class="headerlink" href="#1-cancel-from-another-thread" title="Permanent link">&para;</a></h3>
@@ -1509,15 +1509,9 @@ reusable for the next call. Only the in-progress batch is discarded.</p>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">-- back to normal --&quot;</span><span class="p">)</span>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="nb">print</span><span class="p">(</span><span class="n">llm</span><span class="p">(</span><span class="s2">&quot;ok?&quot;</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">GenerationConfig</span><span class="p">(</span><span class="n">max_tokens</span><span class="o">=</span><span class="mi">5</span><span class="p">)))</span>
 </code></pre></div>
-<p><code>install_sigint_handler()</code> is opt-in by design; inferna does not touch
-signal handlers otherwise. The previous handler is saved and restored
-on <code>.restore()</code> / <code>__exit__</code>, so it composes with Click, Jupyter,
-asyncio, etc. Must be called from the main thread (<code>signal.signal</code>
-restriction).</p>
+<p><code>install_sigint_handler()</code> is opt-in by design; inferna does not touch signal handlers otherwise. The previous handler is saved and restored on <code>.restore()</code> / <code>__exit__</code>, so it composes with Click, Jupyter, asyncio, etc. Must be called from the main thread (<code>signal.signal</code> restriction).</p>
 <h3 id="3-cancel-on-disconnect-in-a-fastapi-sse-sidecar">3. Cancel-on-disconnect in a FastAPI / SSE sidecar<a class="headerlink" href="#3-cancel-on-disconnect-in-a-fastapi-sse-sidecar" title="Permanent link">&para;</a></h3>
-<p>The motivating use case: a streaming HTTP server should free the GPU
-when the client closes the connection, instead of running to
-<code>max_tokens</code>.</p>
+<p>The motivating use case: a streaming HTTP server should free the GPU when the client closes the connection, instead of running to <code>max_tokens</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi</span><span class="w"> </span><span class="kn">import</span> <span class="n">FastAPI</span><span class="p">,</span> <span class="n">Request</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">fastapi.responses</span><span class="w"> </span><span class="kn">import</span> <span class="n">StreamingResponse</span>
@@ -1559,23 +1553,18 @@ when the client closes the connection, instead of running to
 </code></pre></div>
 <h2 id="notes-and-caveats">Notes and caveats<a class="headerlink" href="#notes-and-caveats" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Performance.</strong> The between-token check is one <code>Event.is_set()</code> per
-  token (sub-microsecond). The mid-decode callback is <code>noexcept nogil</code>
-  and does a single indirect load per ggml op poll. Overhead is not
-  measurable against decode time.</li>
-<li><strong>Memory model.</strong> The C flag is a plain <code>bint</code>, not a C11 atomic.
-  Aligned word writes are atomic on every CPU inferna targets; a stale
-  read just delays cancellation by one op poll. This is acceptable for
-  a one-shot "abort now" signal.</li>
-<li><strong>Custom abort callbacks.</strong> <code>LLM</code> auto-installs the cancel callback
-  on every context creation. Calling <code>LlamaContext.set_abort_callback()</code>
-  with a Python callable overrides it. To combine user logic with
-  cancellation, consult <code>ctx.cancel</code> (or your own state) inside that
-  Python callback.</li>
-<li><strong>Stable Diffusion.</strong> <code>inferna.sd</code> does <strong>not</strong> currently support
-  cancellation; <code>generate_image()</code> is a single blocking C call with no
-  abort path. Tracked against upstream
-  <a href="https://github.com/leejet/stable-diffusion.cpp/pull/1124">leejet/stable-diffusion.cpp#1124</a>.</li>
+<li>
+<p><strong>Performance.</strong> The between-token check is one <code>Event.is_set()</code> per token (sub-microsecond). The mid-decode callback is <code>noexcept nogil</code> and does a single indirect load per ggml op poll. Overhead is not measurable against decode time.</p>
+</li>
+<li>
+<p><strong>Memory model.</strong> The C flag is a plain <code>bint</code>, not a C11 atomic. Aligned word writes are atomic on every CPU inferna targets; a stale read just delays cancellation by one op poll. This is acceptable for a one-shot "abort now" signal.</p>
+</li>
+<li>
+<p><strong>Custom abort callbacks.</strong> <code>LLM</code> auto-installs the cancel callback on every context creation. Calling <code>LlamaContext.set_abort_callback()</code> with a Python callable overrides it. To combine user logic with cancellation, consult <code>ctx.cancel</code> (or your own state) inside that Python callback.</p>
+</li>
+<li>
+<p><strong>Stable Diffusion.</strong> <code>inferna.sd</code> does <strong>not</strong> currently support cancellation; <code>generate_image()</code> is a single blocking C call with no abort path. Tracked against upstream <a href="https://github.com/leejet/stable-diffusion.cpp/pull/1124">leejet/stable-diffusion.cpp#1124</a>.</p>
+</li>
 </ul>
 
 

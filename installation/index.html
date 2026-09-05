@@ -2160,10 +2160,18 @@
 <h2 id="build-system">Build System<a class="headerlink" href="#build-system" title="Permanent link">&para;</a></h2>
 <p>Inferna uses <strong>scikit-build-core</strong> with CMake for building the nanobind extensions. The build process:</p>
 <ol>
-<li><strong>Dependencies</strong>: <code>make</code> downloads and builds llama.cpp, whisper.cpp (and optionally stable-diffusion.cpp)</li>
-<li><strong>nanobind compilation</strong>: CMake compiles the hand-written <code>_*_native.cpp</code> files (one extension per upstream)</li>
-<li><strong>Extension linking</strong>: C++ extensions are linked against the static libraries</li>
-<li><strong>Installation</strong>: Extensions are installed in editable mode</li>
+<li>
+<p><strong>Dependencies</strong>: <code>make</code> downloads and builds llama.cpp, whisper.cpp (and optionally stable-diffusion.cpp)</p>
+</li>
+<li>
+<p><strong>nanobind compilation</strong>: CMake compiles the hand-written <code>_*_native.cpp</code> files (one extension per upstream)</p>
+</li>
+<li>
+<p><strong>Extension linking</strong>: C++ extensions are linked against the static libraries</p>
+</li>
+<li>
+<p><strong>Installation</strong>: Extensions are installed in editable mode</p>
+</li>
 </ol>
 <h3 id="build-commands">Build Commands<a class="headerlink" href="#build-commands" title="Permanent link">&para;</a></h3>
 <table>
