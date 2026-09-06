@@ -81,7 +81,7 @@ jobs:
           key: deps-${{ inputs.wheel_kind == 'abi3' && 'abi3-' || '' }}rocm-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'pyproject.toml', '.github/workflows/_gpu-build-rocm.yml') }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
