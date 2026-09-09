@@ -19,6 +19,7 @@ def test_default_model_params():
     assert params.main_gpu == 0
     assert params.vocab_only == False
     assert params.load_mode == cy.LLAMA_LOAD_MODE_AUTO
+    assert params.lazy_mode == cy.LLAMA_LAZY_MODE_AUTO
     assert params.use_mmap == True
     assert params.use_mlock == False
     assert params.use_direct_io == False
@@ -60,9 +61,38 @@ def test_model_params_load_mode_boolean_view():
     assert params.load_mode == cy.LLAMA_LOAD_MODE_MMAP
 
 
+def test_model_params_lazy_mode():
+    """lazy_mode is independent of load_mode; both round-trip."""
+    params = cy.LlamaModelParams()
+
+    # Pin the wire values: they are what a persisted config stores, so an
+    # upstream renumbering must fail here rather than silently change meaning.
+    assert cy.LLAMA_LAZY_MODE_OFF == 0
+    assert cy.LLAMA_LAZY_MODE_AUTO == 1
+    assert cy.LLAMA_LAZY_MODE_ON == 2
+
+    for mode in (cy.LLAMA_LAZY_MODE_OFF, cy.LLAMA_LAZY_MODE_ON,
+                 cy.LLAMA_LAZY_MODE_AUTO):
+        params.lazy_mode = mode
+        assert params.lazy_mode == mode
+    params.load_mode = cy.LLAMA_LOAD_MODE_DIRECT_IO
+    assert params.lazy_mode == cy.LLAMA_LAZY_MODE_AUTO
+
+
 def test_model_params_load_mode_direct_assignment():
     """load_mode can also be set directly, and the booleans follow."""
     params = cy.LlamaModelParams()
+
+    # Pin the wire values, as for lazy_mode above: MMAP_MLOCK == 3 is the
+    # pairing the boolean view relies on, and AUTO is negative, so a
+    # renumbering would not even keep the enum's sign.
+    assert cy.LLAMA_LOAD_MODE_AUTO == -1
+    assert cy.LLAMA_LOAD_MODE_NONE == 0
+    assert cy.LLAMA_LOAD_MODE_MMAP == 1
+    assert cy.LLAMA_LOAD_MODE_MLOCK == 2
+    assert cy.LLAMA_LOAD_MODE_MMAP_MLOCK == 3
+    assert cy.LLAMA_LOAD_MODE_DIRECT_IO == 4
+
     params.load_mode = cy.LLAMA_LOAD_MODE_MMAP_MLOCK
     assert params.use_mmap is True
     assert params.use_mlock is True
@@ -298,6 +328,16 @@ def test_default_model_quantize_params():
     assert params.only_copy == False
     assert params.pure == False
     assert params.keep_split == False
+    assert params.max_buf_size == 8 * 1024 * 1024 * 1024  # 8 GiB default
+
+
+def test_quantize_params_max_buf_size_roundtrip():
+    """max_buf_size caps the tensor rows held in memory; 0 means the default."""
+    params = cy.LlamaModelQuantizeParams()
+    params.max_buf_size = 1 << 30
+    assert params.max_buf_size == 1 << 30
+    params.max_buf_size = 0
+    assert params.max_buf_size == 0
 
 
 def test_quantize_params_imatrix_roundtrip():

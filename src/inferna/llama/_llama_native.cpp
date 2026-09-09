@@ -607,6 +607,7 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaModelParamsW, int,  main_gpu,     "main_gpu")
         PARAM_VAL(LlamaModelParamsW, bool, vocab_only,    "vocab_only")
         PARAM_VAL(LlamaModelParamsW, int,  load_mode,    "load_mode")
+        PARAM_VAL(LlamaModelParamsW, int,  lazy_mode,    "lazy_mode")
         // use_mmap / use_mlock / use_direct_io are a compatibility view over
         // load_mode; setting one preserves the other two where the enum can
         // express the combination (mmap+mlock is the only pairing it encodes).
@@ -816,6 +817,7 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaModelQuantizeParamsW, bool, pure,      "pure")
         PARAM_VAL(LlamaModelQuantizeParamsW, bool, keep_split, "keep_split")
         PARAM_VAL(LlamaModelQuantizeParamsW, bool, dry_run,    "dry_run")
+        PARAM_VAL(LlamaModelQuantizeParamsW, size_t, max_buf_size, "max_buf_size")
         // imatrix: importance-matrix data as {tensor_name: [float, ...]}. Backed
         // by owned storage and a name==nullptr terminated array, as the
         // quantizer expects. Improves low-bit (IQ*/Q*_K) quantization quality.

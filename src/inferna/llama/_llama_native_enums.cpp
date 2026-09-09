@@ -234,6 +234,11 @@ void register_enums(nb::module_& m) {
     EXPORT(LLAMA_LOAD_MODE_MMAP_MLOCK);
     EXPORT(LLAMA_LOAD_MODE_DIRECT_IO);
 
+    // -------- llama lazy mode --------
+    EXPORT(LLAMA_LAZY_MODE_OFF);
+    EXPORT(LLAMA_LAZY_MODE_AUTO);
+    EXPORT(LLAMA_LAZY_MODE_ON);
+
     // -------- llama context type --------
     EXPORT(LLAMA_CONTEXT_TYPE_DEFAULT);
     EXPORT(LLAMA_CONTEXT_TYPE_MTP);

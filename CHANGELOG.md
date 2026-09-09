@@ -22,6 +22,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Changed
+
+- **llama.cpp sync to `b10809`** (`v0.4.0`, commit `5266f24`) -- bumped `LLAMACPP_VERSION` in `scripts/manage.py` (`b10621` -> `b10809`). `mtmd_helper_bitmap_init_from_file` and `..._from_buf` gained a trailing `struct mtmd_helper_init_opt` argument, so `MtmdBitmap.from_file` / `.from_buffer` no longer compiled; both now pass `mtmd_helper_init_opt_default()`. That struct carries only the video-decode options, which the wrapper does not expose, so the default reproduces the previous behaviour exactly.
+
+- **`LlamaModelParams.lazy_mode` and `LLAMA_LAZY_MODE_{OFF,AUTO,ON}`** -- upstream added on-demand row reading for arch-marked tensors as a field independent of `load_mode`. It defaults to `AUTO` (lazy for marked tensors above 4 GiB, mmap required); `ON` and `OFF` force it either way.
+
+- **`LlamaModelQuantizeParams.max_buf_size`** -- caps the bytes of tensor rows the quantizer holds at once. Defaults to 8 GiB; `0` selects that default.
+
+### Fixed
+
+- **The Metal MSL version pin silently stopped applying to llama.cpp** -- `v0.4.0` routed both shader-compile sites through `ggml_metal_compile_options_set_lang()` and sets `languageVersion` only on its new tensor branch, so `ggml-metal-pin-msl-version-perkind.patch` matched nothing while the bug it fixes was unchanged. A patch that no longer applies is skipped as a no-op by design (`_apply_source_patches`), so neither the build nor the 2020-test suite reported it: the Metal backend went back to deriving its MSL version from the host binary's SDK, which under python.org's CPython 3.12 fails to compile the shader library at all. Ported `ggml-metal-pin-msl-version-set-lang.patch` from cyllama, which carries the same `@available` ladder in the new function. whisper.cpp and stable-diffusion.cpp still vendor the older shape and keep the original patch; `-perkind` now matches no tree and is kept only for a `LLAMACPP_VERSION=b10621` override.
+
+  The 4.0 cap now overrides an upstream default rather than making an unset one deterministic. `v0.4.0` enables the tensor API on M5/M6/A19/A20 and asks for MSL 4.0 to get its headers; capping at 3.2 fails the tensor probe's dummy-kernel compile, so `ggml_metal_device_init` clears `props.has_tensor` and keeps the simdgroup kernels. That is the pre-`v0.4.0` behaviour. `GGML_METAL_TENSOR_ENABLE=1` cannot override the cap. Untested on Metal 4 hardware.
+
+### Notes
+
+- `mtmd_tokenize_from_parts` (tokenize a mixed text/bitmap part list without media markers) is new upstream and left unwrapped; `mtmd_tokenize` covers the marker-based path the wrapper uses.
+
+- `LLAMA_SESSION_VERSION` 9 -> 10 and `LLAMA_STATE_SEQ_VERSION` 2 -> 3 invalidate session and sequence state files written by earlier pins. Neither constant is re-exported, so nothing in the wrapper changed.
+
 ## [0.2.1]
 
 ### Added
