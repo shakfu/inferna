@@ -37,6 +37,7 @@ jobs:
     if: inputs.enabled
     name: ${{ inputs.wheel_kind == 'abi3' && 'ROCm 6.3 abi3' || 'ROCm 6.3' }} - rocm-linux-x86_64 (${{ inputs.link_mode }})
     runs-on: ubuntu-22.04
+    timeout-minutes: 150
     env:
       CIBW_BUILD: ${{ inputs.cibw_build }}
 

@@ -37,6 +37,7 @@ jobs:
     if: inputs.enabled
     name: ${{ inputs.wheel_kind == 'abi3' && 'SYCL abi3' || 'SYCL' }} - sycl-linux-x86_64 (${{ inputs.link_mode }})
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     env:
       CIBW_BUILD: ${{ inputs.cibw_build }}
 

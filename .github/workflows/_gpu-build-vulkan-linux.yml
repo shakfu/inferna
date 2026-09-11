@@ -37,6 +37,7 @@ jobs:
     if: inputs.enabled
     name: ${{ inputs.wheel_kind == 'abi3' && 'Vulkan abi3' || 'Vulkan' }} - vulkan-linux-x86_64 (${{ inputs.link_mode }})
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     env:
       CIBW_BUILD: ${{ inputs.cibw_build }}
 
