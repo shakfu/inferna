@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.3.0]
+
 ### Changed
 
 - **llama.cpp sync to `b10809`** (`v0.4.0`, commit `5266f24`) -- bumped `LLAMACPP_VERSION` in `scripts/manage.py` (`b10621` -> `b10809`). `mtmd_helper_bitmap_init_from_file` and `..._from_buf` gained a trailing `struct mtmd_helper_init_opt` argument, so `MtmdBitmap.from_file` / `.from_buffer` no longer compiled; both now pass `mtmd_helper_init_opt_default()`. That struct carries only the video-decode options, which the wrapper does not expose, so the default reproduces the previous behaviour exactly.
