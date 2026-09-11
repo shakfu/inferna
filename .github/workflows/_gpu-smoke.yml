@@ -42,9 +42,6 @@ on:
       vulkan_windows:
         type: boolean
         required: true
-      vulkan_macos_intel:
-        type: boolean
-        required: true
 
 jobs:
   smoke:
@@ -78,10 +75,6 @@ jobs:
             runs-on: windows-latest
             slug: vulkan-windows-x86_64
             condition: vulkan_windows
-          - backend: vulkan-macos-intel
-            runs-on: macos-15-intel
-            slug: vulkan-macos-intel-x86_64
-            condition: vulkan_macos_intel
 
     steps:
       - name: Validate inputs
@@ -102,7 +95,6 @@ jobs:
           VULKAN_LINUX: ${{ inputs.vulkan_linux }}
           CUDA_WINDOWS: ${{ inputs.cuda_windows }}
           VULKAN_WINDOWS: ${{ inputs.vulkan_windows }}
-          VULKAN_MACOS_INTEL: ${{ inputs.vulkan_macos_intel }}
         run: |
           case "${{ matrix.condition }}" in
             cuda_linux)         val="$CUDA_LINUX" ;;
@@ -111,7 +103,6 @@ jobs:
             vulkan_linux)       val="$VULKAN_LINUX" ;;
             cuda_windows)       val="$CUDA_WINDOWS" ;;
             vulkan_windows)     val="$VULKAN_WINDOWS" ;;
-            vulkan_macos_intel) val="$VULKAN_MACOS_INTEL" ;;
             *)                  val="false" ;;
           esac
           if [ "$val" != "true" ]; then

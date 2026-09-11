@@ -68,7 +68,7 @@ pip install inferna-cuda12   # NVIDIA GPU (CUDA 12.4)        -- Linux x86_64, Wi
 pip install inferna-cuda13   # NVIDIA GPU (CUDA 13.1)        -- Windows x86_64
 pip install inferna-rocm     # AMD GPU (ROCm 6.3)            -- Linux x86_64 (requires glibc >= 2.35)
 pip install inferna-sycl     # Intel GPU (oneAPI SYCL 2025.3) -- Linux x86_64
-pip install inferna-vulkan   # Cross-platform GPU (Vulkan)   -- Linux x86_64, Windows x86_64, macOS x86_64 (Intel)
+pip install inferna-vulkan   # Cross-platform GPU (Vulkan)   -- Linux x86_64, Windows x86_64
 ```
 
 All variants install the same `inferna` Python package -- only the compiled backend differs. Install one at a time (they replace each other). GPU variants require the corresponding driver/runtime installed on your system.
@@ -693,7 +693,6 @@ Pre-built wheels on PyPI:
 | `inferna` | CPU | Linux | x86_64 | static |
 | `inferna` | CPU | Windows | x86_64 | static |
 | `inferna` | Metal | macOS | arm64 (Apple Silicon) | static |
-| `inferna` | Metal | macOS | x86_64 (Intel) | static |
 | `inferna-cuda12` | CUDA | Linux | x86_64 | dynamic |
 | `inferna-cuda12` | CUDA | Windows | x86_64 | dynamic |
 | `inferna-cuda13` | CUDA | Windows | x86_64 | dynamic |
@@ -701,7 +700,6 @@ Pre-built wheels on PyPI:
 | `inferna-sycl` | Intel SYCL | Linux | x86_64 | dynamic |
 | `inferna-vulkan` | Vulkan | Linux | x86_64 | dynamic |
 | `inferna-vulkan` | Vulkan | Windows | x86_64 | dynamic |
-| `inferna-vulkan` | Vulkan | macOS | x86_64 (Intel, MoltenVK) | dynamic |
 
 Additional platforms (Windows SYCL / HIP, ARM64, Linux ROCm prebuilt, OpenVINO) are tracked in [TODO.md](TODO.md).
 

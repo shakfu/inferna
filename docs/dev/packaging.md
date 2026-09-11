@@ -32,7 +32,7 @@ Accelerate itself is system-provided and not bundled.
 
 ## `libllama-common`
 
-Upstream's `libllama-common` links against Homebrew's OpenSSL. On `macos-15-intel` runners the Homebrew OpenSSL is built for min macOS 15.0, which clashes with our `MACOSX_DEPLOYMENT_TARGET=11.0`. No inferna extension references `libllama-common`, so it's not a concern unless it ends up on the filesystem in a location `delocate` walks into. Under the current canonical pattern nothing pulls it in, so no exclusion is needed — the extension's rpath drives what gets bundled.
+Upstream's `libllama-common` links against Homebrew's OpenSSL, whose deployment target can clash with our `MACOSX_DEPLOYMENT_TARGET=11.0`. No inferna extension references `libllama-common`, so it's not a concern unless it ends up on the filesystem in a location `delocate` walks into. Under the current canonical pattern nothing pulls it in, so no exclusion is needed — the extension's rpath drives what gets bundled.
 
 ## Wheel repair command
 
@@ -111,4 +111,3 @@ Not directly supported under the current pattern: CMake does not install any dyl
 
 - `scripts/manage.py` — `LlamaCppBuilder.install_shared_libs` copies upstream dylibs into `thirdparty/llama.cpp/dynamic/` with symlinks preserved.
 
-- `.github/workflows/build-new-wheels.yml` — `build_vulkan_macos_intel` job.

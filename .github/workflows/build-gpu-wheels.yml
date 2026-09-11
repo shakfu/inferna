@@ -45,11 +45,6 @@ on:
         required: false
         default: false
         type: boolean
-      vulkan_macos_intel:
-        description: 'Build Vulkan wheels (macOS Intel x86_64) -- not published to PyPI'
-        required: false
-        default: false
-        type: boolean
       cuda_windows:
         description: 'Build CUDA wheels (Windows x86_64) -- not published to PyPI'
         required: false
@@ -111,15 +106,6 @@ jobs:
       link_mode: ${{ inputs.link_mode }}
       enabled: ${{ inputs.vulkan_windows }}
 
-  vulkan_macos_intel:
-    uses: ./.github/workflows/_gpu-build-vulkan-macos-intel.yml
-    with:
-      wheel_kind: stable
-      cibw_version: "3.4.1"
-      cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.vulkan_macos_intel }}
-
   cuda_windows:
     uses: ./.github/workflows/_gpu-build-cuda-windows.yml
     with:
@@ -130,7 +116,7 @@ jobs:
       enabled: ${{ inputs.cuda_windows }}
 
   smoke:
-    needs: [cuda, rocm, sycl, vulkan_linux, vulkan_windows, vulkan_macos_intel, cuda_windows]
+    needs: [cuda, rocm, sycl, vulkan_linux, vulkan_windows, cuda_windows]
     if: always() && !cancelled()
     uses: ./.github/workflows/_gpu-smoke.yml
     with:
@@ -141,10 +127,9 @@ jobs:
       vulkan_linux: ${{ inputs.vulkan_linux }}
       cuda_windows: ${{ inputs.cuda_windows }}
       vulkan_windows: ${{ inputs.vulkan_windows }}
-      vulkan_macos_intel: ${{ inputs.vulkan_macos_intel }}
 
   collect:
-    needs: [cuda, rocm, sycl, vulkan_linux, vulkan_windows, vulkan_macos_intel, cuda_windows]
+    needs: [cuda, rocm, sycl, vulkan_linux, vulkan_windows, cuda_windows]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:

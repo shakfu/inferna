@@ -39,8 +39,6 @@ jobs:
             runs-on: ubuntu-latest
           - os: windows-intel
             runs-on: windows-latest
-          - os: macos-intel
-            runs-on: macos-15-intel
           - os: macos-arm
             runs-on: macos-latest
 
