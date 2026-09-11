@@ -164,11 +164,11 @@ inferna server -m models/llama.gguf --port 8080         # OpenAI-compatible API 
 inferna server -m models/llama.gguf --port 8080 -w      # API + browser chat UI at http://127.0.0.1:8080/
 
 # Speech, image, diagnostics
-inferna transcribe -m models/ggml-base.en.bin audio.wav
-inferna tts -m models/tts.gguf -p "Hello world"
+inferna transcribe -m models/ggml-base.en.bin -f audio.wav
+inferna tts -m models/tts.gguf -mv models/vocoder.gguf -p "Hello world"
 inferna sd txt2img --model models/sd.gguf --prompt "a sunset"
 inferna info                          # build and backend information
-inferna memory -m models/llama.gguf   # GPU memory estimation
+inferna memory models/llama.gguf      # GPU memory estimation
 ```
 
 Run `inferna --help` or `inferna <command> --help` for usage. The [CLI Cheatsheet](docs/cli-cheatsheet.md) is the full reference.
