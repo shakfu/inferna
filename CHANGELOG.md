@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Removed
+
+- **`build-gpu-wheels.yml`** -- the per-version GPU wheel workflow. Only abi3 wheels are released, and with `requires-python >= 3.12` its `cp310`/`cp311` targets were already skipped. `build-gpu-wheels-abi3.yml` is now the only caller of the `_gpu-build-*.yml` reusables (see `docs/dev/abi3.md`).
+
 ## [0.3.0]
 
 ### Changed

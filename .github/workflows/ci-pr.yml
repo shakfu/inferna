@@ -4,7 +4,7 @@ name: ci-pr
 # a fast pytest subset. Catches the common breakage class — wrapper or
 # Python regressions that the full cibw matrix would also catch but at
 # 30+ runner-minutes per platform. The full matrix remains
-# workflow_dispatch-only (build-cibw.yml).
+# workflow_dispatch-only (build-cibw-abi3.yml).
 
 permissions:
   contents: read

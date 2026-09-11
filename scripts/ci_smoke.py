@@ -8,9 +8,7 @@ the runner. Optional extensions (whisper, sd) are tolerated as missing
 but logged. Returns nonzero exit code if any required import fails.
 
 Centralized so the same checks run identically across:
-- build-cibw.yml smoke job
 - build-cibw-abi3.yml smoke job
-- build-gpu-wheels.yml smoke job
 - build-gpu-wheels-abi3.yml smoke job
 """
 

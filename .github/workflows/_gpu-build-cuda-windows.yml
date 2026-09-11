@@ -1,7 +1,7 @@
 name: _gpu-build-cuda-windows
 
 # Reusable workflow: builds CUDA 12.4 wheels for cuda-windows-x86_64.
-# Called by build-gpu-wheels.yml (stable) and build-gpu-wheels-abi3.yml (abi3).
+# Called by build-gpu-wheels-abi3.yml.
 # Do not invoke directly — `workflow_call` only.
 
 on:

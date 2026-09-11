@@ -1,7 +1,7 @@
 name: _gpu-build-rocm
 
 # Reusable workflow: builds ROCm 6.3 wheels for rocm-linux-x86_64.
-# Called by build-gpu-wheels.yml (stable) and build-gpu-wheels-abi3.yml (abi3).
+# Called by build-gpu-wheels-abi3.yml.
 # Do not invoke directly — `workflow_call` only.
 
 on:

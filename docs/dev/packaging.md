@@ -95,7 +95,7 @@ Without it, `manage.py` defaults to vendored ggml and SD statically embeds its o
 
 This also causes `build_config.json` to omit `llama_cpp_ggml_version`: with vendored ggml, `write_build_config` records only per-project vendored versions, not a single shared llama.cpp ggml version — a useful signal for auditing whether ggml is actually being shared.
 
-Reference workflows with the pattern already applied: `build-gpu-wheels.yml`, `build-gpu-wheels2.yml`.
+Reference workflows with the pattern already applied: the `_gpu-build-*.yml` reusables called by `build-gpu-wheels-abi3.yml`.
 
 ## Installing from sdist (non-cibuildwheel) on macOS / Linux
 

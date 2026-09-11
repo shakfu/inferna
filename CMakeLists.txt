@@ -9,7 +9,7 @@ option(WITH_WHISPER "Build whisper.cpp wrapper" ON)
 option(WITH_STABLEDIFFUSION "Build stable-diffusion.cpp wrapper" ON)
 option(WITH_DYLIB "Use dynamic libraries instead of static" OFF)
 option(SD_USE_VENDORED_GGML "Link stable-diffusion against its own vendored ggml" ON)
-option(INFERNA_ABI3 "Build extensions against the CPython stable ABI (abi3, >= 3.10)" OFF)
+option(INFERNA_ABI3 "Build extensions against the CPython stable ABI (abi3, >= 3.12)" OFF)
 
 # When WITH_DYLIB=ON, point this to a directory containing pre-built dylibs
 # (e.g., from a llama.cpp release tarball). Defaults to thirdparty/llama.cpp/lib.
@@ -140,7 +140,7 @@ endif()
 
 if(INFERNA_ABI3)
     find_package(Python COMPONENTS Interpreter Development.Module Development.SABIModule REQUIRED)
-    message(STATUS "INFERNA_ABI3: ON (targeting CPython stable ABI >= 3.10)")
+    message(STATUS "INFERNA_ABI3: ON (targeting CPython stable ABI >= 3.12)")
 else()
     find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 endif()

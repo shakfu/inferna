@@ -1,8 +1,7 @@
 name: _gpu-smoke
 
-# Reusable smoke-test job for GPU wheels. Called by build-gpu-wheels.yml
-# (stable) and build-gpu-wheels-abi3.yml (abi3) after the per-backend
-# build jobs complete. Each entry of the matrix is gated on whether the
+# Reusable smoke-test job for GPU wheels. Called by build-gpu-wheels-abi3.yml
+# after the per-backend build jobs complete. Each entry of the matrix is gated on whether the
 # corresponding backend was actually requested by the caller.
 #
 # Scope: this is intentionally a *packaging* smoke test, not a runtime

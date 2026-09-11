@@ -200,13 +200,13 @@ dev = [
 #      preserved.
 #   2. `before-all` runs once per JOB. `before-build` runs once per
 #      *Python version*. Anything that builds third-party deps belongs in
-#      `before-all` to avoid rebuilding them 5x for cp310-cp314.
+#      `before-all` to avoid rebuilding them once per Python version.
 # -----------------------------------------------------------------------------
 
 [tool.cibuildwheel]
-# Default Python matrix. Variants (e.g. abi3 cp312-only) override via
-# CIBW_BUILD on the dispatching workflow.
-build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
+# Per-version matrix for local and non-release builds. Released wheels are
+# abi3: the *-abi3 workflows override with CIBW_BUILD="cp312-*" (docs/dev/abi3.md).
+build = "cp312-* cp313-* cp314-*"
 skip = "*-musllinux_* *-win32 *-manylinux_i686"
 build-verbosity = 1
 

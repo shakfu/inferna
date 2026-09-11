@@ -4,11 +4,9 @@ This document compares the build options used across three contexts:
 
 1. **Local builds** -- developer machine via `make` / `manage.py`
 
-2. **CI wheel builds** -- GitHub Actions via `build-gpu-wheels.yml` (the active workflow)
+2. **CI wheel builds** -- GitHub Actions via `build-gpu-wheels-abi3.yml`, which calls the per-backend `_gpu-build-*.yml` reusables
 
 3. **Upstream llama.cpp** -- options documented in [llama.cpp/docs/build.md](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
-
-> **Note:** `build-gpu-wheels-cached.yml` is an experimental workflow not currently used in production. It has been synced to mirror `build-gpu-wheels.yml` (settings, flags, and cache keys), but `build-gpu-wheels.yml` remains the authoritative CI workflow.
 
 ## Build Flow Overview
 
@@ -67,7 +65,7 @@ These are deliberately excluded as they serve niche hardware. If demand arises, 
 
 ### CUDA-Specific Options
 
-| Option | Local | CI (`build-gpu-wheels.yml`) | Upstream |
+| Option | Local | CI (`_gpu-build-cuda.yml`) | Upstream |
 |--------|-------|---------------------------|----------|
 | `CMAKE_CUDA_ARCHITECTURES` | `native` (dynamic targets) or llama.cpp default | `"75"` | User-provided or auto |
 | `CMAKE_CUDA_COMPILER` | Forwarded from env | Not set | Custom nvcc path |
@@ -138,7 +136,7 @@ The Windows CUDA asset version defaults to `12.4` but can be overridden via the 
 
 ### CUDA Architecture Coverage in CI -- Deliberate PTX-Only Strategy
 
-The active CI workflow (`build-gpu-wheels.yml`) sets `CMAKE_CUDA_ARCHITECTURES="75"`. This is **deliberate**, not an oversight. The history:
+The CUDA CI workflows (`_gpu-build-cuda.yml`, `_gpu-build-cuda-windows.yml`) set `CMAKE_CUDA_ARCHITECTURES="75"`. This is **deliberate**, not an oversight. The history:
 
 1. **v0.2.1** (`GGML_NATIVE=ON`, no explicit architectures): llama.cpp auto-detected the CI runner's GPU (sm_52), producing a 99 MB `libggml-cuda.so` with SASS for sm_52 only + PTX fallback.
 
@@ -211,6 +209,6 @@ Static link libggml-cuda.a into Cython extension
 | `scripts/manage.py` | Phase 1 builder: clones, configures, builds, copies llama.cpp/whisper.cpp/sd.cpp |
 | `CMakeLists.txt` | Phase 2: links pre-built libs into Cython extensions |
 | `pyproject.toml` | scikit-build-core config, cibuildwheel settings for CPU wheels |
-| `.github/workflows/build-gpu-wheels.yml` | CI: GPU wheel builds (active workflow) |
-| `.github/workflows/build-gpu-wheels-cached.yml` | CI: GPU wheel builds with caching (experimental, synced but not currently used) |
+| `.github/workflows/build-gpu-wheels-abi3.yml` | CI: GPU wheel builds (abi3) |
+| `.github/workflows/_gpu-build-*.yml` | CI: per-backend GPU build jobs called by `build-gpu-wheels-abi3.yml` |
 | `docs/build_backends.md` | User-facing backend build documentation |
