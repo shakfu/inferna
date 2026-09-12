@@ -36,7 +36,9 @@ jobs:
   build:
     if: inputs.enabled
     name: ${{ inputs.wheel_kind == 'abi3' && 'CUDA 12.4 abi3' || 'CUDA 12.4' }} - cuda-windows-x86_64 (${{ inputs.link_mode }})
-    runs-on: windows-latest
+    # Pinned: CUDA 12.4 ships no MSBuild integration for VS 2026, which
+    # windows-latest (windows-2025-vs2026) now provides.
+    runs-on: windows-2022
     env:
       CIBW_BUILD: ${{ inputs.cibw_build }}
 
