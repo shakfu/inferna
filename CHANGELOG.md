@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.3.2]
+
+### Changed
+
+- **`build-cibw-abi3.yml` and `build-gpu-wheels-abi3.yml` now create the GitHub release on a tag push.** Both were `workflow_dispatch`-only with an `upload_release` checkbox that derived the tag from `pyproject.toml`, so a release could be attached to a tag that did not exist. Release mode is now `github.ref_type == 'tag'`, which covers a tag push and a dispatch against a tag alike; a dispatch against a branch builds only. The body comes from the `## [<tag>]` CHANGELOG section via `scripts/release_notes.py`. PyPI uploads stay manual.
+
+  Publishing uses `softprops/action-gh-release`, which creates the release once and updates it thereafter, so the two workflows can attach their wheels to one tag in either order. The release is always a prerelease; promoting it stays a manual `gh release edit --prerelease=false`. Wheel uploads keep `--clobber` and no job is gated on its full matrix, so re-running a single failed build leg tops the release up rather than being refused.
+
 ## [0.3.1]
 
 ### Added
@@ -29,10 +37,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - **`inferna.llama.token_decoder.TokenDecoder`** decodes a token stream one token at a time. It holds the bytes of a split character until a later token completes it. `flush()` emits an unfinished character as `U+FFFD`.
 
 ### Changed
-
-- **`build-cibw-abi3.yml` and `build-gpu-wheels-abi3.yml` now create the GitHub release on a tag push.** Both were `workflow_dispatch`-only with an `upload_release` checkbox that derived the tag from `pyproject.toml`, so a release could be attached to a tag that did not exist. Release mode is now `github.ref_type == 'tag'`, which covers a tag push and a dispatch against a tag alike; a dispatch against a branch builds only. The body comes from the `## [<tag>]` CHANGELOG section via `scripts/release_notes.py`. PyPI uploads stay manual.
-
-  Publishing uses `softprops/action-gh-release`, which creates the release once and updates it thereafter, so the two workflows can attach their wheels to one tag in either order. The release is always a prerelease; promoting it stays a manual `gh release edit --prerelease=false`. Wheel uploads keep `--clobber` and no job is gated on its full matrix, so re-running a single failed build leg tops the release up rather than being refused.
 
 - **`Chat` no longer ends a turn when a token fails to decode.** The loop caught every exception from `token_to_piece` and broke out, truncating the reply. `TokenDecoder` cannot raise on malformed bytes, so the catch is gone.
 
