@@ -6,11 +6,30 @@ name: build-gpu-wheels-abi3
 #   - cibw_version pinned to "3.4.1"
 #   - wheel_kind set to "abi3" (controls artifact + cache key prefix)
 #   - extra_cibw_env injects SKBUILD_CMAKE_DEFINE / SKBUILD_WHEEL_PY_API
+#
+# Triggers:
+#   push of a bare-semver tag (0.3.2) -> build every backend, then publish
+#                                        the GitHub release for that tag
+#   workflow_dispatch against a tag   -> same, with per-backend opt-out;
+#                                        republishes an existing release
+#   workflow_dispatch against a branch -> build only
+#
+# A tag push builds all six backends, Windows included: those wheels are
+# not on PyPI, so the GitHub release is where they ship. The dispatch
+# defaults stay as they were, for cheap one-off builds.
+#
+# The CPU/Metal wheels attach to the same release from
+# build-cibw-abi3.yml. Both use softprops/action-gh-release, which creates
+# the release once and updates it thereafter, so either order works and
+# either can be re-run alone.
 
 permissions:
   contents: read
 
 on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+*'
   workflow_dispatch:
     inputs:
       link_mode:
@@ -51,14 +70,9 @@ on:
         required: false
         default: false
         type: boolean
-      upload_release:
-        description: 'Upload wheels to GitHub Release'
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.link_mode }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.link_mode || 'dynamic' }}
   cancel-in-progress: true
 
 jobs:
@@ -68,8 +82,8 @@ jobs:
       wheel_kind: abi3
       cibw_version: "3.4.1"
       cibw_build: "cp312-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.cuda_linux }}
+      link_mode: ${{ inputs.link_mode || 'dynamic' }}
+      enabled: ${{ github.event_name != 'workflow_dispatch' || inputs.cuda_linux }}
       extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
 
   rocm:
@@ -78,8 +92,8 @@ jobs:
       wheel_kind: abi3
       cibw_version: "3.4.1"
       cibw_build: "cp312-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.rocm_linux }}
+      link_mode: ${{ inputs.link_mode || 'dynamic' }}
+      enabled: ${{ github.event_name != 'workflow_dispatch' || inputs.rocm_linux }}
       extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
 
   sycl:
@@ -88,8 +102,8 @@ jobs:
       wheel_kind: abi3
       cibw_version: "3.4.1"
       cibw_build: "cp312-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.sycl_linux }}
+      link_mode: ${{ inputs.link_mode || 'dynamic' }}
+      enabled: ${{ github.event_name != 'workflow_dispatch' || inputs.sycl_linux }}
       extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
 
   vulkan_linux:
@@ -98,8 +112,8 @@ jobs:
       wheel_kind: abi3
       cibw_version: "3.4.1"
       cibw_build: "cp312-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.vulkan_linux }}
+      link_mode: ${{ inputs.link_mode || 'dynamic' }}
+      enabled: ${{ github.event_name != 'workflow_dispatch' || inputs.vulkan_linux }}
       extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
 
   vulkan_windows:
@@ -108,8 +122,8 @@ jobs:
       wheel_kind: abi3
       cibw_version: "3.4.1"
       cibw_build: "cp312-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.vulkan_windows }}
+      link_mode: ${{ inputs.link_mode || 'dynamic' }}
+      enabled: ${{ github.event_name != 'workflow_dispatch' || inputs.vulkan_windows }}
       extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
 
   cuda_windows:
@@ -118,8 +132,8 @@ jobs:
       wheel_kind: abi3
       cibw_version: "3.4.1"
       cibw_build: "cp312-*"
-      link_mode: ${{ inputs.link_mode }}
-      enabled: ${{ inputs.cuda_windows }}
+      link_mode: ${{ inputs.link_mode || 'dynamic' }}
+      enabled: ${{ github.event_name != 'workflow_dispatch' || inputs.cuda_windows }}
       extra_cibw_env: 'SKBUILD_CMAKE_DEFINE="INFERNA_ABI3=ON" SKBUILD_WHEEL_PY_API=cp312'
 
   # smoke:
@@ -159,48 +173,73 @@ jobs:
           path: dist/*.whl
           if-no-files-found: ignore
 
-  upload_release:
-    name: Upload wheels to GitHub Release
+  publish:
+    name: Publish to GitHub Release
+    # Deliberately not gated on every backend leg succeeding: the
+    # release is a prerelease, so attaching the backends that did build
+    # and re-running the ones that failed is the normal path.
     needs: [collect]
-    if: always() && !cancelled() && inputs.upload_release
+    if: always() && !cancelled() && github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download collected wheels
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8
         with:
           name: inferna-gpu-abi3-wheels-all
           path: dist
 
-      - name: Upload to GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: List wheels
+        run: ls -lh dist/
+
+      - name: Warn if the tag disagrees with pyproject
+        # Not a gate -- the tag names the release, pyproject only names
+        # the wheel files. Worth an annotation when they diverge.
         run: |
-          VERSION=$(python3 -c "
+          version=$(python3 -c "
           import re
           text = open('pyproject.toml').read()
           print(re.search(r'^version\s*=\s*\"([^\"]+)\"', text, re.M).group(1))
           ")
-          TAG="${VERSION}"
-          echo "Version: ${VERSION}, Tag: ${TAG}"
-          # Extract this version's CHANGELOG section into release-notes.md.
-          # release_notes.py exits 2 (and writes nothing) when neither the
-          # version-named section nor [Unreleased] is present; only attach
-          # --notes-file when the file was actually produced.
-          NOTES_ARGS=()
-          if python3 scripts/release_notes.py "${VERSION}" --output release-notes.md; then
-            NOTES_ARGS=(--notes-file release-notes.md)
+          [ "$TAG" = "$version" ] || echo "::warning::tag $TAG does not match pyproject version $version"
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        # release_notes.py exits 2 and writes nothing when neither
+        # `## [<tag>]` nor `## [Unreleased]` is present. A release without
+        # notes beats a failed release, so fall back to GitHub's generated
+        # ones.
+        run: |
+          if python3 scripts/release_notes.py "$TAG" --output release-notes.md; then
+            echo "found=1" >> "$GITHUB_OUTPUT"
+            cat release-notes.md
           else
-            echo "No CHANGELOG section for ${VERSION}; creating release without notes."
+            echo "found=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::no CHANGELOG section for $TAG; using generated notes"
           fi
-          # Create the release with notes, or fall back to editing an
-          # existing release's notes in place.
-          if gh release create "${TAG}" --prerelease --title "inferna ${TAG}" "${NOTES_ARGS[@]}" 2>/dev/null; then
-            echo "Created release ${TAG}"
-          elif [ ${#NOTES_ARGS[@]} -gt 0 ]; then
-            gh release edit "${TAG}" "${NOTES_ARGS[@]}"
-          fi
-          gh release upload "${TAG}" dist/*.whl --clobber
+
+      # Creates the release on first run and updates it on re-run, so the
+      # CPU and GPU workflows can both publish to the same tag and either
+      # can be re-run. Always a prerelease: promoting to a final release
+      # is a deliberate manual step (`gh release edit <tag>
+      # --prerelease=false`).
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.TAG }}
+          name: inferna ${{ env.TAG }}
+          body_path: ${{ steps.notes.outputs.found == '1' && 'release-notes.md' || '' }}
+          generate_release_notes: ${{ steps.notes.outputs.found != '1' }}
+          prerelease: true
+
+      - name: Upload wheels
+        # --clobber so re-running one build leg tops up the release
+        # instead of failing on the assets already there. Uploads are
+        # deliberately additive: a release carrying only some backends is
+        # a valid intermediate state while the rest are re-run.
+        run: gh release upload "$TAG" dist/*.whl --clobber

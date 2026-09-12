@@ -17,7 +17,36 @@ The wheel tag is set separately, through scikit-build-core's `wheel.py-api`. Bot
 
 Release wheels come from `build-cibw-abi3.yml` (CPU/Metal) and `build-gpu-wheels-abi3.yml` (GPU variants). `wheel.py-api` is not set in `[tool.scikit-build]`: that would tag every wheel abi3, including ones compiled without `STABLE_ABI`.
 
-The default stays `OFF` so a plain `make` produces a per-version extension for local development, as in cyllama.
+## Releasing
+
+Pushing a bare-semver tag runs both `build-cibw-abi3.yml` (CPU/Metal) and `build-gpu-wheels-abi3.yml` (GPU), and each attaches its wheels to the GitHub release for that tag:
+
+```
+git tag 0.3.2 && git push origin 0.3.2
+```
+
+The release body is the `## [<tag>]` section of `CHANGELOG.md`, extracted by `scripts/release_notes.py`; with no such section it falls back to `## [Unreleased]`, then to GitHub's generated notes. This publishes to GitHub only -- PyPI uploads stay manual.
+
+The release is always created as a **prerelease**. Promoting it is a separate manual decision:
+
+```
+gh release edit 0.3.2 --prerelease=false
+```
+
+That is what makes partial state acceptable. Uploads are additive (`gh release upload --clobber`): a release carrying five of six GPU backends is a normal intermediate state, and re-running the one leg that failed tops it up. Neither `publish` job is gated on its whole matrix succeeding, and neither refuses to run against an existing release.
+
+Both workflows publish to the same tag via `softprops/action-gh-release`, which creates the release once and updates it thereafter, so either order works and either workflow can be re-run.
+
+A tag that disagrees with `version` in `pyproject.toml` is a warning annotation, not a failure: the tag names the release, pyproject names the wheel files.
+
+To start a tag over, the release has to go too -- it outlives its tag ref and keeps its assets:
+
+```
+gh release delete 0.3.2 --cleanup-tag
+git tag -d 0.3.2
+```
+
+`workflow_dispatch` against a tag repeats the whole thing, including republishing. Against a branch it builds and smoke tests only.
 
 ## Why 3.12
 
