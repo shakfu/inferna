@@ -41,7 +41,6 @@ Async Example:
 """
 
 import asyncio
-import codecs
 import heapq
 import math
 import signal
@@ -123,6 +122,7 @@ from .llama.llama_cpp import (
     ggml_backend_load_all,
     disable_logging,
 )
+from .llama.token_decoder import TokenDecoder
 
 
 @dataclass
@@ -1787,14 +1787,9 @@ class LLM:
         stop_buffer = ""
         max_stop_len = max(len(s) for s in config.stop_sequences) if config.stop_sequences else 0
 
-        # Byte-level BPE tokenizers routinely emit pieces that contain
-        # partial UTF-8 codepoints (e.g. one lead byte, then continuation
-        # bytes in subsequent tokens). An incremental decoder buffers the
-        # tail until a complete codepoint lands and emits "" otherwise --
-        # this preserves bytes that would be corrupted to U+FFFD by a
-        # per-piece replace decode, and keeps stop-sequence matching
-        # operating on the true decoded text.
-        utf8_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        # Holds the bytes of a character split across tokens, so stop-sequence
+        # matching sees the true decoded text (see ``TokenDecoder``).
+        utf8_decoder = TokenDecoder(self.vocab)
 
         for _ in range(config.max_tokens):
             # Cooperative cancellation check between tokens. The mid-decode
@@ -1820,8 +1815,7 @@ class LLM:
                 break
 
             # Decode token to text via the incremental UTF-8 decoder.
-            piece_bytes = self.vocab.token_to_piece_bytes(new_token_id, special=True)
-            piece = utf8_decoder.decode(piece_bytes)
+            piece = utf8_decoder.decode(new_token_id)
             if not piece:
                 # Codepoint not yet complete -- still need to advance the
                 # context so the next token has the right KV state.
@@ -1847,8 +1841,10 @@ class LLM:
                         if on_token:
                             on_token(text_before_stop)
                         yield text_before_stop
-                    # Clear buffer to prevent flush at end
+                    # Clear both buffers to prevent a flush at end: held
+                    # bytes belong to text the caller never sees.
                     stop_buffer = ""
+                    utf8_decoder.reset()
                     break
 
                 # No stop found yet - yield text that can't be part of a stop sequence
@@ -1888,7 +1884,7 @@ class LLM:
         # Flush any bytes still buffered in the incremental decoder. With
         # errors="replace" this turns dangling continuation bytes into
         # U+FFFD rather than dropping them silently.
-        tail = utf8_decoder.decode(b"", final=True)
+        tail = utf8_decoder.flush()
         if tail:
             if config.stop_sequences:
                 stop_buffer += tail
@@ -2494,13 +2490,8 @@ def simple(
 
     # print the prompt token-by-token
     print()
-    prompt = ""
-    for i in prompt_tokens:
-        try:
-            prompt += vocab.token_to_piece(i, lstrip=0, special=False)
-        except UnicodeDecodeError:
-            continue
-    print(prompt)
+    prompt_bytes = b"".join(vocab.token_to_piece_bytes(i, lstrip=0, special=False) for i in prompt_tokens)
+    print(prompt_bytes.decode("utf-8", errors="replace"))
 
     # prepare a batch for the prompt
     batch = cy.llama_batch_get_one(prompt_tokens)
@@ -2510,7 +2501,8 @@ def simple(
     n_decode = 0
 
     n_pos = n_prompt
-    response = ""
+    # Bytes, decoded once at the end: a multi-byte character can span tokens.
+    response = b""
     for i in range(n_predict):
         ctx.decode(batch)
 
@@ -2521,8 +2513,7 @@ def simple(
         if vocab.is_eog(new_token_id):
             break
 
-        piece: str = vocab.token_to_piece(new_token_id, special=True)
-        response += piece
+        response += vocab.token_to_piece_bytes(new_token_id, special=True)
 
         # prepare the next batch with the sampled token
         batch = cy.llama_batch_get_one([new_token_id], n_pos)
@@ -2531,7 +2522,7 @@ def simple(
         n_decode += 1
 
     print()
-    print(f"response: {response}")
+    print(f"response: {response.decode('utf-8', errors='replace')}")
     print()
 
     t_main_end: int = cy.ggml_time_us()

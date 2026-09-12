@@ -22,6 +22,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.3.1]
+
+### Added
+
+- **`inferna.llama.token_decoder.TokenDecoder`** decodes a token stream one token at a time. It holds the bytes of a split character until a later token completes it. `flush()` emits an unfinished character as `U+FFFD`.
+
+### Changed
+
+- **`Chat` no longer ends a turn when a token fails to decode.** The loop caught every exception from `token_to_piece` and broke out, truncating the reply. `TokenDecoder` cannot raise on malformed bytes, so the catch is gone.
+
+- **`simple()` keeps tokens that do not decode on their own.** It built the prompt and the response as text and skipped any piece that raised `UnicodeDecodeError`; both now accumulate as bytes and decode once at the end.
+
+### Fixed
+
+- **Generated text no longer shows `U+FFFD` where a character spans several tokens.** Byte-level BPE vocabularies split some characters: Llama-3.2 and Qwen3 encode a 4-byte emoji as three tokens. `LLM` generation and `BatchGenerator` already decoded incrementally; the grammar-constrained loop, `Chat`, the CLI, and the Python server decoded each token on its own with `errors="replace"`, so each fragment became `U+FFFD`. All four now use `TokenDecoder`. A stop sequence also resets the decoder, so held bytes from truncated text are no longer flushed as `U+FFFD` after the stop.
+
+- **`LlamaVocab.token_to_piece` and `.token_to_piece_bytes` no longer fail on a piece longer than 128 bytes.** `llama_token_to_piece` returns the negative required size when the buffer is too small; both bindings treated any negative return as an error. They now retry once at the requested size, matching the `tokenize` binding.
+
 ### Removed
 
 - **`build-gpu-wheels.yml`** -- the per-version GPU wheel workflow. Only abi3 wheels are released, and with `requires-python >= 3.12` its `cp310`/`cp311` targets were already skipped. `build-gpu-wheels-abi3.yml` is now the only caller of the `_gpu-build-*.yml` reusables (see `docs/dev/abi3.md`).

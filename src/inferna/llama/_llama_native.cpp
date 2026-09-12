@@ -581,6 +581,27 @@ namespace inferna {
 }
 
 // =============================================================================
+// Token piece
+// =============================================================================
+
+// llama_token_to_piece returns the negative required size when the buffer is
+// too small. 128 bytes covers every piece in practice; a vocab with a longer
+// added token would otherwise fail, so retry once at the size it asks for.
+static std::string token_piece_bytes(const llama_vocab* vocab, int token,
+                                     int lstrip, bool special) {
+    char stackbuf[128];
+    int len = llama_token_to_piece(vocab, token, stackbuf, sizeof(stackbuf), lstrip, special);
+    if (len >= 0) return std::string(stackbuf, (size_t) len);
+
+    std::string heapbuf((size_t) -len, '\0');
+    len = llama_token_to_piece(vocab, token, heapbuf.data(), (int) heapbuf.size(), lstrip, special);
+    if (len < 0) throw std::invalid_argument(
+        "Failed to convert token " + std::to_string(token) + " to piece after retry");
+    heapbuf.resize((size_t) len);
+    return heapbuf;
+}
+
+// =============================================================================
 // Sub-module registrars (defined in companion TUs)
 // =============================================================================
 
@@ -1001,30 +1022,24 @@ NB_MODULE(_llama_native, m) {
             return std::vector<int>(tokens.begin(), tokens.begin() + n);
         }, "text"_a, "add_special"_a, "parse_special"_a)
         .def("token_to_piece", [](LlamaVocabW& s, int token, int lstrip, bool special) -> nb::object {
-            char buf[128];
-            int len = llama_token_to_piece(s.ptr, token, buf, sizeof(buf), lstrip, special);
-            if (len < 0) throw std::invalid_argument(
-                "Failed to convert token " + std::to_string(token) + " to piece");
             // Byte-level BPE pieces can be partial UTF-8 sequences (lone
             // continuation bytes etc.). Decode with errors="replace" so a
             // single bad piece does not raise UnicodeDecodeError out of the
             // hot generation loop. Streaming callers that need byte-accurate
             // output should use ``token_to_piece_bytes`` and feed the result
             // through an incremental UTF-8 decoder.
-            PyObject* str = PyUnicode_DecodeUTF8(buf, len, "replace");
+            std::string piece = token_piece_bytes(s.ptr, token, lstrip, special);
+            PyObject* str = PyUnicode_DecodeUTF8(piece.data(), (Py_ssize_t) piece.size(), "replace");
             if (!str) throw nb::python_error();
             return nb::steal(str);
         }, "token"_a, "lstrip"_a = 0, "special"_a = false)
         .def("token_to_piece_bytes", [](LlamaVocabW& s, int token, int lstrip, bool special) -> nb::bytes {
-            char buf[128];
-            int len = llama_token_to_piece(s.ptr, token, buf, sizeof(buf), lstrip, special);
-            if (len < 0) throw std::invalid_argument(
-                "Failed to convert token " + std::to_string(token) + " to piece");
             // Raw bytes; caller is responsible for incremental UTF-8 decoding.
             // This is what streaming generation should use so that codepoints
             // split across token boundaries (common with byte-level BPE) are
             // joined cleanly rather than emitted as U+FFFD replacements.
-            return nb::bytes(buf, (size_t) len);
+            std::string piece = token_piece_bytes(s.ptr, token, lstrip, special);
+            return nb::bytes(piece.data(), piece.size());
         }, "token"_a, "lstrip"_a = 0, "special"_a = false)
         .def("detokenize", [](LlamaVocabW& s, const std::vector<int>& tokens,
                                 int text_len_max, bool remove_special, bool unparse_special) {

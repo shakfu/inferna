@@ -26,6 +26,7 @@ import uuid
 
 # Import our existing inferna bindings
 from ..llama_cpp import LlamaModel, LlamaContext, LlamaSampler, ggml_backend_load_all, llama_batch_get_one
+from ..token_decoder import TokenDecoder
 
 
 class ChatRole(str, enum.Enum):
@@ -220,6 +221,8 @@ class ServerSlot:
                 logging.warning(f"Initial decode returned {ret}")
                 return
 
+            decoder = TokenDecoder(vocab)
+
             for _ in range(max_tokens):
                 if n_past >= context.n_ctx - 1:
                     break
@@ -230,9 +233,10 @@ class ServerSlot:
                 if vocab.is_eog(new_token_id):
                     break
 
-                token_piece = vocab.token_to_piece(new_token_id, 0, True)
-                self.response_text += token_piece
-                yield token_piece
+                token_piece = decoder.decode(new_token_id)
+                if token_piece:
+                    self.response_text += token_piece
+                    yield token_piece
 
                 batch = llama_batch_get_one([new_token_id], n_past)
                 n_past += 1
@@ -241,6 +245,11 @@ class ServerSlot:
                 if ret != 0:
                     logging.warning(f"Token decode returned {ret}")
                     break
+
+            tail = decoder.flush()
+            if tail:
+                self.response_text += tail
+                yield tail
         except Exception as e:
             logging.error(f"Error in iter_tokens: {e}")
 

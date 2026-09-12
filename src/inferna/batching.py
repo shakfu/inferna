@@ -23,7 +23,6 @@ Example:
 
 from typing import Any, List, Optional
 from dataclasses import dataclass
-import codecs
 import logging
 import time
 
@@ -44,6 +43,7 @@ from .llama.llama_cpp import (
     get_pooled_batch,
     return_batch_to_pool,
 )
+from .llama.token_decoder import TokenDecoder
 from .api import GenerationConfig, Response, GenerationStats
 
 
@@ -353,11 +353,9 @@ class BatchGenerator:
         responses = [""] * len(prompts)
         active_sequences = set(range(len(prompts)))
         seq_positions = {i: 0 for i in range(len(prompts))}
-        # One incremental UTF-8 decoder per sequence; byte-level BPE pieces
-        # routinely split codepoints across tokens, and per-piece replace
-        # decoding would corrupt them to U+FFFD. The decoder buffers the
-        # tail until a complete codepoint lands.
-        utf8_decoders = [codecs.getincrementaldecoder("utf-8")(errors="replace") for _ in prompts]
+        # One decoder per sequence: a character split across tokens is held
+        # until the next token completes it.
+        utf8_decoders = [TokenDecoder(self.vocab) for _ in prompts]
 
         # Add all prompt tokens to batch, tracking batch index for each sequence's logits
         seq_logits_idx = {}
@@ -394,9 +392,7 @@ class BatchGenerator:
                     active_sequences.remove(seq_id)
                     continue
 
-                # Decode token via per-sequence incremental UTF-8 decoder.
-                piece_bytes = self.vocab.token_to_piece_bytes(new_token, special=True)
-                responses[seq_id] += utf8_decoders[seq_id].decode(piece_bytes)
+                responses[seq_id] += utf8_decoders[seq_id].decode(new_token)
 
                 # Add to batch for next iteration and remember new logits index
                 batch.add(new_token, seq_positions[seq_id], [seq_id], True)
@@ -410,7 +406,7 @@ class BatchGenerator:
 
         # Flush any bytes still buffered in each per-sequence decoder.
         for seq_id, decoder in enumerate(utf8_decoders):
-            tail = decoder.decode(b"", final=True)
+            tail = decoder.flush()
             if tail:
                 responses[seq_id] += tail
 
