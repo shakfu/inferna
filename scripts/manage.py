@@ -174,8 +174,8 @@ PY_VER_MINOR = sys.version_info.minor
 # publishes the prebuilt binary assets only under bNNNNN, so `download_release()`
 # (every dynamic GPU wheel) 404s on a vN.N.N pin. b10809 and v0.4.0 are the same
 # commit, 5266f24.
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b10809") # from: b10621
-WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.2") # from: v1.9.1
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b10809")  # from: b10621
+WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.2")  # from: v1.9.1
 
 # As of upstream b9352 llama.cpp no longer ships a prebuilt server SPA under
 # tools/server/public/. The web UI is now a SvelteKit app in tools/ui/ that is
@@ -200,7 +200,7 @@ WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.2") # from: v1.9.1
 # recommended-mcp/*.ico. The web UI's server contract is unchanged across the
 # gap (/props, /slots, /v1/models, /v1/chat/completions, /models/{load,unload}),
 # so a snapshot older than LLAMACPP_VERSION is behind on UI fixes, not broken.
-LLAMACPP_WEBUI_VERSION = os.getenv("LLAMACPP_WEBUI_VERSION", "b9611") # from: b9351
+LLAMACPP_WEBUI_VERSION = os.getenv("LLAMACPP_WEBUI_VERSION", "b9611")  # from: b9351
 LLAMACPP_WEBUI_HF_BASE = "https://huggingface.co/buckets/ggml-org/llama-ui/resolve"
 # Files the upstream index.html hard-references. If a future pin drops one we
 # want to fail loudly rather than ship a broken UI.
@@ -223,7 +223,7 @@ LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html"
 # registration). That needs per-backend runtime validation, not just a green
 # build. Static/vendored builds are unaffected and could take a newer pin, but
 # the version is global, so the ceiling is set by the dynamic path.
-SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-816-487de75") # from master-775-b5d8120
+SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-816-487de75")  # from master-775-b5d8120
 SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "1.0.0")
 
 # glslc for the Linux Vulkan wheel, built from source by `_ci_build_shaderc()`
@@ -579,7 +579,7 @@ class ShellCmd:
             if PY_VER_MINOR < 12:
                 shutil.rmtree(path, ignore_errors=not DEBUG, onerror=remove_readonly)
             else:
-                shutil.rmtree(path, ignore_errors=not DEBUG, onexc=remove_readonly)  # type: ignore[call-arg]
+                shutil.rmtree(path, ignore_errors=not DEBUG, onexc=remove_readonly)
         else:
             if not silent:
                 self.log.info("remove file: %s", path)
@@ -2779,11 +2779,13 @@ class WheelBuilder(ShellCmd):
         self.build_wheel()
         backend = infer_wheel_backend()
         self.log.info(f"repairing dynamic wheel (backend={backend!r})")
-        Application().do_wheel_repair(argparse.Namespace(
-            backend=backend,
-            wheel=str(self.project.dist),
-            dest_dir=str(self.project.wheels),
-        ))
+        Application().do_wheel_repair(
+            argparse.Namespace(
+                backend=backend,
+                wheel=str(self.project.dist),
+                dest_dir=str(self.project.wheels),
+            )
+        )
 
     def build_static_wheel(self) -> None:
         self.log.info("building static build wheel")

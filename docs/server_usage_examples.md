@@ -65,6 +65,8 @@ inferna server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf --server-type python
 | `-m, --model` | (required) | Path to a `.gguf` model file |
 | `--host` | `127.0.0.1` | Bind address (use `0.0.0.0` to expose on the LAN) |
 | `--port` | `8080` | Port to listen on |
+| `--api-key` | (none) | Require `Authorization: Bearer <key>` on all routes except `/health` and the webui files. Without it the server has no authentication. |
+| `--api-key-file` | (none) | Read the key from a one-line file, keeping it out of the process list |
 | `--ctx-size` | `2048` | Context window size in tokens |
 | `--gpu-layers` | `-1` | GPU layers to offload (-1 = all) |
 | `--n-parallel` | `1` | Number of concurrent processing slots |
@@ -77,10 +79,13 @@ inferna server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf --server-type python
 
 ### LAN-accessible server with multiple slots
 
+Any host that can reach the port can use a server bound to `0.0.0.0`, so set a key. Clients send it as `Authorization: Bearer <key>`; OpenAI SDKs send their `api_key` this way. The webui sends the key set in its settings.
+
 ```bash
 python -m inferna.llama.server \
     -m models/Llama-3.2-1B-Instruct-Q8_0.gguf \
     --host 0.0.0.0 \
+    --api-key-file ~/.config/inferna/api_key \
     --port 8080 \
     --n-parallel 4 \
     --ctx-size 4096

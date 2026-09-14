@@ -8,6 +8,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/optional.h>
 
+#include <cctype>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -46,7 +47,7 @@ using namespace nb::literals;
 struct Manager {
     mg_mgr mgr{};
     mg_connection* listener = nullptr;
-    nb::object handler;  // Python callable: (conn_id:int, method:str, uri:str, body:str) -> None
+    nb::object handler;  // Python callable: (conn_id:int, method:str, uri:str, headers:dict, body:str) -> None
 
     Manager() {
         inferna_mg_mgr_init(&mgr);
@@ -78,8 +79,15 @@ extern "C" void _http_event_handler(mg_connection* c, int ev, void* ev_data) {
             std::string uri(hm->uri.buf, hm->uri.len);
             std::string body = hm->body.len > 0
                 ? std::string(hm->body.buf, hm->body.len) : std::string();
+            // Header names are case-insensitive (RFC 9110), so keys are lowercased.
+            nb::dict headers;
+            for (int i = 0; i < MG_MAX_HTTP_HEADERS && hm->headers[i].name.len > 0; i++) {
+                std::string name(hm->headers[i].name.buf, hm->headers[i].name.len);
+                for (auto& ch : name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                headers[name.c_str()] = std::string(hm->headers[i].value.buf, hm->headers[i].value.len);
+            }
             uintptr_t conn_id = reinterpret_cast<uintptr_t>(c);
-            self->handler(conn_id, method, uri, body);
+            self->handler(conn_id, method, uri, headers, body);
         } catch (...) {
             // Logging is the Python handler's responsibility; we just send
             // a plain 500 if it threw.

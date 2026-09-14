@@ -138,17 +138,9 @@ if __name__ == "__main__":
 
 from inferna import LLM
 from inferna.agents import ReActAgent, tool
+from inferna.agents.tools import calculator  # safe arithmetic, no eval
 
 MODEL = "models/Llama-3.2-1B-Instruct-Q8_0.gguf"
-
-@tool
-def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression. Example: calculate('2 + 2')"""
-    try:
-        result = eval(expression, {"__builtins__": {}}, {})
-        return str(result)
-    except Exception as e:
-        return f"Error: {e}"
 
 @tool
 def sqrt(n: float) -> str:
@@ -158,7 +150,7 @@ def sqrt(n: float) -> str:
 
 if __name__ == "__main__":
     llm = LLM(MODEL)
-    agent = ReActAgent(llm=llm, tools=[calculate, sqrt], verbose=True)
+    agent = ReActAgent(llm=llm, tools=[calculator, sqrt], verbose=True)
 
     result = agent.run("What is the square root of 144 plus 25?")
     print(f"\nFinal answer: {result.answer}")

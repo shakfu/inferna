@@ -22,6 +22,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **`inferna server --api-key` / `--api-key-file`** require `Authorization: Bearer <key>` on both server types. `/health` and the static webui files stay public, so the webui can load; it sends the key configured in its settings. The flag names match `llama-server`. The embedded server's native bridge now passes request headers to Python; before, `handle_http_request` always received `{}`.
+
+### Changed
+
+- **Ruff and mypy target Python 3.12**, matching `requires-python`. Neither change adds lint findings, because `UP` rules are not selected. Fixed the mypy errors that already failed `make typecheck`. The `SDContextParams.backend` and `params_backend` annotations are for mypy only.
+
+- **New `python-lint.yml` PR workflow** runs `ruff check`, `ruff format --check` and `mypy` against the tool versions in `uv.lock`, without building the extension. Seven files that `ruff format` had not been applied to were reformatted so the check starts green.
+
+- **PR CI runs `tests/test_llama_cpp_surface.py`.** It needs no model and catches drift in the binding facade that the agent layer imports.
+
+### Security
+
+- **`EmbeddedServer` now listens on exactly `--host`.** A host of `127.0.0.1` or `localhost` was rewritten to `0.0.0.0`. The embedded server is the default for `inferna server`, and the servers have no auth, so through 0.3.2 the default command exposed inference to every host that could reach the port. Pass `--host 0.0.0.0` to expose the server deliberately.
+
+- **Both servers log a warning when `--host` is not a loopback address.** Without `--api-key`, a non-loopback bind lets any reachable host run inference. No warning is logged when an API key is set. Warning rather than refusing keeps existing unauthenticated LAN setups working.
+
+- **Agent examples in the docs no longer call `eval` on tool input.** Tool arguments come from the model, so a prompt-injected document could run arbitrary code through a copied example; `eval(..., {"__builtins__": {}})` does not prevent this. The examples use `inferna.agents.tools.calculator`, and `tests/test_docs_no_eval.py` rejects new `eval(` calls in Markdown.
+
 ## [0.3.2]
 
 ### Changed

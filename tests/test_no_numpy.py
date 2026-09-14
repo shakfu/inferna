@@ -79,8 +79,7 @@ def test_numpy_is_not_a_declared_runtime_dependency():
     with open(root / "pyproject.toml", "rb") as fh:
         cfg = tomllib.load(fh)
     assert cfg["project"]["dependencies"] == [], (
-        "inferna must declare no runtime dependencies; numpy in particular "
-        "is optional input, not a requirement"
+        "inferna must declare no runtime dependencies; numpy in particular is optional input, not a requirement"
     )
 
 

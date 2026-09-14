@@ -309,16 +309,11 @@ Three agent architectures, with no extra dependencies.
 
 ```python
 from inferna import LLM
-from inferna.agents import ReActAgent, tool
-from simpleeval import simple_eval
-
-@tool
-def calculate(expression: str) -> str:
-    """Evaluate a math expression safely."""
-    return str(simple_eval(expression))
+from inferna.agents import ReActAgent
+from inferna.agents.tools import calculator  # safe arithmetic, no eval
 
 llm = LLM("model.gguf")
-agent = ReActAgent(llm=llm, tools=[calculate])
+agent = ReActAgent(llm=llm, tools=[calculator])
 result = agent.run("What is 25 * 4?")
 print(result.answer)
 ```

@@ -86,4 +86,5 @@ jobs:
             tests/test_batching.py \
             tests/test_context.py \
             tests/test_params.py \
-            tests/test_model.py
+            tests/test_model.py \
+            tests/test_llama_cpp_surface.py

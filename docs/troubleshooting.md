@@ -426,13 +426,14 @@ agent = ReActAgent(
 **Solution:** Add error handling in tools:
 
 ```python
+from inferna.agents.tools import calculator
+
 @tool
 def safe_calculate(expression: str) -> str:
     """Safely evaluate a math expression."""
     try:
-        result = eval(expression)
-        return str(result)
-    except Exception as e:
+        return calculator(expression)
+    except ValueError as e:
         return f"Error: Could not evaluate '{expression}': {e}"
 ```
 

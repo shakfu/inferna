@@ -10,13 +10,8 @@ The agents module provides agent architectures that can use tools to solve tasks
 
 ```python
 from inferna import LLM
-from inferna.agents import ReActAgent, tool
-
-# Define a tool
-@tool
-def calculator(expression: str) -> float:
-    """Evaluate a mathematical expression"""
-    return eval(expression, {"__builtins__": {}}, {})
+from inferna.agents import ReActAgent
+from inferna.agents.tools import calculator  # safe arithmetic, no eval
 
 # Create an agent
 llm = LLM("path/to/model.gguf")

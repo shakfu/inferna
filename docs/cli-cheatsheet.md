@@ -215,6 +215,8 @@ inferna server -m models/llama.gguf --model-alias my-llama --n-parallel 4
 | `-m, --model` | string | (required) | Path to GGUF model |
 | `--host` | string | 127.0.0.1 | Host to bind to (use `0.0.0.0` for LAN) |
 | `--port` | int | 8080 | Port to listen on |
+| `--api-key` | string | (none) | Require `Authorization: Bearer <key>` on all routes except `/health` and webui files |
+| `--api-key-file` | path | (none) | Read the key from a one-line file, keeping it out of the process list |
 | `--ctx-size` | int | 2048 | Context window size |
 | `--gpu-layers` | int | -1 | GPU layers to offload (-1 = all) |
 | `--n-parallel` | int | 1 | Number of parallel processing slots |

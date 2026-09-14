@@ -448,6 +448,10 @@ class SDImage:
 class SDContextParams(_n.SDContextParams):
     """Constructor kwargs are a convenience over the native default-init + setters."""
 
+    # Native properties; typed here because the nanobind base is Any to mypy.
+    backend: Optional[str]
+    params_backend: Optional[str]
+
     def __init__(
         self,
         model_path: Optional[str] = None,
@@ -790,7 +794,7 @@ class SDContext(_n.SDContext):
         moe_boundary: float = 0.875,
         vace_strength: float = 1.0,
         fps: int = -1,
-        loras: Optional[List[dict]] = None,
+        loras: Optional[List[dict[str, Any]]] = None,
     ) -> List[SDImage]:
         sm = int(sample_method) if sample_method is not None else int(SampleMethod.COUNT)
         sc = int(scheduler) if scheduler is not None else int(Scheduler.COUNT)
@@ -839,9 +843,7 @@ class Upscaler:
         # Upstream dropped the offload_to_cpu arg; offloading is now a
         # params_backend assignment spec ("*=cpu").
         params_backend = "*=cpu" if offload_to_cpu else None
-        self._native = _n.Upscaler(
-            model_path, direct, n_threads, tile_size, None, params_backend
-        )
+        self._native = _n.Upscaler(model_path, direct, n_threads, tile_size, None, params_backend)
 
     @property
     def is_valid(self) -> bool:

@@ -20,6 +20,18 @@ def main() -> int:
         help="Model identifier exposed to clients (shown in webui and /v1/models). "
         "Defaults to the model file's basename without extension.",
     )
+    key_group = parser.add_mutually_exclusive_group()
+    key_group.add_argument(
+        "--api-key",
+        default=None,
+        help="Require 'Authorization: Bearer <key>' on all routes except /health and webui files.",
+    )
+    key_group.add_argument(
+        "--api-key-file",
+        type=Path,
+        default=None,
+        help="Read the API key from a file, keeping it out of the process list.",
+    )
     parser.add_argument(
         "--log-level",
         type=int,
@@ -48,6 +60,12 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    api_key = args.api_key
+    if args.api_key_file is not None:
+        api_key = args.api_key_file.read_text(encoding="utf-8").strip()
+        if not api_key or "\n" in api_key:
+            parser.error(f"--api-key-file {args.api_key_file} must contain exactly one non-empty line")
+
     logging.basicConfig(level=logging.INFO)
 
     model_alias = args.model_alias if args.model_alias else Path(args.model).stem
@@ -60,6 +78,7 @@ def main() -> int:
         n_parallel=args.n_parallel,
         model_alias=model_alias,
         serve_webui=args.serve_webui,
+        api_key=api_key,
     )
 
     if args.server_type == "embedded":

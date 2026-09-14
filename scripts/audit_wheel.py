@@ -60,19 +60,21 @@ import manage  # noqa: E402
 # `--exclude`; auditwheel's policy file does the same. Anything outside
 # this set must be either bundled (hash-suffixed in NEEDED) or matched by
 # the backend's exclude list — otherwise the wheel would bundle it.
-MANYLINUX_BASELINE = frozenset({
-    "libc.so.6",
-    "libm.so.6",
-    "libpthread.so.0",
-    "libdl.so.2",
-    "librt.so.1",
-    "libutil.so.1",
-    "libresolv.so.2",
-    "libstdc++.so.6",
-    "libgcc_s.so.1",
-    "ld-linux-x86-64.so.2",
-    "ld-linux-aarch64.so.1",
-})
+MANYLINUX_BASELINE = frozenset(
+    {
+        "libc.so.6",
+        "libm.so.6",
+        "libpthread.so.0",
+        "libdl.so.2",
+        "librt.so.1",
+        "libutil.so.1",
+        "libresolv.so.2",
+        "libstdc++.so.6",
+        "libgcc_s.so.1",
+        "ld-linux-x86-64.so.2",
+        "ld-linux-aarch64.so.1",
+    }
+)
 
 # auditwheel renames bundled libs to "<orig>-<8 hex chars>.so..." and
 # rewrites the parent's DT_NEEDED to the new name. A NEEDED entry matching
@@ -283,8 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--backend",
         default=None,
-        help="Backend name (cuda/hip/sycl/vulkan/opencl/cpu/metal). "
-        "Inferred from the wheel filename if omitted.",
+        help="Backend name (cuda/hip/sycl/vulkan/opencl/cpu/metal). Inferred from the wheel filename if omitted.",
     )
     p.add_argument(
         "--platform",
@@ -333,7 +334,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     if not unexpected:
-        print(f"OK: every external dep is bundled, on the platform baseline, or matched by the {backend!r} exclude list.")
+        print(
+            f"OK: every external dep is bundled, on the platform baseline, or matched by the {backend!r} exclude list."
+        )
         return 0
 
     print(f"FAIL: {len(unexpected)} unexpected external dep(s):")

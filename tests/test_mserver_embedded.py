@@ -6,6 +6,8 @@ These tests cover the PythonServer class and related components,
 ensuring proper server functionality using existing inferna bindings.
 """
 
+import socket
+import sys
 import time
 import pytest
 from unittest.mock import Mock, patch
@@ -979,6 +981,83 @@ class TestEmbeddedServerLifecycle:
         server.stop()
 
 
+class TestEmbeddedServerBind:
+    """EmbeddedServer must listen on exactly ``config.host``.
+
+    Through 0.3.2 a loopback host was rewritten to ``0.0.0.0``, which exposed
+    the default ``inferna server`` on every interface.
+    """
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "0.0.0.0"])
+    def test_listen_url_uses_config_host(self, host, monkeypatch):
+        from inferna.llama.server.embedded import EmbeddedServer
+
+        server = EmbeddedServer(ServerConfig(model_path="unused.gguf", host=host, port=8123))
+        monkeypatch.setattr(server, "load_model", lambda: True)
+        addrs = []
+
+        class _FakeMgr:
+            def set_handler(self, h):
+                pass
+
+            def listen(self, addr):
+                addrs.append(addr)
+                return True
+
+            def close_all_connections(self):
+                return 0
+
+        server._mgr = _FakeMgr()
+        try:
+            assert server.start() is True
+        finally:
+            server.stop()
+        assert addrs == [f"http://{host}:8123"]
+
+    @pytest.mark.parametrize(
+        "host, warns",
+        [
+            ("127.0.0.1", False),
+            ("127.0.0.2", False),
+            ("localhost", False),
+            ("::1", False),
+            ("[::1]", False),
+            ("0.0.0.0", True),
+            ("::", True),
+            ("192.168.1.10", True),
+            ("myhost.lan", True),
+        ],
+    )
+    def test_warn_if_not_loopback(self, host, warns, caplog):
+        import logging
+
+        from inferna.llama.server.python import warn_if_not_loopback
+
+        logger = logging.getLogger("test_bind_warning")
+        with caplog.at_level(logging.WARNING, logger=logger.name):
+            warn_if_not_loopback(host, logger)
+        assert bool(caplog.records) is warns
+
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="127.0.0.2 is routed to lo only on Linux")
+    def test_loopback_bind_rejects_other_addresses(self, monkeypatch):
+        from inferna.llama.server.embedded import EmbeddedServer
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        server = EmbeddedServer(ServerConfig(model_path="unused.gguf", host="127.0.0.1", port=port))
+        monkeypatch.setattr(server, "load_model", lambda: True)
+        try:
+            assert server.start() is True
+            socket.create_connection(("127.0.0.1", port), timeout=2).close()
+            # A wildcard bind would accept this; a loopback bind refuses it.
+            with pytest.raises(ConnectionRefusedError):
+                socket.create_connection(("127.0.0.2", port), timeout=2)
+        finally:
+            server.stop()
+
+
 class TestWebUIAssets:
     """The vendored llama.cpp web UI snapshot and the routes that serve it.
 
@@ -1071,9 +1150,7 @@ class TestWebUIAssets:
         conn = Mock()
         server.handle_http_request(conn, "GET", "/bundle.js?DKPKeQbL", {}, "")
 
-        conn.send_gzipped.assert_called_once_with(
-            _WEBUI_ASSETS["bundle.js"], _WEBUI_ASSET_TYPES["bundle.js"]
-        )
+        conn.send_gzipped.assert_called_once_with(_WEBUI_ASSETS["bundle.js"], _WEBUI_ASSET_TYPES["bundle.js"])
 
     def test_asset_routes_are_gated_on_serve_webui(self):
         """With the UI disabled, its routes 404 instead of serving bytes."""

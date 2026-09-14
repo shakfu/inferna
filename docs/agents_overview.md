@@ -36,17 +36,12 @@ Inferna includes a zero-dependency agent framework for building tool-using LLM a
 
 ```python
 from inferna import LLM
-from inferna.agents import ReActAgent, tool
-
-# Define a tool
-@tool
-def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression."""
-    return str(eval(expression))
+from inferna.agents import ReActAgent
+from inferna.agents.tools import calculator  # safe arithmetic, no eval
 
 # Create agent
 llm = LLM("models/Llama-3.2-1B-Instruct-Q8_0.gguf")
-agent = ReActAgent(llm=llm, tools=[calculate])
+agent = ReActAgent(llm=llm, tools=[calculator])
 
 # Run task
 result = agent.run("What is 25 * 4?")
@@ -104,7 +99,8 @@ def search_web(query: str, max_results: int = 5) -> str:
 @tool(name="calc", description="Evaluate math expressions")
 def calculate(expression: str) -> float:
     """Safe math evaluation."""
-    return eval(expression)
+    from inferna.agents.tools import calculator  # AST allowlist, no eval
+    return float(calculator(expression))
 ```
 
 ### Tool Parameters
@@ -294,15 +290,12 @@ Uses GBNF grammar constraints to guarantee valid JSON tool calls. Eliminates par
 
 ```python
 from inferna import LLM
-from inferna.agents import ConstrainedAgent, tool
-
-@tool
-def calculate(expression: str) -> str:
-    return str(eval(expression))
+from inferna.agents import ConstrainedAgent
+from inferna.agents.tools import calculator
 
 agent = ConstrainedAgent(
     llm=LLM("model.gguf"),
-    tools=[calculate],
+    tools=[calculator],
     format="json",
     allow_reasoning=True,
 )
@@ -974,17 +967,13 @@ asyncio.run(main())
 Async wrapper for ConstrainedAgent:
 
 ```python
-from inferna.agents import AsyncConstrainedAgent, tool
-
-@tool
-def calculate(expression: str) -> str:
-    """Evaluate a math expression."""
-    return str(eval(expression))
+from inferna.agents import AsyncConstrainedAgent
+from inferna.agents.tools import calculator
 
 async def main():
     async with AsyncConstrainedAgent(
         "models/Llama-3.2-1B-Instruct-Q8_0.gguf",
-        tools=[calculate]
+        tools=[calculator]
     ) as agent:
         result = await agent.run("What is 100 / 4?")
         print(result.answer)

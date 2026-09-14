@@ -110,11 +110,7 @@ def test_driver_libs_are_excluded_for_their_backend(dist, needed):
     backend = audit_wheel._detect_backend(dist + WHEEL_SUFFIX)
     excludes = manage.WHEEL_REPAIR_EXCLUDES_LINUX[backend]
 
-    unmatched = [
-        lib
-        for lib in needed
-        if not any(fnmatch.fnmatchcase(lib, pat) for pat in excludes)
-    ]
+    unmatched = [lib for lib in needed if not any(fnmatch.fnmatchcase(lib, pat) for pat in excludes)]
     assert not unmatched, f"{dist} ({backend}) would still fail the audit on: {unmatched}"
 
 

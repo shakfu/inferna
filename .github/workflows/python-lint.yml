@@ -1,0 +1,45 @@
+name: python-lint
+
+# Ruff and mypy on Python changes, with no native build. The versions and
+# config come from uv.lock and pyproject.toml, so results match `make qa`.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - '**/*.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/python-lint.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: ruff + mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dev tools (no project build)
+        run: uv sync --only-dev --frozen
+
+      - name: ruff check
+        run: uv run --no-sync ruff check src/ tests/ scripts/
+
+      - name: ruff format --check
+        run: uv run --no-sync ruff format --check src/ tests/ scripts/
+
+      - name: mypy
+        run: uv run --no-sync mypy src/ scripts/ --follow-imports=skip

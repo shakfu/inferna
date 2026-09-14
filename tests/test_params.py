@@ -71,8 +71,7 @@ def test_model_params_lazy_mode():
     assert cy.LLAMA_LAZY_MODE_AUTO == 1
     assert cy.LLAMA_LAZY_MODE_ON == 2
 
-    for mode in (cy.LLAMA_LAZY_MODE_OFF, cy.LLAMA_LAZY_MODE_ON,
-                 cy.LLAMA_LAZY_MODE_AUTO):
+    for mode in (cy.LLAMA_LAZY_MODE_OFF, cy.LLAMA_LAZY_MODE_ON, cy.LLAMA_LAZY_MODE_AUTO):
         params.lazy_mode = mode
         assert params.lazy_mode == mode
     params.load_mode = cy.LLAMA_LOAD_MODE_DIRECT_IO
@@ -363,9 +362,7 @@ def test_quantize_function_is_exposed():
     assert callable(cy.llama_model_quantize)
     with pytest.raises(Exception):
         # nonexistent input file -> native failure surfaced as an exception
-        cy.llama_model_quantize(
-            "/nonexistent/in.gguf", "/tmp/out.gguf", cy.LlamaModelQuantizeParams()
-        )
+        cy.llama_model_quantize("/nonexistent/in.gguf", "/tmp/out.gguf", cy.LlamaModelQuantizeParams())
 
 
 def test_default_ggml_threadpool_params():

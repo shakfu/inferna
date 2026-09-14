@@ -39,6 +39,8 @@ from .python import (
     ChatRole,
     ServerConfig,
     ServerSlot,
+    is_authorized,
+    warn_if_not_loopback,
 )
 
 
@@ -367,10 +369,11 @@ class EmbeddedServer:
             except (ValueError, TypeError):
                 pass
             self._prev_sigterm = None
-        if self._prev_sigbreak is not None:
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if self._prev_sigbreak is not None and sigbreak is not None:
             try:
-                signal.signal(signal.SIGBREAK, self._prev_sigbreak)
-            except (ValueError, TypeError, AttributeError):
+                signal.signal(sigbreak, self._prev_sigbreak)
+            except (ValueError, TypeError):
                 pass
             self._prev_sigbreak = None
 
@@ -387,11 +390,8 @@ class EmbeddedServer:
 
             self._setup_signal_handlers()
 
-            host = self._config.host
-            if host in ("127.0.0.1", "localhost"):
-                listen_addr = f"http://0.0.0.0:{self._config.port}"
-            else:
-                listen_addr = f"http://{host}:{self._config.port}"
+            listen_addr = f"http://{self._config.host}:{self._config.port}"
+            warn_if_not_loopback(self._config.host, self._logger, self._config.api_key)
             self._logger.info(f"Attempting to bind to: {listen_addr}")
 
             # Wire the request dispatcher before listening.
@@ -472,7 +472,7 @@ class EmbeddedServer:
         """
         _mg.Manager.set_log_level(int(level))
 
-    def _dispatch(self, conn_id: int, method: str, uri: str, body: str) -> None:
+    def _dispatch(self, conn_id: int, method: str, uri: str, headers: dict[str, str], body: str) -> None:
         """Bridge from the C event handler into our Python routing.
 
         Wraps the handler in start/end timing and emits one access-log
@@ -493,7 +493,7 @@ class EmbeddedServer:
         body_size = 0
         try:
             conn = MongooseConnection(self._mgr, conn_id)
-            self.handle_http_request(conn, method, uri, headers={}, body=body)
+            self.handle_http_request(conn, method, uri, headers=headers, body=body)
             status = conn.status_code
             body_size = conn.body_size
         except Exception as e:
@@ -525,6 +525,10 @@ class EmbeddedServer:
         # on query params yet, but we don't want them to defeat path matching.
         path = uri.split("?", 1)[0]
         try:
+            # ``headers`` keys are lowercase; see _mongoose.cpp.
+            if not is_authorized(self._config.api_key, path, headers.get("authorization")):
+                conn.send_json({"error": {"type": "authentication_error", "message": "Invalid API Key"}}, 401)
+                return
             if method == "GET":
                 webui = self._config.serve_webui
                 if path == "/health":

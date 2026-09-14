@@ -11,6 +11,8 @@ while still providing the full server functionality using the existing libllama.
 """
 
 import enum
+import hmac
+import ipaddress
 import json
 import time
 import threading
@@ -27,6 +29,43 @@ import uuid
 # Import our existing inferna bindings
 from ..llama_cpp import LlamaModel, LlamaContext, LlamaSampler, ggml_backend_load_all, llama_batch_get_one
 from ..token_decoder import TokenDecoder
+
+
+def warn_if_not_loopback(host: str, logger: logging.Logger, api_key: Optional[str] = None) -> None:
+    """Log a warning if ``host`` exposes an unauthenticated server beyond this machine."""
+    if api_key or host == "localhost":
+        return
+    try:
+        if ipaddress.ip_address(host.strip("[]")).is_loopback:
+            return
+    except ValueError:
+        pass  # A hostname other than localhost may resolve to any interface.
+    logger.warning(
+        "Listening on %s: the server has no authentication and may be reachable from other hosts. "
+        "Use --host 127.0.0.1 to restrict it to this machine, or set --api-key.",
+        host,
+    )
+
+
+# Routes served without an API key: the health probe, and the static webui
+# files, which hold no model data and must load before a user can enter a key.
+PUBLIC_PATHS = frozenset({"/health", "/", "/index.html", "/bundle.css", "/bundle.js", "/loading.html"})
+
+
+def is_authorized(api_key: Optional[str], path: str, authorization: Optional[str]) -> bool:
+    """Return True if a request may proceed.
+
+    Args:
+        api_key: Configured key, or None to disable authentication.
+        path: Request path without the query string.
+        authorization: Value of the ``Authorization`` header, if any.
+    """
+    if not api_key or path in PUBLIC_PATHS:
+        return True
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer":
+        return False
+    return hmac.compare_digest(token.strip().encode(), api_key.encode())
 
 
 class ChatRole(str, enum.Enum):
@@ -82,6 +121,10 @@ class ServerConfig:
 
     # OpenAI compatibility
     model_alias: str = "gpt-3.5-turbo"
+
+    # When set, every route outside PUBLIC_PATHS requires
+    # ``Authorization: Bearer <api_key>``.
+    api_key: Optional[str] = None
 
 
 @dataclass
@@ -419,6 +462,7 @@ class PythonServer:
         try:
             # Create HTTP server
             handler = self._create_request_handler()
+            warn_if_not_loopback(self.config.host, self.logger, self.config.api_key)
             self.httpd = HTTPServer((self.config.host, self.config.port), handler)
 
             # Start server in background thread
@@ -463,9 +507,19 @@ class PythonServer:
                 # Suppress default logging
                 pass
 
+            def _authorized(self, path: str) -> bool:
+                """Send 401 and return False if the request lacks a valid API key."""
+                if is_authorized(server_instance.config.api_key, path, self.headers.get("Authorization")):
+                    return True
+                error_data = {"error": {"type": "authentication_error", "message": "Invalid API Key"}}
+                self._send_json_response(error_data, 401)
+                return False
+
             def do_GET(self) -> None:
                 """Handle GET requests."""
                 path = urlparse(self.path).path
+                if not self._authorized(path):
+                    return
 
                 if path == "/health":
                     self._send_json_response({"status": "ok"})
@@ -477,6 +531,8 @@ class PythonServer:
             def do_POST(self) -> None:
                 """Handle POST requests."""
                 path = urlparse(self.path).path
+                if not self._authorized(path):
+                    return
 
                 try:
                     # Read request body

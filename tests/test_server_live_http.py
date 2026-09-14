@@ -59,9 +59,9 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def _get(url: str, timeout: float = 30.0):
+def _get(url: str, timeout: float = 30.0, headers: dict | None = None):
     """GET returning (status, headers, body-bytes); HTTP errors are results."""
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, method="GET", headers=headers or {})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, dict(r.headers), r.read()
@@ -84,7 +84,7 @@ def _post_json(url: str, payload: dict, timeout: float = 120.0):
         return e.code, dict(e.headers), e.read()
 
 
-def _spawn(model_path: str, log_path: Path):
+def _spawn(model_path: str, log_path: Path, extra_args: tuple[str, ...] = ()):
     """Start the CLI on a free port, logging to `log_path`.
 
     The log goes to a file rather than a PIPE: llama.cpp writes megabytes of
@@ -107,6 +107,7 @@ def _spawn(model_path: str, log_path: Path):
         "--server-type",
         "embedded",
         "--webui",
+        *extra_args,
     ]
     log = open(log_path, "wb")
     # On Windows the child needs its own process group so the test can
@@ -213,6 +214,51 @@ class TestJsonEndpoints:
 
     def test_unknown_route_is_404(self, server):
         assert _get(f"{server}/no/such/route")[0] == 404
+
+
+API_KEY = "test-key-7f3a"
+
+
+@pytest.fixture(scope="module")
+def auth_server(model_path, tmp_path_factory):
+    """A server started with --api-key-file, so the key stays out of argv."""
+    if not Path(model_path).exists():
+        pytest.skip(f"test model not found: {model_path}")
+
+    tmp = tmp_path_factory.mktemp("auth_server")
+    key_file = tmp / "api_key"
+    key_file.write_text(API_KEY + "\n")
+    log_path = tmp / "server.log"
+    proc, base, log = _spawn(model_path, log_path, ("--api-key-file", str(key_file)))
+    try:
+        _await_ready(proc, base, log_path)
+        yield base
+    finally:
+        _interrupt_and_wait(proc)
+        log.close()
+
+
+class TestApiKeyOverTheWire:
+    """The Authorization header must survive the mongoose-to-Python bridge."""
+
+    @pytest.mark.parametrize("path", ["/v1/models", "/props"])
+    def test_missing_key_is_401(self, auth_server, path):
+        status, _, body = _get(f"{auth_server}{path}")
+        assert status == 401
+        assert json.loads(body)["error"]["type"] == "authentication_error"
+
+    def test_wrong_key_is_401(self, auth_server):
+        status, _, _ = _get(f"{auth_server}/v1/models", headers={"Authorization": "Bearer nope"})
+        assert status == 401
+
+    def test_correct_key_is_accepted(self, auth_server):
+        # Lowercase header name: HTTP header names are case-insensitive.
+        status, _, _ = _get(f"{auth_server}/v1/models", headers={"authorization": f"Bearer {API_KEY}"})
+        assert status == 200
+
+    @pytest.mark.parametrize("path", ["/health", "/", "/bundle.js"])
+    def test_public_paths_need_no_key(self, auth_server, path):
+        assert _get(f"{auth_server}{path}")[0] == 200
 
 
 class TestWebUIOverTheWire:

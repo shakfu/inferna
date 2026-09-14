@@ -113,15 +113,11 @@ Build tool-using AI agents:
 
 ```python
 from inferna import LLM
-from inferna.agents import ReActAgent, tool
-
-@tool
-def calculate(expression: str) -> str:
-    """Evaluate a math expression."""
-    return str(eval(expression))
+from inferna.agents import ReActAgent
+from inferna.agents.tools import calculator  # safe arithmetic, no eval
 
 llm = LLM("models/Llama-3.2-1B-Instruct-Q8_0.gguf")
-agent = ReActAgent(llm=llm, tools=[calculate])
+agent = ReActAgent(llm=llm, tools=[calculator])
 
 result = agent.run("What is 25 * 4?")
 print(result.answer)  # "100"
