@@ -1,72 +1,216 @@
 # TODO
 
-## Bugs
+## Critical
 
-- [ ] **Ctrl-C does not interrupt `inferna.sd` generation** ([#8](https://github.com/shakfu/inferna/issues/8)) -- `generate_image()` is a single blocking C call with no abort path; the LLM cancellation work in `0.2.14` does not transfer (separate compute graph). Fix is gated on upstream PR [leejet/stable-diffusion.cpp#1124](https://github.com/leejet/stable-diffusion.cpp/pull/1124) which adds `sd_cancel_generation(sd_ctx, sd_cancel_mode_t)`. Once that merges and `--sd-version` bumps to a release containing it: extend `stable_diffusion.pxd` with the enum + extern, add `SDContext.cancel(mode)` and `SDContext.install_sigint_handler()` mirroring the LLM helpers (`src/inferna/api.py` `_SigintHandle`), wire into the inferna-desktop sidecar's `asyncio.CancelledError` path. Tests in `tests/test_sd_cancel.py` modeled on `tests/test_cancel.py`.
+## High
 
-## Medium Priority
+- [ ] **Ctrl-C does not interrupt `inferna.sd` generation** ([#8](https://github.com/shakfu/inferna/issues/8)) -- `generate_image()` is a single blocking C call with no abort path; the LLM cancellation work in `0.2.14` does not transfer (separate compute graph). Fix is gated on upstream PR [leejet/stable-diffusion.cpp#1124](https://github.com/leejet/stable-diffusion.cpp/pull/1124) which adds `sd_cancel_generation(sd_ctx, sd_cancel_mode_t)`. Once that merges and `--sd-version` bumps to a release containing it: extend `stable_diffusion.pxd` with the enum + extern, add `SDContext.cancel(mode)` and `SDContext.install_sigint_handler()` mirroring the LLM helpers (`src/inferna/api.py` `_SigintHandle`), wire into the inferna-desktop sidecar's `asyncio.CancelledError` path. Tests in `tests/test_sd_cancel.py` modeled on `tests/test_cancel.py`. #bugs
 
-- [ ] Performance regression detection -- CI-integrated baseline capture/comparison to catch speed or memory regressions across commits
+- [ ] **Add `BusyGuard` on `SDContext.close`** (or document "do not close while generating"). Currently `_sd_native.cpp:789-791` calls `free_sd_ctx` with no `busy_lock` — concurrent `generate_image` (GIL released) races against the free. `WhisperContextW::close` has the same shape; check both. #hardening-small-bugs-ergonomic-gaps
 
-- [ ] Structured logging system (JSON output option, agent decision flow logging)
+- [ ] **Make `WhisperContext.close` idempotent.** `_whisper_native.cpp:432-435` calls `s.ensure_valid()` before the null check, so a second close raises `RuntimeError` instead of being a no-op. Drop the `ensure_valid()` and gate cleanup on `s.ctx != nullptr`. #hardening-small-bugs-ergonomic-gaps
 
-## Wheel / Packaging
+- [ ] **Continuous batching in `EmbeddedServer`.** Multi-day. Today's slot decode loop is sequential per request; a real per-slot continuous batching loop (one sampler per slot, ragged decode, true concurrent users) is the largest perf upgrade and the reason vLLM/llama-cpp-server outpace ad-hoc loops. Touches `src/inferna/llama/server/embedded.py`, `python.py:ServerSlot`, the streaming SSE path. Probably needs the `embedded.py` (~950 LOC) split first (see P3). #p1-high-impact
 
-- [ ] stable-diffusion.cpp uses compile-time `#ifdef SD_USE_CUDA` for backend selection instead of dynamic `ggml_backend_load_all()` like llama.cpp and whisper.cpp -- propose dynamic backend discovery upstream or patch locally for consistency
+- [ ] **Vision in OpenAI-compat (`image_url` content parts).** Half-day. `integrations/openai_compat.py` does not handle `messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "..."}}]}]`. The MTMD context exists (`inferna.llama.mtmd`); plumb it: detect image content parts in `_create_completion`, encode via MTMD, build the multimodal prompt. Pair with a high-level `LLM.chat_with_images(messages, images)` convenience. #p1-high-impact
 
-## Explore
+- [ ] **Expose KV-cache control on `LLM`.** Half-day. Native bindings exist (`memory_seq_rm`, `memory_seq_pos_max`, `memory_seq_cp`, `memory_seq_keep`, `memory_seq_add`); `LLM` only uses them internally for the prompt-cache layer. Public surface (`LLM.kv.drop`, `LLM.kv.copy`, `LLM.kv.pos_max`) unblocks user-built prompt caches, multi-conversation slot reuse, and the next round of agent-style work. #p1-high-impact
 
-- [ ] MCP server (`inferna/mcp/`): expose local inference (`complete`, `chat`, `embed`, `transcribe`, `generate_image`) as MCP tools and model listing as resources. Two transports: stdio entrypoint for subprocess clients (Claude Desktop), and Streamable-HTTP routes mounted on `EmbeddedServer` (`src/inferna/llama/server/embedded.pyx`) for Claude Code / remote clients. Reuse `agents/jsonrpc.py` framing and the high-level API in `src/inferna/api.py` -- no new heavy deps. (Client side already shipped: `LLM.add_mcp_server()` in `src/inferna/api.py:1378` wraps `agents/mcp.py` for non-agent callers.)
+## Medium
 
-## Agent framework
+- [ ] Performance regression detection -- CI-integrated baseline capture/comparison to catch speed or memory regressions across commits #medium-priority
+
+- [ ] Structured logging system (JSON output option, agent decision flow logging) #medium-priority
+
+- [ ] **Lightweight Python lint / type-check workflows** -- llama.cpp has `python-lint.yml`, `python-type-check.yml`, `python-check-requirements.yml`, `editorconfig.yml` using `runs-on: ubuntu-slim`, triggered only on `**/*.py` / config path changes, running in <1 min. Cheap pre-filter before the 40-minute wheel matrix. Add `.github/workflows/python-lint.yml` with `ruff check` and optionally `mypy` / `ty` #ci-workflows
+
+- [ ] **Composite actions for repeated toolchain setup** -- llama.cpp factors into `.github/actions/{windows-setup-cuda,linux-setup-vulkan,windows-setup-rocm,unarchive-tar,get-tag-name}/action.yml` and reuses them across `build-vulkan.yml`, `release.yml`, `build-cache.yml`. inferna duplicates the Vulkan-SDK pwsh install (~15 lines) and a version-reading Python snippet (`build-cibw.yml:234-239`, `build-gpu-wheels.yml:664-670`). Extract `.github/actions/setup-vulkan-windows` and `.github/actions/get-version` #ci-workflows
+
+- [ ] **Reusable `workflow_call` smoke-test** -- inferna's wheel-find + venv + import + inference block is duplicated across all three workflow files with minor variations. Wrap `scripts/rwt.py` in `.github/workflows/_smoke-test.yml` with `on: workflow_call` (inputs: `artifact-name`, `runs-on`, `run-inference`) and delete ~200 lines of duplication #ci-workflows
+
+- [ ] **Use `manage.py wheel_repair` in `CIBW_REPAIR_WHEEL_COMMAND_*`** -- the per-backend `--exclude` / `--include` / `--no-dll` lists are now duplicated between `scripts/manage.py do_wheel_repair` and the workflow YAMLs (`_gpu-build-{cuda,rocm,sycl,vulkan-linux,cuda-windows,vulkan-windows}.yml`). Replace each `CIBW_REPAIR_WHEEL_COMMAND_<PLAT>` block with `python {project}/scripts/manage.py wheel_repair --backend <b> --dest-dir {dest_dir} {wheel}` so manage.py is the single source of truth and exclude-list drift is impossible. Prerequisite: add `--dest-dir` arg to `do_wheel_repair` (currently writes to `dist/` only). Leave `CIBW_BEFORE_BUILD` and the cibuildwheel orchestration untouched -- cibuildwheel still owns the Python matrix, manylinux containers, and macOS arch handling. #ci-workflows
+
+- [ ] **Windows SYCL (Intel Arc + Xe)** -- Linux SYCL is shipped (`build_sycl` in `build-gpu-wheels-abi3.yml:319`, wheel name `inferna-sycl`). Windows SYCL still pending: follows the same pattern as windows-cuda/vulkan -- download prebuilt, synthesize `.lib` via existing `_generate_import_libs()`, `delvewheel --include ggml-sycl.dll` with `--no-dll` for `sycl[78].dll`, `pi_level_zero.dll`, `pi_opencl.dll`, `svml_dispmd.dll`, `libmmd.dll`, `libiomp5md.dll` (user-installed Intel oneAPI runtime). Build-time dep: Intel oneAPI DPC++ on the Windows runner -- use `oneapi-src/setup-oneapi` or similar. Needs `_release_asset_name()` + `_dylib_names` extended to recognize Windows SYCL assets #wheel-coverage-additional-backend-variants
+
+- [ ] **Windows HIP Radeon (AMD GPUs)** -- upstream ships `llama-b8893-bin-win-hip-radeon-x64.zip`. Same download+synthesize+delvewheel pattern; `--include ggml-hip.dll`, `--no-dll` for `amdhip64_6.dll`, `hipblas.dll`, `rocblas.dll`, `amd_comgr_*.dll` (user-installed AMD HIP SDK / Adrenalin runtime). Main obstacle: AMD HIP SDK Windows install on CI has no compact GitHub Action -- needs manual `Invoke-WebRequest` of AMD's installer (~2-3 GB) plus silent-install args, or a `choco install` package if one exists. Highest effort of the three Windows GPU gaps #wheel-coverage-additional-backend-variants
+
+- [ ] **Linux ROCm 7.2 prebuilt** -- upstream now ships `llama-b8893-bin-ubuntu-rocm-7.2-x64.tar.gz`. Current `build_rocm` job compiles ROCm 6.3 from source (20-40 min); switching to the prebuilt would cut CI time dramatically. Tradeoff: constrained to upstream's arch list (we currently target `gfx90a;gfx942;gfx1100` explicitly). Evaluate whether upstream's default architectures are acceptable before committing #wheel-coverage-additional-backend-variants
+
+- [ ] **ARM64 variants** -- growing relevance (Copilot+ PCs, Ampere/Graviton clouds, Apple Silicon KleidiAI). No CI job builds `ubuntu-24.04-arm` or `windows-11-arm` wheels; upstream ships `ubuntu-arm64`, `ubuntu-vulkan-arm64`, `win-cpu-arm64`, `macos-arm64-kleidiai`. Needs its own wheel variant names and separate investigation of build-time toolchain availability on ARM runners #wheel-coverage-additional-backend-variants
+
+- [ ] **`PyErr_WriteUnraisable` in `_mongoose.cpp` HTTP handler.** `server/_mongoose.cpp:73-78` catches all Python handler exceptions and replies 500 with no logging. Surface them via `PyErr_WriteUnraisable` (or `PyErr_Print`) before the reply so handler bugs are visible instead of silently re-coded. #hardening-small-bugs-ergonomic-gaps
+
+- [ ] **Document `Manager::send_reply` thread-affinity.** `server/_mongoose.cpp:114-131` walks `mgr.conns` while another thread may be inside GIL-released `poll`. `embedded.py` is single-threaded today but the constraint is undocumented. Add a docstring asserting "must be called from the same thread as `poll`", or guard with mongoose's wakeup primitive. #hardening-small-bugs-ergonomic-gaps
+
+- [ ] **Return `None` for failed slots in `generate_with_params`.** `_sd_native.cpp:825-844` wraps null-data results as stub `SDImage` objects mixed in with valid ones; only signal is a `warnings.warn`. Returning `None` for invalid slots makes `len(images) != batch` mean what it should. #hardening-small-bugs-ergonomic-gaps
+
+- [ ] **Bind the `whisper_*_with_state` family.** `_whisper_native.cpp:592-598` exposes `WhisperState` as a constructor-only stub. The whole point of `whisper_state` is concurrent decoding from one context; without methods (`whisper_full_with_state`, `whisper_encode_with_state`, etc.) the class is useless. #coverage-bindings-worth-filling-in
+
+- [ ] **Bind `llama_state_*` save/load.** Only `llama_state_get_size` is bound (`_llama_native.cpp` near line 1188); `llama_state_get_data` / `_set_data` / `_load_file` / `_save_file` and the `_seq_*` and `_ext` variants are all unbound. Required for context checkpointing/resumption. #coverage-bindings-worth-filling-in
+
+- [ ] **Bind whisper callbacks.** `whisper_full_params` exposes `new_segment_callback`, `progress_callback`, `encoder_begin_callback`, `abort_callback` — none are bound. SD module already has the analogous pattern; mirror it. #coverage-bindings-worth-filling-in
+
+- [ ] **Decide composition-vs-subclass for SD wrappers.** `SDImage` uses composition citing nanobind dealloc constraints (`stable_diffusion.py:156-158`); `SDContext`, `SDContextParams`, `SDSampleParams`, `SDImageGenParams` subclass the native types. Either the SDImage rationale applies to all of them or none. Pick one and apply uniformly. #refactor-convention-drift
+
+- [ ] **Migrate enum exports to `nb::enum_` (or document why flat ints are required).** Currently every llama enum lives in three places — `llama.h`, `_llama_native_enums.cpp` flat exports, and `llama_cpp.py` re-aliases — so each new upstream enum needs three coordinated edits. The MTMD TU's `nb::enum_<MtmdInputChunkType>().value(...).export_values()` is the cleaner reference. #refactor-convention-drift
+
+- [ ] **Add `tests/test_llama_native.py`.** Direct-surface coverage for symbols the integration tests skip: `LlamaModelKvOverride`/`TensorBuftOverride`, `GgmlBackend*` info, threadpool `attach`/`detach`, `chat_builtin_templates`, TTS helpers, `set_log_callback`. #refactor-convention-drift
+
+- [ ] **Validate ggml header consistency across translation units.** `_whisper_native.cpp` and `_sd_native.cpp` forward-declare ggml backend APIs while `_llama_native.cpp` includes the full ggml headers. Currently consistent, but check for cross-TU ABI drift on each upstream ggml header bump. #pre-existing-tu-consolidation
+
+- [ ] **Investigate flaky `test_embedded_server_context_manager`.** One failure observed in a 1389-test run (`mg_listen` returned null on port 8097), passes cleanly on rerun. Root cause unverified — candidates include macOS TIME_WAIT residue, transient external interference, or an internal race across rapid `mg_mgr_init`/`mg_listen` cycles. Highest-value next move: log `errno`/`strerror(errno)` from the `_mongoose.cpp` listen path so the next flake produces a real signal instead of three guesses. #open-observation-not-yet-a-verified-bug
+
+- [ ] **Rebuild `cli.py` sampler chain.** `src/inferna/llama/cli.py` registers ~50 llama.cpp-compatible sampling flags (`--top-k`, `--top-p`, `--min-p`, `--repeat-penalty`, `--mirostat`/`--mirostat-ent`/`--mirostat-lr`, `--logit-bias`, `--temp`, `--seed`, …) and then ignores all of them at line 398 in favour of a hardcoded `self.sampler.add_greedy()` (the comment "start with greedy for simplicity" makes the gap explicit). Right fix: extract a shared `_internal/sampler_build.py::build_sampler(config, vocab)` helper that both `LLM._create_sampler` and the CLI consume, then replace the CLI's hardcoded greedy with a `build_sampler()` call driven from the parsed flags. Also decide `--logit-bias`'s string format (currently `type=str, default=""` and unparsed) — `id+bias,id+bias,...` per llama.cpp upstream, or JSON for OpenAI parity. Add CLI integration test per flag. Half-to-full day. #p2-useful-features-half-day-each
+
+- [ ] **Speculative decoding ergonomics.** `_speculative.py` exists and is functional but agents/users have to hand-wire it. Add `LLM.enable_speculative(draft_model_path, n_draft=8)` convenience. Optional sibling-finder helper that resolves a smaller HF variant for a given main model. Print acceptance-rate stats on close so users can tune `n_draft`. #p2-useful-features-half-day-each
+
+- [ ] **Whisper VAD convenience.** `WhisperVadParams` is bound but no Python helper for "transcribe-with-VAD-segmentation". Build `transcribe_with_vad(audio, ...)` that pre-segments via VAD and stitches segment outputs. Sits next to `WhisperStreamer` in `whisper/streaming.py` (or sibling `vad.py`). #p2-useful-features-half-day-each
+
+- [ ] **`logprobs` in OpenAI-compat.** Now that `LLM(..., logprobs=True)` populates `Response.logprobs`, surface this through `integrations/openai_compat.py` so `client.chat.completions.create(logprobs=True, top_logprobs=K)` round-trips. #p2-useful-features-half-day-each
+
+- [ ] **Streaming SSE chat completions in `EmbeddedServer` — verify wire format.** `openai_compat.py` (the client adapter) supports `stream=True`. The HTTP-level SSE encoding in `embedded.py` was flagged as "needs verification" during the REVIEW pass — confirm it matches OpenAI's `data: {chunk}\n\n` framing and add a regression test. #p2-useful-features-half-day-each
+
+- [ ] **RoPE / YaRN scaling exposure.** `LlamaContextParams` carries the fields natively; expose on `GenerationConfig` (`rope_freq_base`, `rope_freq_scale`, `yarn_*`). Required for users running NTK-aware long-context configs. #p2-useful-features-half-day-each
+
+- [ ] Persistent quantization state in database metadata (quantize() exists but state is in-memory only) #rag-scaling-see-docsdevscaling_ragmd
+
+- [ ] Metadata pre-filtering in vector search (filter by source, date, etc.) #rag-scaling-see-docsdevscaling_ragmd
+
+- [ ] Async embedding generation (`embed_batch_async()`) #rag-scaling-see-docsdevscaling_ragmd
+
+- [ ] Parallel document loading in DirectoryLoader #rag-scaling-see-docsdevscaling_ragmd
+
+- [ ] Batch query processing in RAG pipeline #rag-scaling-see-docsdevscaling_ragmd
+
+## Low
+
+- [ ] stable-diffusion.cpp uses compile-time `#ifdef SD_USE_CUDA` for backend selection instead of dynamic `ggml_backend_load_all()` like llama.cpp and whisper.cpp -- propose dynamic backend discovery upstream or patch locally for consistency #wheel-packaging
+
+- [ ] MCP server (`inferna/mcp/`): expose local inference (`complete`, `chat`, `embed`, `transcribe`, `generate_image`) as MCP tools and model listing as resources. Two transports: stdio entrypoint for subprocess clients (Claude Desktop), and Streamable-HTTP routes mounted on `EmbeddedServer` (`src/inferna/llama/server/embedded.pyx`) for Claude Code / remote clients. Reuse `agents/jsonrpc.py` framing and the high-level API in `src/inferna/api.py` -- no new heavy deps. (Client side already shipped: `LLM.add_mcp_server()` in `src/inferna/api.py:1378` wraps `agents/mcp.py` for non-agent callers.) #explore
+
+- [ ] **Stop-pattern migration in `_extract_answer`** -- `src/inferna/agents/react.py` keeps a hand-maintained list of ~24 hallucination stop-patterns (code blocks, `Note:`, `Let's`, `def `, `class `, etc.) and post-processes generated text against them. The principled fix is to extend `GenerationConfig.stop_sequences` for the answer-extraction generation step instead; the default config already wires `stop_sequences` for `Observation:` patterns (`react.py:200-206`) and `LLM.__call__` honors them. Sketch: `cfg = replace(self.generation_config, stop_sequences=self.generation_config.stop_sequences + [...])` for the answer turn only; the regex strip becomes a fallback for models that ignore stop sequences. Trigger: refactor the next time the stop-pattern list grows from a new model-specific failure mode -- accreting another regex is the wrong response. #agent-framework
+
+- [ ] **MCP SSE transport** -- `src/inferna/agents/mcp.py` implements `McpStdioConnection` (line 148) and `McpHttpConnection` (line 271) but `McpTransportType.SSE` (line 38) is reserved-but-unwired. A symmetric `McpSseConnection` would slot in next to the HTTP one, dispatched from `McpClient._connect_server` (line 400). Bulk of the cost is an integration test harness with a real SSE-speaking MCP server; the protocol class itself is small. If/when this lands, remember to extend `tests/test_llama_cpp_surface.py` if any new sampler symbols become structural (the nanobind shim drift concern). Trigger: an MCP server you want to use exposes SSE-only. The ecosystem is mostly stdio/HTTP today, so this is unlikely soon. #agent-framework
+
+- [ ] **ACP protocol-version negotiation** -- `src/inferna/agents/acp.py` hardcodes `ACP_PROTOCOL_VERSION = "2025-01-01"` (line 53) and embeds it directly in initialize responses (line 480). The module is marked experimental for this and other reasons, so the warning currently buys time -- but if ACP graduates from POC to a genuinely-used integration point, parameterize on the client's announced version (negotiate during initialize). Trigger: an ACP client surfaces with a different version. (A reference-client conformance test was also flagged but doesn't belong in a TODO until a harness target exists.) #agent-framework
+
+- [ ] **Streaming sub-agent events across MCP** -- `mcp_agent_tool` returns a single value per call; streaming would require the MCP server-streaming RFC to stabilize. #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **Streaming RAG results to the agent** -- `rag_as_tool` returns a single concatenated observation today. #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **Filtered deletion in `SemanticMemory`** -- `forget()` raises `NotImplementedError` pending a RAG-side metadata-filtered delete API. #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **Parallel critic ensembles in `ReflectionLoop`** -- multiple critics voting, reward-model-based acceptance. #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **Unified streaming for `plan_and_execute` steps** -- one iterator surfacing events from all steps in sequence (e.g. an `aplan_and_execute` async-generator variant, or a `stream=True` flag on the existing helper). `cyllama-desktop`'s sidecar bypasses the wrapper today and reimplements the loop with `planner.stream()` / `executor.stream()` precisely to get incremental events flowing into its SSE channel; a streaming variant in inferna would let that ~100 LoC of reimplementation go away. Trigger: the next consumer (after cyllama-desktop) that needs per-step events. #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **`ReflectionLoop.stream()` per-attempt `source` labels.** Today `composition.py` sets `event.source = "worker"` / `"critic"` (role only). Downstream consumers (cyllama-desktop today) want `worker-1` / `critic-1` / `worker-2` / etc. so the trace renderer can distinguish attempts. ~5 LoC change: `f"worker-{attempt + 1}"` in the source-tagging block. Trigger: a consumer wants per-attempt distinction (cyllama-desktop already does -- it currently reimplements the loop in the sidecar for this reason). #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **Document `SemanticMemory`'s actual RAG-shaped protocol.** The class docstring says it wraps a `inferna.rag.RAG` instance; in practice the implementation only calls `.add_texts(texts, metadata, split)` and `.search(query, k, threshold)` on the wrapped object. Any duck-typed shape works, but the docstring buries this. `cyllama-desktop`'s sidecar built a ~20 LoC `_MemoryRagShim` around its `Embedder` + `SqliteVectorStore` precisely because a real `RAG` instance requires a `generation_model` it doesn't have. Two changes: (a) docstring rewrite stating the protocol; (b) optional `MemoryRagProtocol` (or similar) type alias under `agents.memory` that consumers can use for type checking. Trigger: a follow-up doc pass. #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **`ContractPolicy.from_name(s)` classmethod.** Today consumers wanting to map a UI string (`"OBSERVE"`, etc.) to a `ContractPolicy` enum member call `getattr(ContractPolicy, name)` and handle the `AttributeError` themselves. A `from_name` factory + a `Literal["IGNORE", "OBSERVE", "ENFORCE", "QUICK_ENFORCE"]` type alias would tighten the boundary and remove the boilerplate from every consumer. ~10 LoC. Trigger: the next consumer that has to do this dance. #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **Expose `Workflow.inputs_schema` (typed inputs, not just names).** `compiled.dry_run().inputs_required` is `Tuple[str, ...]` -- names only. Layer-C nodes have parameter annotations the framework already reads (`_extract_param_names`, `typing.get_type_hints`); surfacing those as `{key: type}` would let consumers render typed input forms instead of always-text fields. `cyllama-desktop`'s Workflows pane uses text inputs for everything and the user has to know that `count` is an `int` etc. ~20 LoC to populate `inputs_schema` on the `DryRunPlan` dataclass. Trigger: a consumer with a workflow whose inputs are numeric / boolean / enum. #pattern-coverage-refinements-future-no-urgency
+
+- [ ] **Linux OpenVINO (Intel CPU accelerator)** -- upstream ships `llama-b8893-bin-ubuntu-openvino-2026.0-x64.tar.gz` as a new backend. Would require inferna-side integration work (build flags, runtime loader, backend detection in `build_config.json`) on top of the wheel packaging. Lower priority until there's user demand #wheel-coverage-additional-backend-variants
+
+- [ ] **Separate SDK caches from `thirdparty/` build-artifact caches** -- llama.cpp's `build-cache.yml` caches SDK install dirs (`C:\Program Files\AMD\ROCm`, `./vulkan_sdk`, `./openvino_toolkit`) under keys scoped to `HIPSDK_INSTALLER_VERSION`, separate from compile caches. inferna's single `deps-<backend>-<linkmode>` key mixes SDK install with built artifacts, so a `manage.py` edit invalidates cached SDK binaries too. For `build-gpu-wheels.yml`: consider `--manylinux-image` with pre-built CUDA/ROCm image, or a container-volume trick to cache `/usr/local/cuda` #ci-workflows
+
+- [ ] **Monotonic `b<commit-count>` build-tag scheme** -- llama.cpp's `get-tag-name/action.yml` uses `fetch-depth: 0` + `git rev-list --count HEAD` to produce `b${BUILD_NUMBER}` on `master`, `${branch}-b${count}-${sha7}` on branches. Lets every CI-built wheel be distinguishable without bumping `pyproject.toml` version on every pre-release. Apply in `build-cibw.yml` / `build-gpu-wheels.yml` upload steps #ci-workflows
+
+- [ ] **Replace per-token `LlamaBatch` alloc in `Speculative.draft`.** `_speculative.py:125, :144` constructs a fresh native batch each loop iteration; the project ships `BatchMemoryPool` in `_python_helpers.py` for exactly this. Pure perf, not correctness. #hardening-small-bugs-ergonomic-gaps
+
+- [ ] **Better `from_numpy` error for non-2D/3D inputs.** `_sd_native.cpp:447-479` falls through to a bare nanobind cast error on 4D+ arrays. Add an explicit `if ndim not in (2, 3): raise ValueError(...)`. #hardening-small-bugs-ergonomic-gaps
+
+- [ ] **Tidy `chat_apply_template` second-call buffer size.** `_llama_native.cpp:1000-1002` passes `required` (not `(int) buf.size()`) as the buffer size. Cosmetic — current behaviour is fine because the result is constructed with explicit length — but worth fixing. #hardening-small-bugs-ergonomic-gaps
+
+- [ ] **Consolidate `LlamaBatch.set_batch` / `add_sequence` fill loops** in `src/inferna/llama/_llama_native.cpp`. Both methods duplicate the per-token `pos` / `seq_id` / `n_seq_id` / `logits` / `token` assignment; factor the inner loop into a single helper parameterized by starting offset and `seq_id`. #pre-existing-tu-consolidation
+
+- [ ] **Split `embedded.py` (~950 LOC).** Mongoose binding + routing + slot management + chat completion all in one file. Same shape of refactor as the recent `LLM` split. Suggested seams: `_mongoose.py`, `routes/`, `slots.py`, `chat_completion.py`. High leverage on continuous batching and vision-in-OpenAI-compat. #p3-polish-cleanup
+
+- [ ] **`__all__` everywhere.** Public modules (`inferna/__init__.py`, `api.py`, `llama/llama_cpp.py`, `whisper/whisper_cpp.py`, `sd/stable_diffusion.py`) lack `__all__`. Add it so the public/private boundary is explicit and `from inferna import *` is well-defined. #p3-polish-cleanup
+
+- [ ] **`@overload` on `LLM.__call__`.** Returns `Response | Iterator[str]` depending on `stream=`; static checkers can't narrow without overloads. Add `@overload` for `stream=True` → `Iterator[str]` and `stream=False` → `Response`. #p3-polish-cleanup
+
+- [ ] **Lazy imports in `inferna/__init__.py` and `agents/__init__.py`.** Importing `inferna` today pulls MCP, jsonrpc, langchain integration, RAG. `from inferna import LLM` should not pay for those. Use PEP 562 module-level `__getattr__` to defer. #p3-polish-cleanup
+
+- [ ] **Centralize defaults.** Same numeric default appears in 3-4 places (`DEFAULT_MAX_TOKENS=512` in `defaults.py` vs `n_predict=32` in `simple()` etc.). Single source in `defaults.py`; CLI/api modules import constants. #p3-polish-cleanup
+
+- [ ] **Common exception base.** `ValueError` / `RuntimeError` / `ActionParseError` / `VectorStoreError` with no shared base. Add `InfernaError` so users can write a single `except` that catches "library errors only". #p3-polish-cleanup
+
+- [ ] **Generator return-type annotations.** Several `Iterator[str]` that are actually `Generator[str, None, None]`. Mostly cosmetic. #p3-polish-cleanup
+
+- [ ] **Frozen dataclasses.** `GenerationStats`, `Response` (immutable in practice), `ResponseCacheInfo` could be `frozen=True`. Surfaces accidental mutation. (`TokenLogprob`, `TopLogprob`, `StreamSegment` already frozen.) #p3-polish-cleanup
+
+- [ ] **Context managers on remaining classes.** `EmbeddedServer`, `RAG`, `WhisperContext`, `SDContext` lack `__enter__`/`__exit__`. Native cleanup works either way; explicit is better. #p3-polish-cleanup
+
+- [ ] **Centralize sampler / server log routing.** `Sampler.print_perf_data()` and `EmbeddedServer` access logs go to stdout. Pipe through `logging` so deployments capture them. #p3-polish-cleanup
+
+- [ ] **Naming: `ngl` vs `n_gpu_layers`.** `simple()` uses `ngl`; everything else uses `n_gpu_layers`. Pick one form per layer (long names in code, short flags only in CLI) and document. #p3-polish-cleanup
+
+- [ ] **Whisper wildcard import.** `whisper/whisper_cpp.py` does `from ._whisper_native import *` while `llama/llama_cpp.py` enumerates explicitly. Standardize on enumeration + `__all__`. #p3-polish-cleanup
+
+- [ ] **Thread-safety docs.** `WhisperContext` / `SDContext` say nothing about thread safety; one-line "not thread-safe; one context per thread" docstring matches what `LLM._busy_lock` documents. #p3-polish-cleanup
+
+- [ ] **Reranker auto-enable in RAG.** `rag/pipeline.py:117-150` plumbs `rerank` / `reranker` arguments; default is `False`. Consider auto-enabling when a reranker is supplied (currently silently no-op without `rerank=True`). #p4-nice-to-have
+
+- [ ] **Streaming agent steps.** `ReActAgent` runs eagerly; no incremental "thought" stream. UX issue for long runs. #p4-nice-to-have
+
+- [ ] **ReActAgent context compaction.** Hardcoded char cap rather than token-aware summarization. Fine as a starting point; flag it as a known limitation. #p4-nice-to-have
+
+- [ ] **Model registry / `inferna.list_models()`.** Cache parsed GGUF metadata under `~/.cache/inferna/`. Quality-of-life. #p4-nice-to-have
+
+- [ ] **Observability / OpenTelemetry.** Span generation around `_generate_stream`, structured server logs, sampler perf via logger. Cheap but not structural. #p4-nice-to-have
+
+- [ ] **Stable-diffusion gaps.** ControlNet (high-level wrappers); async `convert_model`; inpainting mask helpers. #p4-nice-to-have
+
+- [ ] **Whisper language-detection confidence.** `WhisperContext.full_lang_id()` returns the id; pair with the score so callers can threshold. #p4-nice-to-have
+
+- [ ] **Tighten GBNF whitespace rule.** The grammar's `space ::= | " " | "\n"{1,2} [ \t]{0,20}` allows up to 22 whitespace chars per separator. Sampling can drown in pretty-print whitespace, occasionally truncating mid-structure under `max_tokens`. Tighten upstream in `inferna.utils.json_schema_to_grammar` and confirm no regression in the structured-output tests. Workaround in `tests/test_function_calling.py` was a deterministic config (`temperature=0`, `max_tokens=256`) — see the test fixture's `_LIVE_CFG`. #p4-nice-to-have
+
+- [ ] Sharding for 1M+ vector workloads #rag-scaling-see-docsdevscaling_ragmd
+
+## Done
+
+- [x] **#1 -- `ReflectionLoop` helper** -- landed in `src/inferna/agents/composition.py`. Worker + critic loop with configurable acceptance marker, custom revision template, and per-pass `source`/`parent_event_id` annotations on streamed events. 6 tests in `tests/test_agents_composition.py::TestReflection*`. #pattern-gaps-from-docsagentspatternsmd
+
+- [x] **#2 -- `rag_as_tool` helper** -- landed in `composition.py`. Wraps any `RAG`-shaped object (`search` / `retrieve`) as a `Tool`; default formatter emits one `[score] text` line per hit, deduplicated by text. 8 tests. #pattern-gaps-from-docsagentspatternsmd
+
+- [x] **#3 -- `SemanticMemory` primitive** -- landed in new `src/inferna/agents/memory.py`. Namespace-aware facade over any RAG instance; `remember(text, namespace, metadata)` and `retrieve(query, namespace, top_k)`. Over-fetches from the underlying search so the namespace filter has room to find enough hits. `forget()` raises `NotImplementedError` pending a RAG-side filtered-delete API (documented). 14 tests in `tests/test_agents_memory.py`. #pattern-gaps-from-docsagentspatternsmd
+
+- [x] **#4 -- `plan_and_execute` helper** -- landed in `composition.py`. Default plan parser handles `[...]`, `{"steps"|"plan"|"tasks": [...]}`, and newline-split with bullet/number-prefix stripping; pluggable via `plan_parser=`. `stop_on_error=True` (default) halts after the first failing step. 7 tests. #pattern-gaps-from-docsagentspatternsmd
+
+- [x] **#5 -- `mcp_agent_tool` helper** -- landed in `composition.py`. Cross-process analog of `agent_as_tool`; wraps a remote MCP-exposed agent as a local `Tool` named `"{server_name}/{agent_name}"`. Optional local `timeout=` separate from MCP transport timeouts. 6 tests. #pattern-gaps-from-docsagentspatternsmd
+
+- [x] ~~**Bind `llama_set_adapters_lora`**~~ — done. `LlamaContext.set_adapters_lora(adapters, scales)` bound; `LLM.load_lora` / `unload_lora` / `clear_loras` / `list_loras` exposed. `llama_set_adapter_cvec` (control vectors) still unbound — separate, lower priority. #coverage-bindings-worth-filling-in
+
+- [x] **Sampler parameters.** ~~Add `frequency_penalty: float = 0.0` and `presence_penalty: float = 0.0` to `GenerationConfig`...~~ Done, and expanded scope: `GenerationConfig` now exposes `frequency_penalty`, `presence_penalty`, `penalty_last_n`, `mirostat`/`mirostat_tau`/`mirostat_eta`, `typical_p`/`typical_min_keep`, `xtc_probability`/`xtc_threshold`, `dynatemp_range`/`dynatemp_exponent`, and `logit_bias`. Wired through `LLM._create_sampler` (`src/inferna/api.py`), `BatchGenerator.generate_batch` (`src/inferna/batching.py`), and `Chat.__init__` (`src/inferna/llama/chat.py`). See CHANGELOG. #p2-useful-features-half-day-each
+
+## Notes
+
+### Bugs
+
+### Medium Priority
+
+### Wheel / Packaging
+
+### Explore
+
+### Agent framework
 
 These three items are the residue of cyllama's `AGENT_TOOL_REVIEW.md` after every concrete proposal landed or was explicitly dropped. Both repos share the agent layer byte-identical modulo `s/cyllama/inferna/g`; any work landed here should be ported (or vice-versa). Each has a clear trigger; none is urgent.
 
-- [ ] **Stop-pattern migration in `_extract_answer`** -- `src/inferna/agents/react.py` keeps a hand-maintained list of ~24 hallucination stop-patterns (code blocks, `Note:`, `Let's`, `def `, `class `, etc.) and post-processes generated text against them. The principled fix is to extend `GenerationConfig.stop_sequences` for the answer-extraction generation step instead; the default config already wires `stop_sequences` for `Observation:` patterns (`react.py:200-206`) and `LLM.__call__` honors them. Sketch: `cfg = replace(self.generation_config, stop_sequences=self.generation_config.stop_sequences + [...])` for the answer turn only; the regex strip becomes a fallback for models that ignore stop sequences. Trigger: refactor the next time the stop-pattern list grows from a new model-specific failure mode -- accreting another regex is the wrong response.
-
-- [ ] **MCP SSE transport** -- `src/inferna/agents/mcp.py` implements `McpStdioConnection` (line 148) and `McpHttpConnection` (line 271) but `McpTransportType.SSE` (line 38) is reserved-but-unwired. A symmetric `McpSseConnection` would slot in next to the HTTP one, dispatched from `McpClient._connect_server` (line 400). Bulk of the cost is an integration test harness with a real SSE-speaking MCP server; the protocol class itself is small. If/when this lands, remember to extend `tests/test_llama_cpp_surface.py` if any new sampler symbols become structural (the nanobind shim drift concern). Trigger: an MCP server you want to use exposes SSE-only. The ecosystem is mostly stdio/HTTP today, so this is unlikely soon.
-
-- [ ] **ACP protocol-version negotiation** -- `src/inferna/agents/acp.py` hardcodes `ACP_PROTOCOL_VERSION = "2025-01-01"` (line 53) and embeds it directly in initialize responses (line 480). The module is marked experimental for this and other reasons, so the warning currently buys time -- but if ACP graduates from POC to a genuinely-used integration point, parameterize on the client's announced version (negotiate during initialize). Trigger: an ACP client surfaces with a different version. (A reference-client conformance test was also flagged but doesn't belong in a TODO until a harness target exists.)
-
-### Pattern gaps (from `docs/agents/patterns.md`)
+#### Pattern gaps (from `docs/agents/patterns.md`)
 
 The five pattern gaps identified in the original audit have all landed. See [`docs/agents/patterns.md`](docs/agents/patterns.md) for the full catalog plus the patterns intentionally not supported.
 
-- [x] **#1 -- `ReflectionLoop` helper** -- landed in `src/inferna/agents/composition.py`. Worker + critic loop with configurable acceptance marker, custom revision template, and per-pass `source`/`parent_event_id` annotations on streamed events. 6 tests in `tests/test_agents_composition.py::TestReflection*`.
-
-- [x] **#2 -- `rag_as_tool` helper** -- landed in `composition.py`. Wraps any `RAG`-shaped object (`search` / `retrieve`) as a `Tool`; default formatter emits one `[score] text` line per hit, deduplicated by text. 8 tests.
-
-- [x] **#3 -- `SemanticMemory` primitive** -- landed in new `src/inferna/agents/memory.py`. Namespace-aware facade over any RAG instance; `remember(text, namespace, metadata)` and `retrieve(query, namespace, top_k)`. Over-fetches from the underlying search so the namespace filter has room to find enough hits. `forget()` raises `NotImplementedError` pending a RAG-side filtered-delete API (documented). 14 tests in `tests/test_agents_memory.py`.
-
-- [x] **#4 -- `plan_and_execute` helper** -- landed in `composition.py`. Default plan parser handles `[...]`, `{"steps"|"plan"|"tasks": [...]}`, and newline-split with bullet/number-prefix stripping; pluggable via `plan_parser=`. `stop_on_error=True` (default) halts after the first failing step. 7 tests.
-
-- [x] **#5 -- `mcp_agent_tool` helper** -- landed in `composition.py`. Cross-process analog of `agent_as_tool`; wraps a remote MCP-exposed agent as a local `Tool` named `"{server_name}/{agent_name}"`. Optional local `timeout=` separate from MCP transport timeouts. 6 tests.
-
-### Pattern-coverage refinements (future, no urgency)
+#### Pattern-coverage refinements (future, no urgency)
 
 These are residual refinements documented under each pattern's "Gap" line in `docs/agents/patterns.md`. None block the pattern; each is a possible extension when a use case appears.
 
 **Note:** every entry in this section should land in `cyllama` too. The two projects share the agent layer byte-identical modulo namespace; refinements ported one-way only would drift the surfaces.
 
-- [ ] **Streaming sub-agent events across MCP** -- `mcp_agent_tool` returns a single value per call; streaming would require the MCP server-streaming RFC to stabilize.
-
-- [ ] **Streaming RAG results to the agent** -- `rag_as_tool` returns a single concatenated observation today.
-
-- [ ] **Filtered deletion in `SemanticMemory`** -- `forget()` raises `NotImplementedError` pending a RAG-side metadata-filtered delete API.
-
-- [ ] **Parallel critic ensembles in `ReflectionLoop`** -- multiple critics voting, reward-model-based acceptance.
-
-- [ ] **Unified streaming for `plan_and_execute` steps** -- one iterator surfacing events from all steps in sequence (e.g. an `aplan_and_execute` async-generator variant, or a `stream=True` flag on the existing helper). `cyllama-desktop`'s sidecar bypasses the wrapper today and reimplements the loop with `planner.stream()` / `executor.stream()` precisely to get incremental events flowing into its SSE channel; a streaming variant in inferna would let that ~100 LoC of reimplementation go away. Trigger: the next consumer (after cyllama-desktop) that needs per-step events.
-
-- [ ] **`ReflectionLoop.stream()` per-attempt `source` labels.** Today `composition.py` sets `event.source = "worker"` / `"critic"` (role only). Downstream consumers (cyllama-desktop today) want `worker-1` / `critic-1` / `worker-2` / etc. so the trace renderer can distinguish attempts. ~5 LoC change: `f"worker-{attempt + 1}"` in the source-tagging block. Trigger: a consumer wants per-attempt distinction (cyllama-desktop already does -- it currently reimplements the loop in the sidecar for this reason).
-
-- [ ] **Document `SemanticMemory`'s actual RAG-shaped protocol.** The class docstring says it wraps a `inferna.rag.RAG` instance; in practice the implementation only calls `.add_texts(texts, metadata, split)` and `.search(query, k, threshold)` on the wrapped object. Any duck-typed shape works, but the docstring buries this. `cyllama-desktop`'s sidecar built a ~20 LoC `_MemoryRagShim` around its `Embedder` + `SqliteVectorStore` precisely because a real `RAG` instance requires a `generation_model` it doesn't have. Two changes: (a) docstring rewrite stating the protocol; (b) optional `MemoryRagProtocol` (or similar) type alias under `agents.memory` that consumers can use for type checking. Trigger: a follow-up doc pass.
-
-- [ ] **`ContractPolicy.from_name(s)` classmethod.** Today consumers wanting to map a UI string (`"OBSERVE"`, etc.) to a `ContractPolicy` enum member call `getattr(ContractPolicy, name)` and handle the `AttributeError` themselves. A `from_name` factory + a `Literal["IGNORE", "OBSERVE", "ENFORCE", "QUICK_ENFORCE"]` type alias would tighten the boundary and remove the boilerplate from every consumer. ~10 LoC. Trigger: the next consumer that has to do this dance.
-
-- [ ] **Expose `Workflow.inputs_schema` (typed inputs, not just names).** `compiled.dry_run().inputs_required` is `Tuple[str, ...]` -- names only. Layer-C nodes have parameter annotations the framework already reads (`_extract_param_names`, `typing.get_type_hints`); surfacing those as `{key: type}` would let consumers render typed input forms instead of always-text fields. `cyllama-desktop`'s Workflows pane uses text inputs for everything and the user has to know that `count` is an `int` etc. ~20 LoC to populate `inputs_schema` on the `DryRunPlan` dataclass. Trigger: a consumer with a workflow whose inputs are numeric / boolean / enum.
-
-### Pattern gaps -- explicitly **not on the roadmap**
+#### Pattern gaps -- explicitly **not on the roadmap**
 
 These appear in `docs/agents/patterns.md` but won't be addressed without a forcing use case. Listed here to make the position explicit rather than implicit.
 
@@ -76,172 +220,40 @@ These appear in `docs/agents/patterns.md` but won't be addressed without a forci
 
 - ~~**Workflow / State-Machine agents** (graph DSL)~~ -- **landed** as the `inferna.agents.workflow` runtime (Phases 1-5 of the workflow rollout). `Workflow` (builder) + `CompiledWorkflow` (runnable) with Layer B explicit StateGraph and Layer C `@flow.node` decorator sugar, streaming events (`WORKFLOW_START` / `NODE_START` / `NODE_END` / `ANSWER` / `WORKFLOW_END`), conditional routing + END sentinel, sub-workflow composition via `workflow_node`, agent-as-node via `agent_node`, `ContractPolicy`-flavoured workflow invariants, reducer registry for multi-writer state keys, and `Workflow.as_agent()` for `AgentProtocol` adaptation. 118 tests in `tests/test_agents_workflow.py`. The first real consumer is `cyllama-desktop`'s Workflows pane. See `docs/agents/workflow.md` and `docs/agents/patterns.md` §9.
 
-## CI / Workflows
+### CI / Workflows
 
-### Medium Priority
+#### Medium Priority
 
-- [ ] **Lightweight Python lint / type-check workflows** -- llama.cpp has `python-lint.yml`, `python-type-check.yml`, `python-check-requirements.yml`, `editorconfig.yml` using `runs-on: ubuntu-slim`, triggered only on `**/*.py` / config path changes, running in <1 min. Cheap pre-filter before the 40-minute wheel matrix. Add `.github/workflows/python-lint.yml` with `ruff check` and optionally `mypy` / `ty`
-
-- [ ] **Composite actions for repeated toolchain setup** -- llama.cpp factors into `.github/actions/{windows-setup-cuda,linux-setup-vulkan,windows-setup-rocm,unarchive-tar,get-tag-name}/action.yml` and reuses them across `build-vulkan.yml`, `release.yml`, `build-cache.yml`. inferna duplicates the Vulkan-SDK pwsh install (~15 lines) and a version-reading Python snippet (`build-cibw.yml:234-239`, `build-gpu-wheels.yml:664-670`). Extract `.github/actions/setup-vulkan-windows` and `.github/actions/get-version`
-
-- [ ] **Reusable `workflow_call` smoke-test** -- inferna's wheel-find + venv + import + inference block is duplicated across all three workflow files with minor variations. Wrap `scripts/rwt.py` in `.github/workflows/_smoke-test.yml` with `on: workflow_call` (inputs: `artifact-name`, `runs-on`, `run-inference`) and delete ~200 lines of duplication
-
-- [ ] **Use `manage.py wheel_repair` in `CIBW_REPAIR_WHEEL_COMMAND_*`** -- the per-backend `--exclude` / `--include` / `--no-dll` lists are now duplicated between `scripts/manage.py do_wheel_repair` and the workflow YAMLs (`_gpu-build-{cuda,rocm,sycl,vulkan-linux,cuda-windows,vulkan-windows}.yml`). Replace each `CIBW_REPAIR_WHEEL_COMMAND_<PLAT>` block with `python {project}/scripts/manage.py wheel_repair --backend <b> --dest-dir {dest_dir} {wheel}` so manage.py is the single source of truth and exclude-list drift is impossible. Prerequisite: add `--dest-dir` arg to `do_wheel_repair` (currently writes to `dist/` only). Leave `CIBW_BEFORE_BUILD` and the cibuildwheel orchestration untouched -- cibuildwheel still owns the Python matrix, manylinux containers, and macOS arch handling.
-
-### Wheel Coverage (additional backend variants)
+#### Wheel Coverage (additional backend variants)
 
 Gap analysis vs. llama.cpp b8893 release assets. Ordered by effort/payoff.
 
-- [ ] **Windows SYCL (Intel Arc + Xe)** -- Linux SYCL is shipped (`build_sycl` in `build-gpu-wheels-abi3.yml:319`, wheel name `inferna-sycl`). Windows SYCL still pending: follows the same pattern as windows-cuda/vulkan -- download prebuilt, synthesize `.lib` via existing `_generate_import_libs()`, `delvewheel --include ggml-sycl.dll` with `--no-dll` for `sycl[78].dll`, `pi_level_zero.dll`, `pi_opencl.dll`, `svml_dispmd.dll`, `libmmd.dll`, `libiomp5md.dll` (user-installed Intel oneAPI runtime). Build-time dep: Intel oneAPI DPC++ on the Windows runner -- use `oneapi-src/setup-oneapi` or similar. Needs `_release_asset_name()` + `_dylib_names` extended to recognize Windows SYCL assets
+#### Lower Priority
 
-- [ ] **Windows HIP Radeon (AMD GPUs)** -- upstream ships `llama-b8893-bin-win-hip-radeon-x64.zip`. Same download+synthesize+delvewheel pattern; `--include ggml-hip.dll`, `--no-dll` for `amdhip64_6.dll`, `hipblas.dll`, `rocblas.dll`, `amd_comgr_*.dll` (user-installed AMD HIP SDK / Adrenalin runtime). Main obstacle: AMD HIP SDK Windows install on CI has no compact GitHub Action -- needs manual `Invoke-WebRequest` of AMD's installer (~2-3 GB) plus silent-install args, or a `choco install` package if one exists. Highest effort of the three Windows GPU gaps
-
-- [ ] **Linux ROCm 7.2 prebuilt** -- upstream now ships `llama-b8893-bin-ubuntu-rocm-7.2-x64.tar.gz`. Current `build_rocm` job compiles ROCm 6.3 from source (20-40 min); switching to the prebuilt would cut CI time dramatically. Tradeoff: constrained to upstream's arch list (we currently target `gfx90a;gfx942;gfx1100` explicitly). Evaluate whether upstream's default architectures are acceptable before committing
-
-- [ ] **ARM64 variants** -- growing relevance (Copilot+ PCs, Ampere/Graviton clouds, Apple Silicon KleidiAI). No CI job builds `ubuntu-24.04-arm` or `windows-11-arm` wheels; upstream ships `ubuntu-arm64`, `ubuntu-vulkan-arm64`, `win-cpu-arm64`, `macos-arm64-kleidiai`. Needs its own wheel variant names and separate investigation of build-time toolchain availability on ARM runners
-
-- [ ] **Linux OpenVINO (Intel CPU accelerator)** -- upstream ships `llama-b8893-bin-ubuntu-openvino-2026.0-x64.tar.gz` as a new backend. Would require inferna-side integration work (build flags, runtime loader, backend detection in `build_config.json`) on top of the wheel packaging. Lower priority until there's user demand
-
-### Lower Priority
-
-- [ ] **Separate SDK caches from `thirdparty/` build-artifact caches** -- llama.cpp's `build-cache.yml` caches SDK install dirs (`C:\Program Files\AMD\ROCm`, `./vulkan_sdk`, `./openvino_toolkit`) under keys scoped to `HIPSDK_INSTALLER_VERSION`, separate from compile caches. inferna's single `deps-<backend>-<linkmode>` key mixes SDK install with built artifacts, so a `manage.py` edit invalidates cached SDK binaries too. For `build-gpu-wheels.yml`: consider `--manylinux-image` with pre-built CUDA/ROCm image, or a container-volume trick to cache `/usr/local/cuda`
-
-- [ ] **Monotonic `b<commit-count>` build-tag scheme** -- llama.cpp's `get-tag-name/action.yml` uses `fetch-depth: 0` + `git rev-list --count HEAD` to produce `b${BUILD_NUMBER}` on `master`, `${branch}-b${count}-${sha7}` on branches. Lets every CI-built wheel be distinguishable without bumping `pyproject.toml` version on every pre-release. Apply in `build-cibw.yml` / `build-gpu-wheels.yml` upload steps
-
-## Wrapper Layer (from REVIEW)
+### Wrapper Layer (from REVIEW)
 
 Items distilled from a 2026-04 wrapper-code review. Two HIGH correctness bugs (`Speculative.is_compat` KV clobber, SD preview-callback UAF) and one latent `EmbeddedServer.start()` cleanup leak were fixed in-session; this list is what remained after independent re-verification (some original findings were dropped as either reversed or benign).
 
-### Hardening — small bugs & ergonomic gaps
+#### Hardening — small bugs & ergonomic gaps
 
-- [ ] **Add `BusyGuard` on `SDContext.close`** (or document "do not close while generating"). Currently `_sd_native.cpp:789-791` calls `free_sd_ctx` with no `busy_lock` — concurrent `generate_image` (GIL released) races against the free. `WhisperContextW::close` has the same shape; check both.
+#### Coverage — bindings worth filling in
 
-- [ ] **Make `WhisperContext.close` idempotent.** `_whisper_native.cpp:432-435` calls `s.ensure_valid()` before the null check, so a second close raises `RuntimeError` instead of being a no-op. Drop the `ensure_valid()` and gate cleanup on `s.ctx != nullptr`.
+#### Refactor — convention drift
 
-- [ ] **`PyErr_WriteUnraisable` in `_mongoose.cpp` HTTP handler.** `server/_mongoose.cpp:73-78` catches all Python handler exceptions and replies 500 with no logging. Surface them via `PyErr_WriteUnraisable` (or `PyErr_Print`) before the reply so handler bugs are visible instead of silently re-coded.
+#### Pre-existing TU consolidation
 
-- [ ] **Document `Manager::send_reply` thread-affinity.** `server/_mongoose.cpp:114-131` walks `mgr.conns` while another thread may be inside GIL-released `poll`. `embedded.py` is single-threaded today but the constraint is undocumented. Add a docstring asserting "must be called from the same thread as `poll`", or guard with mongoose's wakeup primitive.
+#### Open observation (not yet a verified bug)
 
-- [ ] **Replace per-token `LlamaBatch` alloc in `Speculative.draft`.** `_speculative.py:125, :144` constructs a fresh native batch each loop iteration; the project ships `BatchMemoryPool` in `_python_helpers.py` for exactly this. Pure perf, not correctness.
-
-- [ ] **Better `from_numpy` error for non-2D/3D inputs.** `_sd_native.cpp:447-479` falls through to a bare nanobind cast error on 4D+ arrays. Add an explicit `if ndim not in (2, 3): raise ValueError(...)`.
-
-- [ ] **Return `None` for failed slots in `generate_with_params`.** `_sd_native.cpp:825-844` wraps null-data results as stub `SDImage` objects mixed in with valid ones; only signal is a `warnings.warn`. Returning `None` for invalid slots makes `len(images) != batch` mean what it should.
-
-- [ ] **Tidy `chat_apply_template` second-call buffer size.** `_llama_native.cpp:1000-1002` passes `required` (not `(int) buf.size()`) as the buffer size. Cosmetic — current behaviour is fine because the result is constructed with explicit length — but worth fixing.
-
-### Coverage — bindings worth filling in
-
-- [x] ~~**Bind `llama_set_adapters_lora`**~~ — done. `LlamaContext.set_adapters_lora(adapters, scales)` bound; `LLM.load_lora` / `unload_lora` / `clear_loras` / `list_loras` exposed. `llama_set_adapter_cvec` (control vectors) still unbound — separate, lower priority.
-
-- [ ] **Bind the `whisper_*_with_state` family.** `_whisper_native.cpp:592-598` exposes `WhisperState` as a constructor-only stub. The whole point of `whisper_state` is concurrent decoding from one context; without methods (`whisper_full_with_state`, `whisper_encode_with_state`, etc.) the class is useless.
-
-- [ ] **Bind `llama_state_*` save/load.** Only `llama_state_get_size` is bound (`_llama_native.cpp` near line 1188); `llama_state_get_data` / `_set_data` / `_load_file` / `_save_file` and the `_seq_*` and `_ext` variants are all unbound. Required for context checkpointing/resumption.
-
-- [ ] **Bind whisper callbacks.** `whisper_full_params` exposes `new_segment_callback`, `progress_callback`, `encoder_begin_callback`, `abort_callback` — none are bound. SD module already has the analogous pattern; mirror it.
-
-### Refactor — convention drift
-
-- [ ] **Decide composition-vs-subclass for SD wrappers.** `SDImage` uses composition citing nanobind dealloc constraints (`stable_diffusion.py:156-158`); `SDContext`, `SDContextParams`, `SDSampleParams`, `SDImageGenParams` subclass the native types. Either the SDImage rationale applies to all of them or none. Pick one and apply uniformly.
-
-- [ ] **Migrate enum exports to `nb::enum_` (or document why flat ints are required).** Currently every llama enum lives in three places — `llama.h`, `_llama_native_enums.cpp` flat exports, and `llama_cpp.py` re-aliases — so each new upstream enum needs three coordinated edits. The MTMD TU's `nb::enum_<MtmdInputChunkType>().value(...).export_values()` is the cleaner reference.
-
-- [ ] **Add `tests/test_llama_native.py`.** Direct-surface coverage for symbols the integration tests skip: `LlamaModelKvOverride`/`TensorBuftOverride`, `GgmlBackend*` info, threadpool `attach`/`detach`, `chat_builtin_templates`, TTS helpers, `set_log_callback`.
-
-### Pre-existing TU consolidation
-
-- [ ] **Consolidate `LlamaBatch.set_batch` / `add_sequence` fill loops** in `src/inferna/llama/_llama_native.cpp`. Both methods duplicate the per-token `pos` / `seq_id` / `n_seq_id` / `logits` / `token` assignment; factor the inner loop into a single helper parameterized by starting offset and `seq_id`.
-
-- [ ] **Validate ggml header consistency across translation units.** `_whisper_native.cpp` and `_sd_native.cpp` forward-declare ggml backend APIs while `_llama_native.cpp` includes the full ggml headers. Currently consistent, but check for cross-TU ABI drift on each upstream ggml header bump.
-
-### Open observation (not yet a verified bug)
-
-- [ ] **Investigate flaky `test_embedded_server_context_manager`.** One failure observed in a 1389-test run (`mg_listen` returned null on port 8097), passes cleanly on rerun. Root cause unverified — candidates include macOS TIME_WAIT residue, transient external interference, or an internal race across rapid `mg_mgr_init`/`mg_listen` cycles. Highest-value next move: log `errno`/`strerror(errno)` from the `_mongoose.cpp` listen path so the next flake produces a real signal instead of three guesses.
-
-## Wrapper Layer (REVIEW.md, 2026-05)
+### Wrapper Layer (REVIEW.md, 2026-05)
 
 Items distilled from the second wrapper-code review (2026-05). Correctness fixes (UTF-8 streaming, Jinja `except`, `BatchMemoryPool`), the `LLM` god-class split into `ResponseCache` / `ChatTemplateRenderer` / `MCPFacade`, and the value-add features (LoRA, embeddings, structured outputs, function calling, logprobs, prompt cache / KV reuse, whisper streaming) all shipped in-session. This list is what remained.
 
-### P1 — high impact
+#### P1 — high impact
 
-- [ ] **Continuous batching in `EmbeddedServer`.** Multi-day. Today's slot decode loop is sequential per request; a real per-slot continuous batching loop (one sampler per slot, ragged decode, true concurrent users) is the largest perf upgrade and the reason vLLM/llama-cpp-server outpace ad-hoc loops. Touches `src/inferna/llama/server/embedded.py`, `python.py:ServerSlot`, the streaming SSE path. Probably needs the `embedded.py` (~950 LOC) split first (see P3).
+#### P2 — useful features, half-day each
 
-- [ ] **Vision in OpenAI-compat (`image_url` content parts).** Half-day. `integrations/openai_compat.py` does not handle `messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "..."}}]}]`. The MTMD context exists (`inferna.llama.mtmd`); plumb it: detect image content parts in `_create_completion`, encode via MTMD, build the multimodal prompt. Pair with a high-level `LLM.chat_with_images(messages, images)` convenience.
+#### P3 — polish / cleanup
 
-- [ ] **Expose KV-cache control on `LLM`.** Half-day. Native bindings exist (`memory_seq_rm`, `memory_seq_pos_max`, `memory_seq_cp`, `memory_seq_keep`, `memory_seq_add`); `LLM` only uses them internally for the prompt-cache layer. Public surface (`LLM.kv.drop`, `LLM.kv.copy`, `LLM.kv.pos_max`) unblocks user-built prompt caches, multi-conversation slot reuse, and the next round of agent-style work.
+#### P4 — nice-to-have
 
-### P2 — useful features, half-day each
-
-- [x] **Sampler parameters.** ~~Add `frequency_penalty: float = 0.0` and `presence_penalty: float = 0.0` to `GenerationConfig`...~~ Done, and expanded scope: `GenerationConfig` now exposes `frequency_penalty`, `presence_penalty`, `penalty_last_n`, `mirostat`/`mirostat_tau`/`mirostat_eta`, `typical_p`/`typical_min_keep`, `xtc_probability`/`xtc_threshold`, `dynatemp_range`/`dynatemp_exponent`, and `logit_bias`. Wired through `LLM._create_sampler` (`src/inferna/api.py`), `BatchGenerator.generate_batch` (`src/inferna/batching.py`), and `Chat.__init__` (`src/inferna/llama/chat.py`). See CHANGELOG.
-
-- [ ] **Rebuild `cli.py` sampler chain.** `src/inferna/llama/cli.py` registers ~50 llama.cpp-compatible sampling flags (`--top-k`, `--top-p`, `--min-p`, `--repeat-penalty`, `--mirostat`/`--mirostat-ent`/`--mirostat-lr`, `--logit-bias`, `--temp`, `--seed`, …) and then ignores all of them at line 398 in favour of a hardcoded `self.sampler.add_greedy()` (the comment "start with greedy for simplicity" makes the gap explicit). Right fix: extract a shared `_internal/sampler_build.py::build_sampler(config, vocab)` helper that both `LLM._create_sampler` and the CLI consume, then replace the CLI's hardcoded greedy with a `build_sampler()` call driven from the parsed flags. Also decide `--logit-bias`'s string format (currently `type=str, default=""` and unparsed) — `id+bias,id+bias,...` per llama.cpp upstream, or JSON for OpenAI parity. Add CLI integration test per flag. Half-to-full day.
-
-- [ ] **Speculative decoding ergonomics.** `_speculative.py` exists and is functional but agents/users have to hand-wire it. Add `LLM.enable_speculative(draft_model_path, n_draft=8)` convenience. Optional sibling-finder helper that resolves a smaller HF variant for a given main model. Print acceptance-rate stats on close so users can tune `n_draft`.
-
-- [ ] **Whisper VAD convenience.** `WhisperVadParams` is bound but no Python helper for "transcribe-with-VAD-segmentation". Build `transcribe_with_vad(audio, ...)` that pre-segments via VAD and stitches segment outputs. Sits next to `WhisperStreamer` in `whisper/streaming.py` (or sibling `vad.py`).
-
-- [ ] **`logprobs` in OpenAI-compat.** Now that `LLM(..., logprobs=True)` populates `Response.logprobs`, surface this through `integrations/openai_compat.py` so `client.chat.completions.create(logprobs=True, top_logprobs=K)` round-trips.
-
-- [ ] **Streaming SSE chat completions in `EmbeddedServer` — verify wire format.** `openai_compat.py` (the client adapter) supports `stream=True`. The HTTP-level SSE encoding in `embedded.py` was flagged as "needs verification" during the REVIEW pass — confirm it matches OpenAI's `data: {chunk}\n\n` framing and add a regression test.
-
-- [ ] **RoPE / YaRN scaling exposure.** `LlamaContextParams` carries the fields natively; expose on `GenerationConfig` (`rope_freq_base`, `rope_freq_scale`, `yarn_*`). Required for users running NTK-aware long-context configs.
-
-### P3 — polish / cleanup
-
-- [ ] **Split `embedded.py` (~950 LOC).** Mongoose binding + routing + slot management + chat completion all in one file. Same shape of refactor as the recent `LLM` split. Suggested seams: `_mongoose.py`, `routes/`, `slots.py`, `chat_completion.py`. High leverage on continuous batching and vision-in-OpenAI-compat.
-
-- [ ] **`__all__` everywhere.** Public modules (`inferna/__init__.py`, `api.py`, `llama/llama_cpp.py`, `whisper/whisper_cpp.py`, `sd/stable_diffusion.py`) lack `__all__`. Add it so the public/private boundary is explicit and `from inferna import *` is well-defined.
-
-- [ ] **`@overload` on `LLM.__call__`.** Returns `Response | Iterator[str]` depending on `stream=`; static checkers can't narrow without overloads. Add `@overload` for `stream=True` → `Iterator[str]` and `stream=False` → `Response`.
-
-- [ ] **Lazy imports in `inferna/__init__.py` and `agents/__init__.py`.** Importing `inferna` today pulls MCP, jsonrpc, langchain integration, RAG. `from inferna import LLM` should not pay for those. Use PEP 562 module-level `__getattr__` to defer.
-
-- [ ] **Centralize defaults.** Same numeric default appears in 3-4 places (`DEFAULT_MAX_TOKENS=512` in `defaults.py` vs `n_predict=32` in `simple()` etc.). Single source in `defaults.py`; CLI/api modules import constants.
-
-- [ ] **Common exception base.** `ValueError` / `RuntimeError` / `ActionParseError` / `VectorStoreError` with no shared base. Add `InfernaError` so users can write a single `except` that catches "library errors only".
-
-- [ ] **Generator return-type annotations.** Several `Iterator[str]` that are actually `Generator[str, None, None]`. Mostly cosmetic.
-
-- [ ] **Frozen dataclasses.** `GenerationStats`, `Response` (immutable in practice), `ResponseCacheInfo` could be `frozen=True`. Surfaces accidental mutation. (`TokenLogprob`, `TopLogprob`, `StreamSegment` already frozen.)
-
-- [ ] **Context managers on remaining classes.** `EmbeddedServer`, `RAG`, `WhisperContext`, `SDContext` lack `__enter__`/`__exit__`. Native cleanup works either way; explicit is better.
-
-- [ ] **Centralize sampler / server log routing.** `Sampler.print_perf_data()` and `EmbeddedServer` access logs go to stdout. Pipe through `logging` so deployments capture them.
-
-- [ ] **Naming: `ngl` vs `n_gpu_layers`.** `simple()` uses `ngl`; everything else uses `n_gpu_layers`. Pick one form per layer (long names in code, short flags only in CLI) and document.
-
-- [ ] **Whisper wildcard import.** `whisper/whisper_cpp.py` does `from ._whisper_native import *` while `llama/llama_cpp.py` enumerates explicitly. Standardize on enumeration + `__all__`.
-
-- [ ] **Thread-safety docs.** `WhisperContext` / `SDContext` say nothing about thread safety; one-line "not thread-safe; one context per thread" docstring matches what `LLM._busy_lock` documents.
-
-### P4 — nice-to-have
-
-- [ ] **Reranker auto-enable in RAG.** `rag/pipeline.py:117-150` plumbs `rerank` / `reranker` arguments; default is `False`. Consider auto-enabling when a reranker is supplied (currently silently no-op without `rerank=True`).
-
-- [ ] **Streaming agent steps.** `ReActAgent` runs eagerly; no incremental "thought" stream. UX issue for long runs.
-
-- [ ] **ReActAgent context compaction.** Hardcoded char cap rather than token-aware summarization. Fine as a starting point; flag it as a known limitation.
-
-- [ ] **Model registry / `inferna.list_models()`.** Cache parsed GGUF metadata under `~/.cache/inferna/`. Quality-of-life.
-
-- [ ] **Observability / OpenTelemetry.** Span generation around `_generate_stream`, structured server logs, sampler perf via logger. Cheap but not structural.
-
-- [ ] **Stable-diffusion gaps.** ControlNet (high-level wrappers); async `convert_model`; inpainting mask helpers.
-
-- [ ] **Whisper language-detection confidence.** `WhisperContext.full_lang_id()` returns the id; pair with the score so callers can threshold.
-
-- [ ] **Tighten GBNF whitespace rule.** The grammar's `space ::= | " " | "\n"{1,2} [ \t]{0,20}` allows up to 22 whitespace chars per separator. Sampling can drown in pretty-print whitespace, occasionally truncating mid-structure under `max_tokens`. Tighten upstream in `inferna.utils.json_schema_to_grammar` and confirm no regression in the structured-output tests. Workaround in `tests/test_function_calling.py` was a deterministic config (`temperature=0`, `max_tokens=256`) — see the test fixture's `_LIVE_CFG`.
-
-## RAG Scaling (see docs/dev/scaling_rag.md)
-
-- [ ] Persistent quantization state in database metadata (quantize() exists but state is in-memory only)
-
-- [ ] Metadata pre-filtering in vector search (filter by source, date, etc.)
-
-- [ ] Async embedding generation (`embed_batch_async()`)
-
-- [ ] Parallel document loading in DirectoryLoader
-
-- [ ] Batch query processing in RAG pipeline
-
-- [ ] Sharding for 1M+ vector workloads
+### RAG Scaling (see docs/dev/scaling_rag.md)
