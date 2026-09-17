@@ -24,9 +24,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **`scripts/rwt.py` checks the images the sd cases write** -- exit 0 from `inferna.sd` only meant a file was written, so a NaN render (all black) passed. A case now also fails if its PNG is the wrong size or has a per-channel standard deviation below 2. The decoder is stdlib-only because neither the script nor the wheel venv has an image library.
+
+- **`rwt.py clean --keep-images` and `run --keep-images`** -- leave `z_turbo_*.png` in the project root so a run's images can be inspected. Each sd case deletes its own image before it runs, so the next run replaces them.
+
 - **`inferna server --api-key` / `--api-key-file`** require `Authorization: Bearer <key>` on both server types. `/health` and the static webui files stay public, so the webui can load; it sends the key configured in its settings. The flag names match `llama-server`. The embedded server's native bridge now passes request headers to Python; before, `handle_http_request` always received `{}`.
 
 ### Changed
+
+- **`rwt.py` sd cases use Z-Image-Turbo's sampling settings** -- `--steps 8 --cfg-scale 1.0`, per upstream stable-diffusion.cpp `docs/z_image.md`, with a fixed `--seed 42`. They had run the CLI defaults, 20 steps at cfg 7.0: five times the diffusion passes of 8 steps at cfg 1.0. On an M1 the sd family dropped from 3065 s to 875 s, measured with cyllama's identical copy of the script. The fixed seed makes a backend's images comparable across releases.
 
 - **Ruff and mypy target Python 3.12**, matching `requires-python`. Neither change adds lint findings, because `UP` rules are not selected. Fixed the mypy errors that already failed `make typecheck`. The `SDContextParams.backend` and `params_backend` annotations are for mypy only.
 
