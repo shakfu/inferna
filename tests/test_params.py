@@ -373,3 +373,14 @@ def test_default_ggml_threadpool_params():
     assert params.strict_cpu == False
     assert params.paused == False
     assert params.cpumask == [False] * cy.GGML_MAX_N_THREADS
+
+
+def test_ggml_prec_values():
+    # values from ggml.h enum ggml_prec; DEFAULT is a deprecated alias of UNDEFINED
+    assert cy.GGML_PREC_UNDEFINED == 0
+    assert cy.GGML_PREC_DEFAULT == cy.GGML_PREC_UNDEFINED
+    assert cy.GGML_PREC_F32 == 10
+    assert cy.GGML_PREC_BF16 == 15
+    assert cy.GGML_PREC_F16 == 20
+    assert cy.GGML_PREC_Q8 == 30
+    assert cy.GGML_PREC_Q4 == 40

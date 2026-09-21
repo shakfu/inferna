@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.4.0]
+
 ### Added
 
 - **`scripts/rwt.py` checks the images the sd cases write** -- exit 0 from `inferna.sd` only meant a file was written, so a NaN render (all black) passed. A case now also fails if its PNG is the wrong size or has a per-channel standard deviation below 2. The decoder is stdlib-only because neither the script nor the wheel venv has an image library.
@@ -32,6 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Changed
 
+- **llama.cpp sync to `b10964`** (`v0.4.1`, commit `b29c606`) -- bumped `LLAMACPP_VERSION` in `scripts/manage.py` (`b10809` -> `b10964`). No binding changes were needed. The facade exports the new `ggml_prec` values `GGML_PREC_UNDEFINED`, `_BF16`, `_F16`, `_Q8` and `_Q4`; upstream deprecates `GGML_PREC_DEFAULT` as an alias of `UNDEFINED`.
+
+- **stable-diffusion.cpp shares llama.cpp's ggml by default** -- `SD_USE_VENDORED_GGML` now defaults to off in `CMakeLists.txt` and `manage.py`, matching cyllama. The macOS static wheel had linked SD's vendored ggml, which only the older Metal MSL patch covered. Local `--dynamic` builds that leave the flag unset now build llama.cpp from source, because the prebuilt release uses `GGML_MAX_NAME=64`. `--sd-vendored-ggml` or `SD_USE_VENDORED_GGML=1` restores the old behaviour.
+
+- **whisper.cpp sync to `v1.9.4`** -- bumped `WHISPERCPP_VERSION` in `scripts/manage.py` (`v1.9.2` -> `v1.9.4`). No changes on the wrapped API. Its ggml now takes `ggml-metal-pin-msl-version-set-lang.patch`.
+
 - **`rwt.py` sd cases use Z-Image-Turbo's sampling settings** -- `--steps 8 --cfg-scale 1.0`, per upstream stable-diffusion.cpp `docs/z_image.md`, with a fixed `--seed 42`. They had run the CLI defaults, 20 steps at cfg 7.0: five times the diffusion passes of 8 steps at cfg 1.0. On an M1 the sd family dropped from 3065 s to 875 s, measured with cyllama's identical copy of the script. The fixed seed makes a backend's images comparable across releases.
 
 - **Ruff and mypy target Python 3.12**, matching `requires-python`. Neither change adds lint findings, because `UP` rules are not selected. Fixed the mypy errors that already failed `make typecheck`. The `SDContextParams.backend` and `params_backend` annotations are for mypy only.
@@ -39,6 +47,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - **New `python-lint.yml` PR workflow** runs `ruff check`, `ruff format --check` and `mypy` against the tool versions in `uv.lock`, without building the extension. Seven files that `ruff format` had not been applied to were reformatted so the check starts green.
 
 - **PR CI runs `tests/test_llama_cpp_surface.py`.** It needs no model and catches drift in the binding facade that the agent layer imports.
+
+### Removed
+
+- **`scripts/patches/ggml-metal-pin-msl-version.patch` and `-perkind.patch`** -- no default build matches either. `-set-lang` now covers llama.cpp, whisper.cpp and the shared ggml sd.cpp links. An `SD_USE_VENDORED_GGML=1` Metal build ships sd.cpp without the MSL pin.
 
 ### Security
 

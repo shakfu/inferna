@@ -13,11 +13,10 @@ library fails to compile entirely --
 -- and the Metal backend never initializes. Below MSL 3.1 the bf16 kernels are
 additionally #undef'd by ggml-metal.metal while props.has_bfloat stays true.
 
-Applied to all three ggml trees (ggml-*.patch). Only the trees on v0.4.0's ggml
-take it -- llama.cpp itself, and stable-diffusion.cpp after _sync_ggml_abi()
-copies llama.cpp's ggml over its own. whisper.cpp still vendors the older shape
-and takes ggml-metal-pin-msl-version.patch instead; the two are mutually
-exclusive, and the one that does not match is skipped as a no-op.
+Applied to all three ggml trees (ggml-*.patch): llama.cpp, whisper.cpp (v1.9.4
+and later), and stable-diffusion.cpp after _sync_ggml_abi() copies llama.cpp's
+ggml over its own. SD's vendored ggml has the older shape and does not match;
+the patch is skipped there as a no-op.
 
 The ladder deliberately stops below MSL 4.0. That now overrides an upstream
 default rather than making an unset one deterministic: v0.4.0 enables the tensor

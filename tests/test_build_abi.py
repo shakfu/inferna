@@ -219,3 +219,11 @@ def test_stamp_is_not_written_when_configure_fails(manage, tmp_path):
     with pytest.raises(SystemExit):
         sh.cmake_config(src_dir=src, build_dir=build_dir, BUILD_SHARED_LIBS=True)
     assert not (build_dir / manage.ShellCmd.CMAKE_ARGS_STAMP).exists()
+
+
+def test_shared_ggml_is_the_default_in_manage_and_cmake(manage, monkeypatch):
+    """manage.py syncs SD's ggml only if it agrees with CMake that sharing is on."""
+    monkeypatch.delenv("SD_USE_VENDORED_GGML", raising=False)
+    assert manage.StableDiffusionCppBuilder.uses_shared_ggml()
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    assert re.search(r"option\(SD_USE_VENDORED_GGML\b[^)]*\bOFF\)", cmake)

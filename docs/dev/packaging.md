@@ -85,13 +85,13 @@ Note: smoke tests that only check `import inferna` pass even when the GPU backen
 
 ## `SD_USE_VENDORED_GGML` — sharing ggml with stable-diffusion.cpp
 
-Under `link_mode=dynamic`, stable-diffusion.cpp should link against llama.cpp's shared ggml instead of vendoring its own. `manage.py` exposes this via the `SD_USE_VENDORED_GGML` env var (or `--sd-shared-ggml` flag). It must be set in `CIBW_ENVIRONMENT_*` for every job:
+Under `link_mode=dynamic`, stable-diffusion.cpp should link against llama.cpp's shared ggml instead of vendoring its own. `manage.py` exposes this via the `SD_USE_VENDORED_GGML` env var (or the `--sd-shared-ggml` / `--sd-vendored-ggml` flags). Sharing is the default; the GPU workflows still set it explicitly in `CIBW_ENVIRONMENT_*` for every job:
 
 ```yaml
 SD_USE_VENDORED_GGML=${{ inputs.link_mode == 'dynamic' && '0' || '1' }}
 ```
 
-Without it, `manage.py` defaults to vendored ggml and SD statically embeds its own ggml with GPU kernels baked in. Observed impact on a Windows CUDA wheel with the flag missing: `stable_diffusion.pyd` was 216 MB (vendored ggml + CUDA kernels) vs. ~23 MB on Linux where SD shares the single `libggml-cuda-*.so` with llama/whisper.
+With `1`, SD statically embeds its own ggml with GPU kernels baked in. Observed impact on a Windows CUDA wheel built this way: `stable_diffusion.pyd` was 216 MB (vendored ggml + CUDA kernels) vs. ~23 MB on Linux, where SD shares the single `libggml-cuda-*.so` with llama/whisper.
 
 This also causes `build_config.json` to omit `llama_cpp_ggml_version`: with vendored ggml, `write_build_config` records only per-project vendored versions, not a single shared llama.cpp ggml version — a useful signal for auditing whether ggml is actually being shared.
 

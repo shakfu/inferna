@@ -117,8 +117,8 @@ See [Building with Different Backends](build_backends.md) for detailed GPU setup
 ```bash
 WITH_STABLEDIFFUSION=1 make build
 
-# Opt into sharing llama.cpp's ggml (not recommended for GPU backends)
-SD_USE_VENDORED_GGML=0 make build
+# Link SD's own vendored ggml instead of sharing llama.cpp's
+SD_USE_VENDORED_GGML=1 make build
 ```
 
 **Whisper support** (included by default):

@@ -4,6 +4,8 @@
 
 ## High
 
+- [ ] **Update the web UI past `b9611`** (target: the release after `0.4.0`). The bucket now publishes only `dist.tar.gz`, with content-hashed JS/CSS, so `fetch_webui` 404s past `b9620`. Needs a tarball fetcher with a manifest, manifest-driven routes in `embedded.py`, and matching `--api-key` public paths in `python.py`. Findings, required changes and open decisions are in `docs/dev/update-webui.md`. #webui
+
 - [ ] **Ctrl-C does not interrupt `inferna.sd` generation** ([#8](https://github.com/shakfu/inferna/issues/8)) -- `generate_image()` is a single blocking C call with no abort path; the LLM cancellation work in `0.2.14` does not transfer (separate compute graph). Fix is gated on upstream PR [leejet/stable-diffusion.cpp#1124](https://github.com/leejet/stable-diffusion.cpp/pull/1124) which adds `sd_cancel_generation(sd_ctx, sd_cancel_mode_t)`. Once that merges and `--sd-version` bumps to a release containing it: extend `stable_diffusion.pxd` with the enum + extern, add `SDContext.cancel(mode)` and `SDContext.install_sigint_handler()` mirroring the LLM helpers (`src/inferna/api.py` `_SigintHandle`), wire into the inferna-desktop sidecar's `asyncio.CancelledError` path. Tests in `tests/test_sd_cancel.py` modeled on `tests/test_cancel.py`. #bugs
 
 - [ ] **Add `BusyGuard` on `SDContext.close`** (or document "do not close while generating"). Currently `_sd_native.cpp:789-791` calls `free_sd_ctx` with no `busy_lock` — concurrent `generate_image` (GIL released) races against the free. `WhisperContextW::close` has the same shape; check both. #hardening-small-bugs-ergonomic-gaps

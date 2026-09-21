@@ -23,19 +23,14 @@ payload; each carries its own rationale in a header above the diff.
 
 | Patch | Trees | What it fixes |
 |-|-|-|
-| `ggml-metal-pin-msl-version.patch` | whisper.cpp, sd.cpp (vendored ggml) | Metal shader compilation depending on the host process's SDK rather than the running OS |
-| `ggml-metal-pin-msl-version-perkind.patch` | llama.cpp (v0.3.0 per-kind library layout) | Same fix, rebased onto the restructured `ggml_metal_library_compile_all` |
-| `ggml-metal-pin-msl-version-set-lang.patch` | llama.cpp (v0.4.0 and later) | Same fix again, moved into `ggml_metal_compile_options_set_lang()` |
+| `ggml-metal-pin-msl-version-set-lang.patch` | llama.cpp (v0.4.0+), whisper.cpp (v1.9.4+), sd.cpp (shared ggml) | Metal shader compilation depending on the host process's SDK rather than the running OS |
 | `stable-diffusion.cpp-conditioner-compute-failure.patch` | sd.cpp | A failed text-encoder graph aborting the interpreter on `GGML_ASSERT` instead of raising |
 | `stable-diffusion.cpp-graph-cut-budget-clamp.patch` | sd.cpp | `--max-vram` budgets ignoring VRAM already in use |
 | `stable-diffusion.cpp-msvc-bigobj.patch` | sd.cpp | `C1128: number of sections exceeded object file format limit` on MSVC |
 
-The three MSL-version patches are alternatives, not a set: llama.cpp's ggml
-restructured its Metal library loading in v0.3.0 and again in v0.4.0, so each
-tree matches at most one and skips the rest. At the current pins that is
-`-set-lang` for llama.cpp and the original for whisper.cpp and sd.cpp;
-`-perkind` matches nothing and is kept only for a `LLAMACPP_VERSION=b10621`
-override.
+sd.cpp's vendored ggml predates `ggml_metal_compile_options_set_lang()`, so
+`-set-lang` does not match it. An `SD_USE_VENDORED_GGML=1` Metal build therefore
+ships sd.cpp without the MSL pin.
 
 A patch that stops matching is skipped silently, by design -- which is how the
 v0.4.0 bump removed the MSL pin from the llama.cpp tree without failing a build

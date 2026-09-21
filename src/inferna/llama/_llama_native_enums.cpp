@@ -88,8 +88,13 @@ void register_enums(nb::module_& m) {
     EXPORT(GGML_TYPE_COUNT);
 
     // -------- ggml precision --------
-    EXPORT(GGML_PREC_DEFAULT);
+    EXPORT(GGML_PREC_UNDEFINED);
+    EXPORT(GGML_PREC_DEFAULT);  // deprecated upstream alias of UNDEFINED
     EXPORT(GGML_PREC_F32);
+    EXPORT(GGML_PREC_BF16);
+    EXPORT(GGML_PREC_F16);
+    EXPORT(GGML_PREC_Q8);
+    EXPORT(GGML_PREC_Q4);
 
     // -------- ggml op (only NONE used by callers) --------
     EXPORT(GGML_OP_NONE);

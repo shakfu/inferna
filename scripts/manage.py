@@ -172,10 +172,10 @@ PY_VER_MINOR = sys.version_info.minor
 # identical values — the flag was a no-op.)
 # Pin the bNNNNN nightly tag, not the semver tag it duplicates: upstream
 # publishes the prebuilt binary assets only under bNNNNN, so `download_release()`
-# (every dynamic GPU wheel) 404s on a vN.N.N pin. b10809 and v0.4.0 are the same
-# commit, 5266f24.
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b10809")  # from: b10621
-WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.2")  # from: v1.9.1
+# (every dynamic GPU wheel) 404s on a vN.N.N pin. b10964 and v0.4.1 are the same
+# commit, b29c606.
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b10964")  # equivalent to v0.4.1
+WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.4")  # from: v1.9.2
 
 # As of upstream b9352 llama.cpp no longer ships a prebuilt server SPA under
 # tools/server/public/. The web UI is now a SvelteKit app in tools/ui/ that is
@@ -2292,8 +2292,12 @@ class StableDiffusionCppBuilder(GgmlBuilder):
 
     @staticmethod
     def uses_shared_ggml() -> bool:
-        """Return True when SD is configured to share llama.cpp's ggml."""
-        return os.environ.get("SD_USE_VENDORED_GGML") == "0"
+        """Return True when SD is configured to share llama.cpp's ggml.
+
+        Sharing is the default, matching CMakeLists.txt: ``SD_USE_VENDORED_GGML``
+        defaults to OFF, and any value other than ``0`` opts into SD's vendored copy.
+        """
+        return os.environ.get("SD_USE_VENDORED_GGML", "0") == "0"
 
     def get_backend_cmake_options(self) -> dict[str, Any]:
         """CMake options for stable-diffusion.cpp (SD_* flag names, no BLAS)."""
@@ -2433,9 +2437,9 @@ class StableDiffusionCppBuilder(GgmlBuilder):
         # Sync ggml ABI from llama.cpp before compiling so that enum
         # values (ggml_op, ggml_type) match the dylibs we link against.
         # Only needed when SD links against llama.cpp's shared ggml
-        # (--sd-shared-ggml). By default SD uses its own vendored ggml
-        # statically, so syncing would overwrite the vendored source --
-        # and if an earlier dynamic build already did, undo it.
+        # (the default). With --sd-vendored-ggml SD uses its own vendored
+        # ggml statically, so syncing would overwrite the vendored source --
+        # and if an earlier shared build already did, undo it.
         if self.uses_shared_ggml():
             self._verify_ggml_max_name()
             self._sync_ggml_abi()
@@ -2963,7 +2967,12 @@ class Application(ShellCmd, metaclass=MetaCommander):
     )
     @option(
         "--sd-shared-ggml",
-        help="link stable-diffusion against llama.cpp's shared ggml instead of its own vendored copy",
+        help="link stable-diffusion against llama.cpp's ggml (default; kept for explicitness)",
+        action="store_true",
+    )
+    @option(
+        "--sd-vendored-ggml",
+        help="link stable-diffusion against its own vendored ggml instead of llama.cpp's",
         action="store_true",
     )
     @option(
@@ -3016,7 +3025,9 @@ class Application(ShellCmd, metaclass=MetaCommander):
         if args.cpu_all_variants:
             os.environ["GGML_CPU_ALL_VARIANTS"] = "1"
 
-        if args.sd_shared_ggml:
+        if args.sd_vendored_ggml:
+            os.environ["SD_USE_VENDORED_GGML"] = "1"
+        elif args.sd_shared_ggml:
             os.environ["SD_USE_VENDORED_GGML"] = "0"
 
         # Map builder classes to their version arguments
@@ -3127,7 +3138,7 @@ class Application(ShellCmd, metaclass=MetaCommander):
         # shares the same version as llama.cpp's.
         if not llama_ggml_version:
             llama_ggml_version = ggml_versions.get(WhisperCppBuilder)
-        sd_uses_vendored_ggml = os.environ.get("SD_USE_VENDORED_GGML") == "1"
+        sd_uses_vendored_ggml = not StableDiffusionCppBuilder.uses_shared_ggml()
 
         for BuilderClass, version in builder_versions.items():
             name = BuilderClass.name.replace(".", "_").replace("-", "_")
