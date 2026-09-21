@@ -1209,7 +1209,8 @@ class Builder(AbstractBuilder):
                 stderr=subprocess.DEVNULL,
             ).strip()
             expected = subprocess.check_output(
-                ["git", "rev-parse", self.version],
+                # `^{commit}` peels annotated tags; bare rev-parse returns the tag object sha.
+                ["git", "rev-parse", f"{self.version}^{{commit}}"],
                 cwd=str(self.src_dir),
                 encoding="utf8",
                 stderr=subprocess.DEVNULL,
