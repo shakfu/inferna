@@ -6,15 +6,16 @@ before every build by `GgmlBuilder._apply_source_patches()` in
 
 Two globs are applied, in this order:
 
-- `ggml-*.patch` — fixes to the ggml copy that all three upstreams vendor.
-  Tried against every tree.
+- `ggml-*.patch` — fixes to upstream ggml, applied to llama.cpp's and
+  whisper.cpp's trees. Not applied to stable-diffusion.cpp: shared mode compiles
+  llama.cpp's patched tree, and vendored mode compiles leejet's fork, whose
+  layout they do not match.
 - `<project>-*.patch` — fixes specific to one upstream, matched on the builder
   name (`llama.cpp-*`, `whisper.cpp-*`, `stable-diffusion.cpp-*`).
 
-Each patch is applied with `git apply -p1` and is idempotent and self-disabling:
-already applied, or no longer applying (upstream merged an equivalent fix, or
-refactored the context), are both logged and skipped rather than failing the
-build. `make reset` / `make remake` wipe the trees, so these run on every build.
+Each patch is applied with `git apply -p1`. An already-applied patch is
+skipped. A patch that no longer applies fails the build with git's reason:
+rebase it, or delete it if upstream merged an equivalent fix. `make reset` / `make remake` wipe the trees, so these run on every build.
 
 The `.patch` files are the single source of truth and double as the upstream PR
 payload; each carries its own rationale in a header above the diff.
@@ -45,13 +46,9 @@ fixed upstream:
   [#1973](https://github.com/leejet/stable-diffusion.cpp/pull/1973),
   [#2020](https://github.com/leejet/stable-diffusion.cpp/pull/2020)).
 
-A patch that stops matching is skipped silently, by design -- which is how the
+A patch that stopped matching used to be skipped silently, which is how the
 v0.4.0 bump removed the MSL pin from the llama.cpp tree without failing a build
-or a test. When bumping a pin, check each patch still lands:
-
-    for p in scripts/patches/ggml-*.patch; do
-        git -C build/llama.cpp apply --reverse --check "$p" && echo "applied: $p"
-    done
+or a test. It now fails the build.
 
 ## Handled in the wrapper instead
 
