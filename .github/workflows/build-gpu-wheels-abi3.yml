@@ -152,7 +152,7 @@ jobs:
   collect:
     needs: [cuda, rocm, sycl, vulkan_linux, vulkan_windows, cuda_windows]
     if: always() && !cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Download all wheel artifacts
         uses: actions/download-artifact@v8
@@ -180,7 +180,7 @@ jobs:
     # and re-running the ones that failed is the normal path.
     needs: [collect]
     if: always() && !cancelled() && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write

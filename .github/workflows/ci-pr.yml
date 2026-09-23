@@ -27,7 +27,7 @@ concurrency:
 jobs:
   build_and_test:
     name: PR smoke (linux-cp312-cpu)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6

@@ -51,19 +51,19 @@ jobs:
       matrix:
         include:
           - backend: cuda
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
             slug: cuda-linux-x86_64
             condition: cuda_linux
           - backend: rocm
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
             slug: rocm-linux-x86_64
             condition: rocm_linux
           - backend: sycl
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
             slug: sycl-linux-x86_64
             condition: sycl_linux
           - backend: vulkan
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
             slug: vulkan-linux-x86_64
             condition: vulkan_linux
           - backend: cuda-windows

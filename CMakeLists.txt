@@ -582,7 +582,8 @@ endif()
 
 # In WITH_DYLIB mode each backend's runtime is already linked into the
 # pre-built ggml-* dylib that ships in the wheel; the extension itself
-# does not reference Vulkan / CUDA / HIP / SYCL / OpenCL symbols. Skip
+# does not reference Vulkan / CUDA / HIP / SYCL / OpenCL symbols
+# (exception: _sd_native links CUDA::cuda_driver itself). Skip
 # `find_package(REQUIRED)` so dev machines don't need the full SDK
 # installed just to build the wrapper.
 if(GGML_CUDA AND NOT WITH_DYLIB)
@@ -910,16 +911,25 @@ if(WITH_STABLEDIFFUSION)
         # Dynamic: link libstable-diffusion.a statically, reuse llama.cpp's ggml dylibs.
         # See _llama_native: --no-as-needed retains backend libs in NEEDED.
         target_link_directories(_sd_native PRIVATE "${SDCPP_LIB}" ${COMMON_LINK_DIRS})
+        # sd.cpp calls the CUDA driver API (cuInit etc.) and declares
+        # CUDA::cuda_driver PUBLIC; linking the bare .a/.lib drops that edge.
+        set(_SD_DYLIB_EXTRA "")
+        if(GGML_CUDA)
+            find_package(CUDAToolkit REQUIRED)
+            list(APPEND _SD_DYLIB_EXTRA CUDA::cuda_driver)
+        endif()
         if(UNIX AND NOT APPLE)
             target_link_libraries(_sd_native PRIVATE
                 "${LIB_SD}"
                 -Wl,--no-as-needed ${DYLIBS} -Wl,--as-needed
+                ${_SD_DYLIB_EXTRA}
                 ${SYSTEM_LIBS}
             )
         else()
             target_link_libraries(_sd_native PRIVATE
                 "${LIB_SD}"
                 ${DYLIBS}
+                ${_SD_DYLIB_EXTRA}
                 ${SYSTEM_LIBS}
             )
         endif()

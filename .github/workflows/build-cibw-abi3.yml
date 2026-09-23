@@ -44,7 +44,7 @@ jobs:
       matrix:
         include:
           - os: linux-intel
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
           - os: windows-intel
             runs-on: windows-latest
           - os: macos-arm
@@ -138,7 +138,7 @@ jobs:
         python: ["3.12", "3.13", "3.14"]
         include:
           - os: linux-intel
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
           - os: macos-arm
             runs-on: macos-latest
           - os: windows-intel
@@ -311,7 +311,7 @@ jobs:
   collect_wheels:
     name: Collect all abi3 wheels
     needs: build_wheels
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Download all abi3 wheel artifacts
         uses: actions/download-artifact@v8
@@ -335,7 +335,7 @@ jobs:
     name: Publish to GitHub Release
     needs: [collect_wheels, cross_version_smoke_test]
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
