@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.5.0]
+
 ### Added
 
 - `SDContextParams.auto_fit`, `.disable_segmented_compute`, `.disable_prefetch`, `.linear_scale`, `.attn_scale` and `.tokenizer`, plus the matching `--auto-fit`, `--disable-segmented-compute`, `--disable-prefetch` and `--tokenizer` CLI flags. `tokenizer` is required for PiD and Lens models. `Scheduler.LLADA_IMAGE`, `Prediction.SENSENOVA_U1_FLOW`, `SDType.Q2_0`/`F8_E4M3`/`F8_E5M2` and `LogLevel.VERBOSE` follow the header.
