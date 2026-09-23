@@ -2,7 +2,7 @@
 
 Inferna wraps [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) to provide image and video generation capabilities in Python.
 
-**Note**: Build with `WITH_STABLEDIFFUSION=1` to enable this module. By default, stable-diffusion.cpp shares llama.cpp's ggml, so every extension runs the same ggml version. To link SD's own vendored ggml instead, set `SD_USE_VENDORED_GGML=1`.
+**Note**: Build with `WITH_STABLEDIFFUSION=1` to enable this module. By default, stable-diffusion.cpp shares llama.cpp's ggml, so every extension runs the same ggml version. To link SD's own vendored ggml instead, set `SD_USE_VENDORED_GGML=1`; see [Stable Diffusion ggml selection](build_backends.md#stable-diffusion-ggml-selection).
 
 ## Overview
 
@@ -208,6 +208,7 @@ params.high_noise_diffusion_model_path = "..."  # High-noise model (Wan2.2 MoE)
 params.lora_model_dir = "loras/"              # LoRA directory
 params.embedding_dir = "embeddings/"          # Embeddings directory
 params.tensor_type_rules = "^vae\\.=f16"      # Mixed precision rules
+params.tokenizer = "tokenizer.json"           # Required for PiD and Lens models
 
 # Numeric/enum parameters
 params.n_threads = 4                          # Thread count
@@ -220,7 +221,9 @@ params.chroma_t5_mask_pad = 0                 # Chroma T5 mask pad
 
 # Boolean flags
 params.enable_mmap = True                     # Enable memory-mapped loading
-params.stream_layers = False                  # Residency+prefetch streaming (needs max_vram)
+params.auto_fit = True                        # Place modules by free memory (upstream default)
+params.disable_prefetch = False               # Async prefetch of the next segment's weights
+params.disable_segmented_compute = False      # True forces monolithic graphs
 params.diffusion_flash_attn = False           # Flash attention
 params.diffusion_conv_direct = False          # Direct convolution
 params.vae_conv_direct = False                # VAE direct convolution
@@ -240,7 +243,9 @@ params.apply_cpu_offload(
     vae_on_cpu=False,           # backend "vae=cpu"
     control_net_on_cpu=False,   # backend "controlnet=cpu"
 )
-params.max_vram = ""           # GiB budget / backend-assignment spec (string, "" = disabled)
+# A non-empty params_backend (offload_params=True sets one) disables auto_fit.
+params.max_vram = None         # Per-device GiB budget: "N" caps, "-N" leaves N free,
+                               # "0" or None uses live free VRAM; "cuda0=6,vulkan0=4"
 ```
 
 ### SDImage

@@ -78,6 +78,9 @@ class TestEnums:
         assert SDType.MXFP4.value == 39
         assert SDType.NVFP4.value == 40
         assert SDType.Q1_0.value == 41
+        assert SDType.Q2_0.value == 42
+        assert SDType.F8_E4M3.value == 43
+        assert SDType.F8_E5M2.value == 44
 
     def test_vae_format(self):
         assert VaeFormat.AUTO.value == -1
@@ -789,10 +792,40 @@ class TestSDContextParamsExtended:
         params.max_vram = "8"
         assert params.max_vram == "8"
 
-    def test_stream_layers(self):
+    def test_disable_prefetch(self):
         params = SDContextParams()
-        params.stream_layers = True
-        assert params.stream_layers is True
+        assert params.disable_prefetch is False
+        params.disable_prefetch = True
+        assert params.disable_prefetch is True
+
+    def test_disable_segmented_compute(self):
+        params = SDContextParams()
+        assert params.disable_segmented_compute is False
+        params.disable_segmented_compute = True
+        assert params.disable_segmented_compute is True
+
+    def test_auto_fit_defaults_on(self):
+        params = SDContextParams()
+        assert params.auto_fit is True  # upstream default since master-845 (#1942)
+        params.auto_fit = False
+        assert params.auto_fit is False
+
+    def test_scale_overrides_default_to_model(self):
+        params = SDContextParams()
+        assert params.linear_scale == 0.0
+        assert params.attn_scale == 0.0
+        params.linear_scale = 0.5
+        params.attn_scale = 2.0
+        assert params.linear_scale == 0.5
+        assert params.attn_scale == 2.0
+
+    def test_tokenizer(self):
+        params = SDContextParams()
+        assert params.tokenizer is None
+        params.tokenizer = "main=tok.json,clip-l=clip.json"
+        assert params.tokenizer == "main=tok.json,clip-l=clip.json"
+        params.tokenizer = None
+        assert params.tokenizer is None
 
     def test_diffusion_flash_attn(self):
         params = SDContextParams()
@@ -1335,13 +1368,15 @@ class TestEnumsExtended:
         assert hasattr(Prediction, "FLUX_FLOW")
         assert hasattr(Prediction, "SEFI_FLOW")
         assert hasattr(Prediction, "MINIT2I_FLOW")
+        assert hasattr(Prediction, "SENSENOVA_U1_FLOW")
 
     def test_log_level_enum(self):
         """Test LogLevel enum values."""
         assert LogLevel.DEBUG.value == 0
-        assert LogLevel.INFO.value == 1
-        assert LogLevel.WARN.value == 2
-        assert LogLevel.ERROR.value == 3
+        assert LogLevel.VERBOSE.value == 1
+        assert LogLevel.INFO.value == 2
+        assert LogLevel.WARN.value == 3
+        assert LogLevel.ERROR.value == 4
 
     def test_preview_mode_enum(self):
         """Test PreviewMode enum values."""

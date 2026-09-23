@@ -1,17 +1,11 @@
-"""Tests for the ggml sync/restore logic in `scripts/manage.py`.
+"""Tests for how `scripts/manage.py` selects stable-diffusion.cpp's ggml.
 
-`StableDiffusionCppBuilder` swaps stable-diffusion.cpp's vendored ggml for
-llama.cpp's copy when SD is configured to share llama.cpp's ggml dylibs
-(`SD_USE_VENDORED_GGML=0`, which is every `--dynamic` GPU wheel build). The
-swap has to be reversible: `verify_checkout()` only compares HEAD shas, so a
-dynamic build followed by a static one on the same checkout would otherwise
-compile SD against the wrong ggml. Since sd.cpp vendors leejet's ggml *fork*,
-which carries ops upstream ggml lacks, that mismatch is a hard compile error
-rather than a subtle one.
+`SD_USE_VENDORED_GGML` is the only switch. `StableDiffusionCppBuilder` derives
+upstream's `SD_USE_UPSTREAM_GGML` and `SD_GGML_SOURCE_DIR` from it and passes
+both in every mode, because both are CMake cache variables: omitting them lets
+a value cached by an earlier configure override the switch.
 
-These tests drive the swap against a synthetic checkout so the state machine
-(sync, re-sync, restore, stale backup, missing backup) is covered without
-cloning or building anything.
+These tests run against a synthetic checkout, without cloning or building.
 """
 
 import importlib.util
@@ -40,132 +34,96 @@ def _load_manage():
 manage = _load_manage()
 
 
-FORK_FILE = "vendored-fork.txt"
-LLAMA_FILE = "from-llama.txt"
-
-
 @pytest.fixture
-def builder(tmp_path):
-    """A SD builder pointed at a synthetic build tree with two ggml copies."""
+def builder(tmp_path, monkeypatch):
+    """A SD builder on a post-#1999 checkout, with a built cmake dir and a llama ggml."""
     src = tmp_path / "build"
-    sd_ggml = src / "stable-diffusion.cpp" / "ggml" / "include"
-    llama_ggml = src / "llama.cpp" / "ggml" / "include"
-    sd_ggml.mkdir(parents=True)
-    llama_ggml.mkdir(parents=True)
-    (sd_ggml.parent / FORK_FILE).write_text("leejet ggml fork\n")
-    (sd_ggml / "ggml.h").write_text("ggml_quantize_i8_convrot\n")
-    (llama_ggml.parent / LLAMA_FILE).write_text("llama.cpp ggml\n")
-    (llama_ggml / "ggml.h").write_text("upstream ggml\n")
+    sd_dir = src / "stable-diffusion.cpp"
+    (src / "llama.cpp" / "ggml" / "src").mkdir(parents=True)
+    (sd_dir / "cmake").mkdir(parents=True)
+    (sd_dir / "cmake" / "ggml.cmake").write_text("# SD_GGML_SOURCE_DIR\n")
+    (sd_dir / "build").mkdir()
+    (sd_dir / "build" / "ggml-metal-device.m.o").write_text("stale object")
 
     b = manage.StableDiffusionCppBuilder()
     b.project.src = src
-    assert b.src_dir == src / "stable-diffusion.cpp"
+    assert b.src_dir == sd_dir
+    monkeypatch.delenv("SD_USE_VENDORED_GGML", raising=False)
     return b
 
 
-def state(b):
-    """(vendored fork in place, llama copy in place, marker, backup)."""
-    ggml = b._ggml_dir
-    return (
-        (ggml / FORK_FILE).exists(),
-        (ggml / LLAMA_FILE).exists(),
-        b._ggml_provenance_marker.exists(),
-        b._vendored_ggml_backup.exists(),
-    )
+def test_shared_ggml_points_sd_at_llama_ggml(builder):
+    """SD must compile llama.cpp's ggml, with fork-only calls compiled out."""
+    assert builder._ggml_options() == {
+        "SD_USE_UPSTREAM_GGML": True,
+        "SD_GGML_SOURCE_DIR": str(builder.project.src / "llama.cpp" / "ggml"),
+    }
 
 
-VENDORED = (True, False, False, False)
-SYNCED = (False, True, True, True)
+def test_vendored_ggml_overrides_cached_options(builder, monkeypatch):
+    """Both options are CMake cache variables; omitting them keeps a shared configure's values."""
+    monkeypatch.setenv("SD_USE_VENDORED_GGML", "1")
+
+    assert builder._ggml_options() == {
+        "SD_USE_UPSTREAM_GGML": False,
+        "SD_GGML_SOURCE_DIR": str(builder.src_dir / "ggml"),
+    }
 
 
-def test_starts_vendored(builder):
-    assert state(builder) == VENDORED
+def test_missing_llama_ggml_is_rejected(builder):
+    """The extension links llama.cpp's ggml, so SD must not fall back to its fork."""
+    (builder.project.src / "llama.cpp").rename(builder.project.src / "llama.cpp.gone")
+
+    with pytest.raises(RuntimeError, match="--sd-vendored-ggml"):
+        builder._ggml_options()
 
 
-def test_restore_is_noop_on_pristine_checkout(builder):
-    builder._restore_vendored_ggml()
-    assert state(builder) == VENDORED
+def test_pre_1999_pin_is_rejected(builder):
+    """A pin older than master-883 ignores SD_GGML_SOURCE_DIR and builds the fork ggml."""
+    (builder.src_dir / "cmake" / "ggml.cmake").unlink()
+
+    with pytest.raises(RuntimeError, match="master-883"):
+        builder._ggml_options()
 
 
-def test_sync_installs_llama_ggml_and_parks_the_fork(builder):
-    builder._sync_ggml_abi()
-    assert state(builder) == SYNCED
-    # The fork is parked, not deleted.
-    assert (builder._vendored_ggml_backup / FORK_FILE).exists()
+def test_build_dir_survives_unchanged_ggml_options(builder):
+    """Same ggml as the last configure: keep the objects for an incremental build."""
+    builder._drop_build_dir_on_ggml_change(builder._ggml_options())
+    (builder.build_dir / "sd.o").write_text("object")
+
+    builder._drop_build_dir_on_ggml_change(builder._ggml_options())
+
+    assert (builder.build_dir / "sd.o").exists()
 
 
-def test_resync_keeps_the_fork_backup(builder):
-    """A second dynamic build must not overwrite the backup with llama's ggml."""
-    builder._sync_ggml_abi()
-    builder._sync_ggml_abi()
-    assert state(builder) == SYNCED
-    assert (builder._vendored_ggml_backup / FORK_FILE).exists()
-    assert not (builder._vendored_ggml_backup / LLAMA_FILE).exists()
+def test_build_dir_is_dropped_when_ggml_options_change(builder, monkeypatch):
+    """Objects from the previous ggml tree must not be relinked against the new one."""
+    builder._drop_build_dir_on_ggml_change(builder._ggml_options())
+    (builder.build_dir / "ggml-metal-device.m.o").write_text("shared-mode object")
+    monkeypatch.setenv("SD_USE_VENDORED_GGML", "1")
+
+    builder._drop_build_dir_on_ggml_change(builder._ggml_options())
+
+    assert not (builder.build_dir / "ggml-metal-device.m.o").exists()
 
 
-def test_restore_after_sync_round_trips(builder):
-    builder._sync_ggml_abi()
-    builder._restore_vendored_ggml()
-    assert state(builder) == VENDORED
-    assert (builder._ggml_dir / "include" / "ggml.h").read_text() == "ggml_quantize_i8_convrot\n"
+def test_unstamped_build_dir_is_dropped(builder):
+    """A build dir from before the stamp existed has unknown ggml provenance."""
+    builder._drop_build_dir_on_ggml_change(builder._ggml_options())
+
+    assert not (builder.build_dir / "ggml-metal-device.m.o").exists()
 
 
-def test_repeated_cycles_are_stable(builder):
-    for _ in range(3):
-        builder._sync_ggml_abi()
-        assert state(builder) == SYNCED
-        builder._restore_vendored_ggml()
-        assert state(builder) == VENDORED
+# First sd.cpp master counter with SD_USE_UPSTREAM_GGML and SD_GGML_SOURCE_DIR
+# (leejet/stable-diffusion.cpp#1999). See the FLOOR comment in manage.py.
+SDCPP_FIRST_SHARED_GGML_MASTER = 883
 
 
-def test_sync_replaces_a_stale_backup(builder):
-    """A backup with no marker alongside it is stale and must not be trusted."""
-    stale = builder._vendored_ggml_backup
-    stale.mkdir()
-    (stale / "stale.txt").write_text("from an older checkout\n")
-
-    builder._sync_ggml_abi()
-    assert state(builder) == SYNCED
-    assert (stale / FORK_FILE).exists()
-    assert not (stale / "stale.txt").exists()
-
-
-def test_restore_fails_loudly_when_backup_is_missing(builder):
-    """Better to stop than to silently build SD against llama.cpp's ggml."""
-    import shutil
-
-    builder._sync_ggml_abi()
-    shutil.rmtree(builder._vendored_ggml_backup)
-
-    with pytest.raises(SystemExit) as exc:
-        builder._restore_vendored_ggml()
-    assert exc.value.code == 1
-
-
-def test_sync_is_skipped_when_llama_ggml_is_absent(builder):
-    """Missing llama.cpp sources warn rather than destroying the vendored tree."""
-    import shutil
-
-    shutil.rmtree(builder.project.src / "llama.cpp")
-    builder._sync_ggml_abi()
-    assert state(builder) == VENDORED
-
-
-# First sd.cpp master counter that calls fork-only ggml ops (INT8 ConvRot,
-# leejet/stable-diffusion.cpp#1857). See the CEILING comment in manage.py.
-SDCPP_FIRST_BROKEN_MASTER = 817
-
-
-def test_sd_pin_is_compatible_with_shared_ggml():
-    """Guard the pin ceiling documented next to SDCPP_VERSION.
-
-    sd.cpp master-817-bcc7e29 (INT8 ConvRot) calls ggml ops that exist only in
-    leejet's ggml fork, so it cannot be built with llama.cpp's ggml swapped in.
-    Bumping past the ceiling breaks every dynamic GPU wheel build.
-    """
+def test_sd_pin_supports_shared_ggml():
+    """Shared-ggml builds need a pin that can compile against upstream ggml."""
     match = re.fullmatch(r"master-(\d+)-[0-9a-f]+", manage.SDCPP_VERSION)
     assert match, (
         f"SDCPP_VERSION {manage.SDCPP_VERSION!r} is not a master-<n>-<sha> pin; "
-        "re-check it against the shared-ggml ceiling by hand."
+        "re-check it against the shared-ggml floor by hand."
     )
-    assert int(match.group(1)) < SDCPP_FIRST_BROKEN_MASTER
+    assert int(match.group(1)) >= SDCPP_FIRST_SHARED_GGML_MASTER

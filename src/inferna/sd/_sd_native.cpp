@@ -54,10 +54,9 @@ using namespace nb::literals;
 //
 // sd.cpp master-800 replaced the `auto_resize_ref_image` / `increase_ref_index`
 // booleans in sd_img_gen_params_t with a single key=value string,
-// `ref_image_args`. The default pin (master-816) is on the new side, but
-// SDCPP_VERSION is overridable and capped at master-816 for the shared-ggml
-// dynamic builds, so both forms stay reachable (see SDCPP_VERSION in
-// scripts/manage.py).
+// `ref_image_args`. The default pin (master-898) is on the new side, but
+// SDCPP_VERSION is overridable for vendored-ggml builds, so both forms stay
+// reachable (see SDCPP_VERSION in scripts/manage.py).
 //
 // Rather than pin the binding to one side, detect which form the header
 // provides and set whichever exists. The Python API is identical either way.
@@ -143,6 +142,7 @@ struct SDContextParamsW {
     std::optional<std::string> backend_s;
     std::optional<std::string> params_backend_s;
     std::optional<std::string> rpc_servers_s;
+    std::optional<std::string> tokenizer_s;
 
     // Owning storage for the embeddings array. Strings must outlive new_sd_ctx().
     std::vector<std::pair<std::string, std::string>> embeddings_owned;  // (name, path)
@@ -483,6 +483,7 @@ static nb::dict make_enum_dict() {
     add("BONG_TANGENT_SCHEDULER", BONG_TANGENT_SCHEDULER);
     add("LTX2_SCHEDULER", LTX2_SCHEDULER);
     add("LOGIT_NORMAL_SCHEDULER", LOGIT_NORMAL_SCHEDULER);
+    add("LLADA_IMAGE_SCHEDULER", LLADA_IMAGE_SCHEDULER);
     add("SCHEDULER_COUNT", SCHEDULER_COUNT);
 
     add("EPS_PRED", EPS_PRED);
@@ -492,6 +493,7 @@ static nb::dict make_enum_dict() {
     add("FLUX_FLOW_PRED", FLUX_FLOW_PRED);
     add("SEFI_FLOW_PRED", SEFI_FLOW_PRED);
     add("MINIT2I_FLOW_PRED", MINIT2I_FLOW_PRED);
+    add("SENSENOVA_U1_FLOW_PRED", SENSENOVA_U1_FLOW_PRED);
     add("PREDICTION_COUNT", PREDICTION_COUNT);
 
     add("SD_TYPE_F32", SD_TYPE_F32);
@@ -528,6 +530,9 @@ static nb::dict make_enum_dict() {
     add("SD_TYPE_MXFP4", SD_TYPE_MXFP4);
     add("SD_TYPE_NVFP4", SD_TYPE_NVFP4);
     add("SD_TYPE_Q1_0", SD_TYPE_Q1_0);
+    add("SD_TYPE_Q2_0", SD_TYPE_Q2_0);
+    add("SD_TYPE_F8_E4M3", SD_TYPE_F8_E4M3);
+    add("SD_TYPE_F8_E5M2", SD_TYPE_F8_E5M2);
     add("SD_TYPE_COUNT", SD_TYPE_COUNT);
     add("SD_VAE_FORMAT_AUTO", SD_VAE_FORMAT_AUTO);
     add("SD_VAE_FORMAT_FLUX", SD_VAE_FORMAT_FLUX);
@@ -539,6 +544,7 @@ static nb::dict make_enum_dict() {
     add("SD_CANCEL_RESET", SD_CANCEL_RESET);
 
     add("SD_LOG_DEBUG", SD_LOG_DEBUG);
+    add("SD_LOG_VERBOSE", SD_LOG_VERBOSE);
     add("SD_LOG_INFO", SD_LOG_INFO);
     add("SD_LOG_WARN", SD_LOG_WARN);
     add("SD_LOG_ERROR", SD_LOG_ERROR);
@@ -721,11 +727,16 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDContextParamsW, bool, p.force_sdxl_vae_conv_scale, "force_sdxl_vae_conv_scale")
         SD_PARAM_VAL(SDContextParamsW, int,  p.vae_format, "vae_format")
         SD_PARAM_PATH(SDContextParamsW, p.max_vram,        max_vram_s,        "max_vram")
-        SD_PARAM_VAL(SDContextParamsW, bool, p.stream_layers, "stream_layers")
+        SD_PARAM_VAL(SDContextParamsW, bool, p.disable_prefetch, "disable_prefetch")
+        SD_PARAM_VAL(SDContextParamsW, bool, p.disable_segmented_compute, "disable_segmented_compute")
         SD_PARAM_VAL(SDContextParamsW, bool, p.eager_load, "eager_load")
+        SD_PARAM_VAL(SDContextParamsW, bool, p.auto_fit, "auto_fit")
+        SD_PARAM_VAL(SDContextParamsW, float, p.linear_scale, "linear_scale")
+        SD_PARAM_VAL(SDContextParamsW, float, p.attn_scale, "attn_scale")
         SD_PARAM_PATH(SDContextParamsW, p.backend,         backend_s,         "backend")
         SD_PARAM_PATH(SDContextParamsW, p.params_backend,  params_backend_s,  "params_backend")
         SD_PARAM_PATH(SDContextParamsW, p.rpc_servers,     rpc_servers_s,     "rpc_servers")
+        SD_PARAM_PATH(SDContextParamsW, p.tokenizer,       tokenizer_s,       "tokenizer")
         .def_prop_rw("embeddings",
             [](SDContextParamsW& s) {
                 nb::list out;
@@ -1137,7 +1148,7 @@ NB_MODULE(_sd_native, m) {
                 inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
                 nb::gil_scoped_release rel;
                 ok = generate_video(s.ctx, &vid_params, &result,
-                                    &num_frames_out, &audio_out);
+                                    &num_frames_out, &audio_out, nullptr);
             }
 
             // Video generation produces frames only; discard any audio track.

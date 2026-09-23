@@ -104,20 +104,19 @@ def save_video_frames(frames: List["SDImage"], output_path: str, fps: int = 24) 
 
 def setup_logging(args: argparse.Namespace) -> None:
     """Setup logging and progress callbacks."""
-    from .stable_diffusion import set_log_callback, set_progress_callback
+    from .stable_diffusion import LogLevel, set_log_callback, set_progress_callback
 
     if args.verbose:
 
-        def log_cb(level: int, text: str) -> None:
-            level_names = {0: "DEBUG", 1: "INFO", 2: "WARN", 3: "ERROR"}
-            print(f"[{level_names.get(level, level)}] {text}", end="")
+        def log_cb(level: LogLevel, text: str) -> None:
+            print(f"[{level.name}] {text}", end="")
 
         set_log_callback(log_cb)
     else:
 
-        def log_cb(level: int, text: str) -> None:
-            if level >= 2:
-                print(f"[{'WARN' if level == 2 else 'ERROR'}] {text}", end="")
+        def log_cb(level: LogLevel, text: str) -> None:
+            if level >= LogLevel.WARN:
+                print(f"[{level.name}] {text}", end="")
 
         set_log_callback(log_cb)
 
@@ -206,6 +205,8 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
         params.photo_maker_path = args.photo_maker
     if hasattr(args, "tensor_type_rules") and args.tensor_type_rules:
         params.tensor_type_rules = args.tensor_type_rules
+    if getattr(args, "tokenizer", None):
+        params.tokenizer = args.tokenizer
 
     # Memory/performance options. Upstream replaced the dedicated offload
     # struct fields with backend-assignment specs; translate accordingly.
@@ -221,6 +222,12 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
         vae_on_cpu=bool(getattr(args, "vae_on_cpu", False)),
         control_net_on_cpu=bool(getattr(args, "control_net_cpu", False)),
     )
+    if getattr(args, "auto_fit", None) is not None:
+        params.auto_fit = args.auto_fit == "on"
+    if getattr(args, "disable_prefetch", False):
+        params.disable_prefetch = True
+    if getattr(args, "disable_segmented_compute", False):
+        params.disable_segmented_compute = True
     if hasattr(args, "diffusion_fa") and args.diffusion_fa:
         params.diffusion_flash_attn = True
     if hasattr(args, "diffusion_conv_direct") and args.diffusion_conv_direct:
@@ -703,13 +710,12 @@ def cmd_video(args: argparse.Namespace) -> int:
 
 def cmd_upscale(args: argparse.Namespace) -> int:
     """Upscale an image using ESRGAN."""
-    from .stable_diffusion import Upscaler, SDImage, set_log_callback
+    from .stable_diffusion import LogLevel, Upscaler, SDImage, set_log_callback
 
     if args.verbose:
 
-        def log_cb(level: int, text: str) -> None:
-            level_names = {0: "DEBUG", 1: "INFO", 2: "WARN", 3: "ERROR"}
-            print(f"[{level_names.get(level, level)}] {text}", end="")
+        def log_cb(level: LogLevel, text: str) -> None:
+            print(f"[{level.name}] {text}", end="")
 
         set_log_callback(log_cb)
 
@@ -755,13 +761,12 @@ def cmd_upscale(args: argparse.Namespace) -> int:
 
 def cmd_convert(args: argparse.Namespace) -> int:
     """Convert model to different format/quantization."""
-    from .stable_diffusion import convert_model, SDType, set_log_callback
+    from .stable_diffusion import LogLevel, convert_model, SDType, set_log_callback
 
     if args.verbose:
 
-        def log_cb(level: int, text: str) -> None:
-            level_names = {0: "DEBUG", 1: "INFO", 2: "WARN", 3: "ERROR"}
-            print(f"[{level_names.get(level, level)}] {text}", end="")
+        def log_cb(level: LogLevel, text: str) -> None:
+            print(f"[{level.name}] {text}", end="")
 
         set_log_callback(log_cb)
 
@@ -856,6 +861,10 @@ def add_common_model_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--tensor-type-rules", dest="tensor_type_rules", help='Tensor type rules (e.g., "^vae\\.=f16,model\\.=q8_0")'
     )
+    parser.add_argument(
+        "--tokenizer",
+        help='tokenizer.json path, or "main=FILE,clip-l=FILE,clip-g=FILE" assignments; required for PiD and Lens',
+    )
 
 
 def add_common_gen_args(parser: argparse.ArgumentParser) -> None:
@@ -926,6 +935,28 @@ def add_common_memory_args(parser: argparse.ArgumentParser) -> None:
         '(e.g. "te=cpu", "*=cpu,vae=cuda0"). Unlike --clip-on-cpu and friends, which '
         "move a module's computation, this moves only its parameters -- the module "
         'still computes on the GPU. --offload-to-cpu is the shorthand for "*=cpu".',
+    )
+    parser.add_argument(
+        "--auto-fit",
+        dest="auto_fit",
+        nargs="?",
+        const="on",
+        choices=["on", "off"],
+        default=None,
+        help="Place modules on the GPU, RAM, another GPU, or disk by available memory (upstream default: on). "
+        "A non-empty --params-backend, or --offload-to-cpu, disables it",
+    )
+    parser.add_argument(
+        "--disable-prefetch",
+        dest="disable_prefetch",
+        action="store_true",
+        help="Disable asynchronous prefetch of the next segment's weights",
+    )
+    parser.add_argument(
+        "--disable-segmented-compute",
+        dest="disable_segmented_compute",
+        action="store_true",
+        help="Force monolithic graph execution even when graph cutting would fit memory better",
     )
     parser.add_argument(
         "--diffusion-fa", dest="diffusion_fa", action="store_true", help="Use flash attention in diffusion"

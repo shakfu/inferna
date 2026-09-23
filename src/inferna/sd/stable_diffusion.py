@@ -103,6 +103,7 @@ class Scheduler(IntEnum):
     BONG_TANGENT = _E["BONG_TANGENT_SCHEDULER"]
     LTX2 = _E["LTX2_SCHEDULER"]
     LOGIT_NORMAL = _E["LOGIT_NORMAL_SCHEDULER"]
+    LLADA_IMAGE = _E["LLADA_IMAGE_SCHEDULER"]
     COUNT = _E["SCHEDULER_COUNT"]
 
 
@@ -114,6 +115,7 @@ class Prediction(IntEnum):
     FLUX_FLOW = _E["FLUX_FLOW_PRED"]
     SEFI_FLOW = _E["SEFI_FLOW_PRED"]
     MINIT2I_FLOW = _E["MINIT2I_FLOW_PRED"]
+    SENSENOVA_U1_FLOW = _E["SENSENOVA_U1_FLOW_PRED"]
     COUNT = _E["PREDICTION_COUNT"]
 
 
@@ -152,6 +154,9 @@ class SDType(IntEnum):
     MXFP4 = _E["SD_TYPE_MXFP4"]
     NVFP4 = _E["SD_TYPE_NVFP4"]
     Q1_0 = _E["SD_TYPE_Q1_0"]
+    Q2_0 = _E["SD_TYPE_Q2_0"]
+    F8_E4M3 = _E["SD_TYPE_F8_E4M3"]
+    F8_E5M2 = _E["SD_TYPE_F8_E5M2"]
     COUNT = _E["SD_TYPE_COUNT"]
 
 
@@ -174,6 +179,7 @@ class CancelMode(IntEnum):
 
 class LogLevel(IntEnum):
     DEBUG = _E["SD_LOG_DEBUG"]
+    VERBOSE = _E["SD_LOG_VERBOSE"]
     INFO = _E["SD_LOG_INFO"]
     WARN = _E["SD_LOG_WARN"]
     ERROR = _E["SD_LOG_ERROR"]
@@ -451,6 +457,7 @@ class SDContextParams(_n.SDContextParams):
     # Native properties; typed here because the nanobind base is Any to mypy.
     backend: Optional[str]
     params_backend: Optional[str]
+    tokenizer: Optional[str]
 
     def __init__(
         self,

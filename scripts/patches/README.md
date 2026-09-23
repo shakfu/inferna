@@ -23,14 +23,27 @@ payload; each carries its own rationale in a header above the diff.
 
 | Patch | Trees | What it fixes |
 |-|-|-|
-| `ggml-metal-pin-msl-version-set-lang.patch` | llama.cpp (v0.4.0+), whisper.cpp (v1.9.4+), sd.cpp (shared ggml) | Metal shader compilation depending on the host process's SDK rather than the running OS |
-| `stable-diffusion.cpp-conditioner-compute-failure.patch` | sd.cpp | A failed text-encoder graph aborting the interpreter on `GGML_ASSERT` instead of raising |
-| `stable-diffusion.cpp-graph-cut-budget-clamp.patch` | sd.cpp | `--max-vram` budgets ignoring VRAM already in use |
+| `ggml-metal-pin-msl-version-set-lang.patch` | llama.cpp (v0.4.0+), whisper.cpp (v1.9.4+) | Metal shader compilation depending on the host process's SDK rather than the running OS |
 | `stable-diffusion.cpp-msvc-bigobj.patch` | sd.cpp | `C1128: number of sections exceeded object file format limit` on MSVC |
 
-sd.cpp's vendored ggml predates `ggml_metal_compile_options_set_lang()`, so
-`-set-lang` does not match it. An `SD_USE_VENDORED_GGML=1` Metal build therefore
-ships sd.cpp without the MSL pin.
+In shared-ggml mode sd.cpp compiles llama.cpp's ggml tree in place
+(`SD_GGML_SOURCE_DIR`), so it gets that tree's MSL pin. sd.cpp's vendored ggml
+predates `ggml_metal_compile_options_set_lang()`, so `-set-lang` does not match
+it. An `SD_USE_VENDORED_GGML=1` Metal build therefore ships sd.cpp without the
+MSL pin.
+
+Two stable-diffusion.cpp patches were dropped at `master-898-2bb7294`, both
+fixed upstream:
+
+- `graph-cut-budget-clamp`: the budgeted plan it clamped is gone. Segmentation
+  is now decided per run against live free VRAM
+  ([#1905](https://github.com/leejet/stable-diffusion.cpp/pull/1905),
+  [#1940](https://github.com/leejet/stable-diffusion.cpp/pull/1940)).
+- `conditioner-compute-failure`: the LLM conditioner logs and returns an empty
+  condition instead of asserting, and the pipeline turns it into a failed
+  generation ([#1958](https://github.com/leejet/stable-diffusion.cpp/pull/1958),
+  [#1973](https://github.com/leejet/stable-diffusion.cpp/pull/1973),
+  [#2020](https://github.com/leejet/stable-diffusion.cpp/pull/2020)).
 
 A patch that stops matching is skipped silently, by design -- which is how the
 v0.4.0 bump removed the MSL pin from the llama.cpp tree without failing a build

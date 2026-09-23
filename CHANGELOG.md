@@ -22,6 +22,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- `SDContextParams.auto_fit`, `.disable_segmented_compute`, `.disable_prefetch`, `.linear_scale`, `.attn_scale` and `.tokenizer`, plus the matching `--auto-fit`, `--disable-segmented-compute`, `--disable-prefetch` and `--tokenizer` CLI flags. `tokenizer` is required for PiD and Lens models. `Scheduler.LLADA_IMAGE`, `Prediction.SENSENOVA_U1_FLOW`, `SDType.Q2_0`/`F8_E4M3`/`F8_E5M2` and `LogLevel.VERBOSE` follow the header.
+
+### Changed
+
+- **stable-diffusion.cpp updated to `master-898-2bb7294` (from `master-816-487de75`)**, matching cyllama ([cyllama#19](https://github.com/shakfu/cyllama/issues/19)). From `master-817` sd.cpp called ops that exist only in leejet's ggml fork, so it no longer compiled against llama.cpp's ggml. Upstream's `SD_USE_UPSTREAM_GGML` ([#1999](https://github.com/leejet/stable-diffusion.cpp/pull/1999)) compiles those calls out. Shared-ggml builds now pass it, with `SD_GGML_SOURCE_DIR` pointing at llama.cpp's ggml, instead of swapping that tree into SD's checkout. `SD_USE_VENDORED_GGML` stays the only switch: both options are derived from it and passed in both modes, because they are CMake cache variables. See [Stable Diffusion ggml selection](docs/build_backends.md#stable-diffusion-ggml-selection). Features lost in shared mode: INT8 ConvRot model files are rejected, FP8 safetensors load as F16, and SageAttention is unavailable. None of these worked at the old pin. An existing SD checkout fails `verify_checkout()` at the new pin; run `make reset`.
+
+- **Breaking: SD memory defaults and semantics changed upstream.** `auto_fit` now defaults to `True` and places modules on the GPU, RAM, another GPU or disk by free memory. A non-empty `params_backend`, which `--offload-to-cpu` sets, disables it. `max_vram` is a per-device budget: `"0"` uses live free VRAM instead of disabling segmentation; set `disable_segmented_compute` instead. `SDContextParams.stream_layers` is removed; prefetch is on by default and `disable_prefetch` turns it off.
+
+- **Breaking: `LogLevel` values shifted.** Upstream inserted `SD_LOG_VERBOSE` after `DEBUG`, so `INFO`, `WARN` and `ERROR` are now 2, 3 and 4. Without `VERBOSE`, `set_log_callback` would have mislabelled levels and dropped every `ERROR` message on the `LogLevel` conversion. The CLI and examples compared levels by number and now compare by name.
+
+- **`make_xcframework.py` fails when `SD_USE_VENDORED_GGML=1`** instead of silently overriding it: the xcframeworks ship one `Ggml.framework`. It also points SD at llama.cpp's ggml with `SD_GGML_SOURCE_DIR` instead of copying that tree over SD's vendored fork.
+
+### Removed
+
+- **`stable-diffusion.cpp-graph-cut-budget-clamp.patch` and `stable-diffusion.cpp-conditioner-compute-failure.patch`**. Both defects are fixed upstream at the new pin; see `scripts/patches/README.md`.
+
 ## [0.4.0]
 
 ### Added
