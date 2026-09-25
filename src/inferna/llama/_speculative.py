@@ -14,24 +14,26 @@ from . import _llama_native as _N
 if TYPE_CHECKING:
     from ._llama_native import LlamaContext
 
+# upstream's draft chain is top-k(10); p_min is compared against its top candidate
+_DRAFT_TOP_K = 10
+
 
 class SpeculativeParams:
-    """Parameters for speculative decoding."""
+    """Parameters for speculative decoding.
 
-    def __init__(
-        self,
-        n_max: int = 16,
-        n_min: int = 0,
-        p_split: float = 0.1,
-        p_min: float = 0.75,
-    ) -> None:
+    Attributes:
+        n_max: Maximum number of tokens to draft.
+        n_min: A shorter draft is discarded.
+        p_min: Drafting stops when the top candidate's probability falls below this.
+    """
+
+    def __init__(self, n_max: int = 16, *, n_min: int = 0, p_min: float = 0.75) -> None:
         self.n_max = n_max
         self.n_min = n_min
-        self.p_split = p_split
         self.p_min = p_min
 
     def __repr__(self) -> str:
-        return f"SpeculativeParams(n_max={self.n_max}, n_min={self.n_min}, p_split={self.p_split}, p_min={self.p_min})"
+        return f"SpeculativeParams(n_max={self.n_max}, n_min={self.n_min}, p_min={self.p_min})"
 
 
 class Speculative:
@@ -63,8 +65,8 @@ class Speculative:
         sparams = _N.LlamaSamplerChainParams()
         sparams.no_perf = True
         self.sampler = _N.LlamaSampler(sparams)
-        self.sampler.add_top_k(10)
-        self.sampler.add_dist(0)
+        self.sampler.add_top_k(_DRAFT_TOP_K)
+        self.sampler.add_greedy()
 
     @staticmethod
     def is_compat(ctx_target: "LlamaContext") -> bool:
@@ -118,8 +120,28 @@ class Speculative:
         prompt_tokens: list[int],
         last_token_id: int,
     ) -> list[int]:
-        """Generate draft tokens using the draft model."""
+        """Generate draft tokens using the draft model.
+
+        Mirrors upstream's draft-model speculator: decode ``last_token_id``
+        after the prompt, then extend greedily with the top candidate while
+        its probability (softmax over the top 10 logits) is at least
+        ``params.p_min``. A draft shorter than ``params.n_min`` is discarded.
+
+        Args:
+            params: SpeculativeParams instance.
+            prompt_tokens: Tokens the target has processed, excluding ``last_token_id``.
+            last_token_id: The target's newest sampled token.
+
+        Returns:
+            Draft token IDs predicted to follow ``last_token_id``.
+
+        Raises:
+            ValueError: ``last_token_id`` is not in the draft vocabulary.
+        """
         n_max = params.n_max
+        n_vocab = self.ctx_dft.model.n_vocab
+        if not 0 <= last_token_id < n_vocab:
+            raise ValueError(f"last_token_id {last_token_id} is outside the draft vocabulary [0, {n_vocab})")
         n_ctx = self.ctx_dft.n_ctx - n_max
         if n_ctx <= 0:
             return []
@@ -142,39 +164,43 @@ class Speculative:
         elif reuse_n < len(old_prompt):
             self.ctx_dft.memory_seq_rm(0, reuse_n, -1)
 
-        # Encode new prompt tokens not in cache.
-        i_start = reuse_n
-        n_new = len(prompt) - i_start
-        if n_new > 0:
-            batch = _N.LlamaBatch(n_tokens=n_new, embd=0, n_seq_max=1, verbose=False)
-            for i in range(n_new):
-                batch.add(prompt[i_start + i], i_start + i, [0], i == n_new - 1)
-            self.ctx_dft.decode(batch)
+        # Encode new prompt tokens not in cache; no logits needed.
+        if len(prompt) > reuse_n:
+            self._decode_draft(prompt[reuse_n:], reuse_n, False)
 
-        self._draft_prompt = list(prompt)
-
-        # Draft generation loop.
+        # Seed with the target's newest token: its logits predict the first draft token.
         n_past = len(prompt)
+        self._decode_draft([last_token_id], n_past, True)
+        self._draft_prompt = prompt + [last_token_id]
+
         self.sampler.reset()
         result: list[int] = []
         for i in range(n_max):
-            sampled = self.sampler.sample(self.ctx_dft, -1)
-            self.sampler.accept(sampled)
-            result.append(int(sampled))
-
+            if params.p_min > 0.0 and _N._draft_top_p(self.ctx_dft, -1, _DRAFT_TOP_K) < params.p_min:
+                break
+            # sample() also accepts the token
+            sampled = int(self.sampler.sample(self.ctx_dft, -1))
+            result.append(sampled)
             if len(result) >= n_max:
                 break
+            self._decode_draft([sampled], n_past + 1 + i, True)
+            self._draft_prompt.append(sampled)
 
-            batch = _N.LlamaBatch(n_tokens=1, embd=0, n_seq_max=1, verbose=False)
-            batch.add(sampled, n_past + i, [0], True)
-            self.ctx_dft.decode(batch)
-            self._draft_prompt.append(int(sampled))
-
+        if len(result) < params.n_min:
+            result = []
         if result:
             self._n_gen_drafts += 1
             self._n_gen_tokens += len(result)
 
         return result
+
+    def _decode_draft(self, tokens: list[int], pos0: int, last_logits: bool) -> None:
+        """Decode ``tokens`` on seq 0 of the draft context from position ``pos0``."""
+        n = len(tokens)
+        batch = _N.LlamaBatch(n_tokens=n, embd=0, n_seq_max=1, verbose=False)
+        for i, tok in enumerate(tokens):
+            batch.add(tok, pos0 + i, [0], last_logits and i == n - 1)
+        self.ctx_dft.decode(batch)
 
     def accept(self, n_accepted: int) -> None:
         """Inform the speculative decoder that n_accepted tokens were accepted."""

@@ -1165,3 +1165,94 @@ class TestWebUIAssets:
 
         conn.send_gzipped.assert_not_called()
         conn.send_error.assert_called_once_with(404, "Not Found")
+
+
+class TestServerErrorsDoNotLeak:
+    """A 500 body must not carry exception text, which can disclose model
+    and filesystem paths. The detail goes to the server log instead.
+    """
+
+    SECRET = "failed to load /home/alice/models/secret.gguf"
+
+    def _python_handler(self, config):
+        server = PythonServer(config)
+        server.model = Mock()
+        server.logger = Mock()
+        handler_class = server._create_request_handler()
+        handler = Mock(spec=handler_class)
+        handler._send_error = Mock()
+        handler._send_json_response = Mock()
+        return server, handler_class, handler
+
+    def test_python_chat_completion_500_is_generic(self):
+        server, handler_class, handler = self._python_handler(ServerConfig(model_path="test.gguf"))
+        with patch.object(server, "process_chat_completion", side_effect=RuntimeError(self.SECRET)):
+            handler_class._handle_chat_completions.__get__(handler)({"messages": [{"role": "user", "content": "hi"}]})
+        handler._send_error.assert_called_once_with(500, "Internal Server Error")
+        assert self.SECRET in str(server.logger.error.call_args)
+
+    def test_python_embeddings_500_is_generic(self):
+        config = ServerConfig(model_path="test.gguf", embedding=True)
+        server, handler_class, handler = self._python_handler(config)
+        server.embedder = Mock()
+        server.embedder.embed_with_info.side_effect = RuntimeError(self.SECRET)
+        handler_class._handle_embeddings.__get__(handler)({"input": "hello"})
+        handler._send_error.assert_called_once_with(500, "Internal Server Error")
+        assert self.SECRET in str(server.logger.error.call_args)
+
+    def _embedded_server(self, **kwargs):
+        from inferna.llama.server.embedded import EmbeddedServer
+
+        server = EmbeddedServer.__new__(EmbeddedServer)
+        server._config = ServerConfig(model_path="unused.gguf", **kwargs)
+        server._logger = Mock()
+        return server
+
+    def test_embedded_chat_completion_500_is_generic(self):
+        server = self._embedded_server()
+        server._process_chat_completion = Mock(side_effect=RuntimeError(self.SECRET))
+        conn = Mock()
+        server._handle_chat_completions(conn, '{"messages": [{"role": "user", "content": "hi"}]}')
+        conn.send_error.assert_called_once_with(500, "Internal Server Error")
+        assert self.SECRET in str(server._logger.error.call_args)
+
+    def test_embedded_embeddings_500_is_generic(self):
+        server = self._embedded_server(embedding=True)
+        server._embedder = Mock()
+        server._embedder.embed_with_info.side_effect = RuntimeError(self.SECRET)
+        conn = Mock()
+        server._handle_embeddings(conn, '{"input": "hello"}')
+        conn.send_error.assert_called_once_with(500, "Internal Server Error")
+        assert self.SECRET in str(server._logger.error.call_args)
+
+    def test_embedded_stream_error_frame_is_generic(self):
+        import json
+
+        from inferna.llama.server.embedded import _StreamingState
+
+        server = self._embedded_server()
+        slot = Mock()
+        slot.iter_tokens.side_effect = RuntimeError(self.SECRET)
+        state = _StreamingState(
+            conn_id=1,
+            slot=slot,
+            prompt="p",
+            max_tokens=4,
+            stop_words=[],
+            request=Mock(),
+            chunk_id="c",
+            created=0,
+            model="m",
+        )
+        server._stream_worker(state)
+
+        frames = []
+        while True:
+            frame = state.chunks.get_nowait()
+            if frame is None:
+                break
+            frames.append(frame)
+        assert len(frames) == 1
+        payload = json.loads(frames[0][len(b"data: ") :])
+        assert payload == {"error": {"type": "internal_error", "message": "Internal Server Error"}}
+        assert self.SECRET in str(server._logger.exception.call_args)

@@ -57,6 +57,7 @@ get_default_media_marker = _N.get_default_media_marker
 
 # Module-level functions
 set_log_callback = _N.set_log_callback
+get_log_callback = _N.get_log_callback
 disable_logging = _N.disable_logging
 chat_builtin_templates = _N.chat_builtin_templates
 
@@ -70,6 +71,16 @@ ggml_backend_reg_names = _N.ggml_backend_reg_names
 ggml_backend_dev_count = _N.ggml_backend_dev_count
 ggml_backend_dev_info = _N.ggml_backend_dev_info
 
+llama_version = _N.llama_version
+llama_print_system_info = _N.llama_print_system_info
+llama_max_parallel_sequences = _N.llama_max_parallel_sequences
+llama_max_tensor_buft_overrides = _N.llama_max_tensor_buft_overrides
+llama_ftype_name = _N.llama_ftype_name
+llama_load_mode_name = _N.llama_load_mode_name
+llama_load_mode_from_str = _N.llama_load_mode_from_str
+llama_model_meta_key_str = _N.llama_model_meta_key_str
+llama_split_path = _N.llama_split_path
+llama_split_prefix = _N.llama_split_prefix
 llama_backend_init = _N.llama_backend_init
 llama_backend_free = _N.llama_backend_free
 llama_numa_init = _N.llama_numa_init
@@ -174,6 +185,9 @@ GGML_TYPE_BF16 = _N.GGML_TYPE_BF16
 GGML_TYPE_TQ1_0 = _N.GGML_TYPE_TQ1_0
 GGML_TYPE_TQ2_0 = _N.GGML_TYPE_TQ2_0
 GGML_TYPE_MXFP4 = _N.GGML_TYPE_MXFP4
+GGML_TYPE_NVFP4 = _N.GGML_TYPE_NVFP4
+GGML_TYPE_Q1_0 = _N.GGML_TYPE_Q1_0
+GGML_TYPE_Q2_0 = _N.GGML_TYPE_Q2_0
 GGML_TYPE_COUNT = _N.GGML_TYPE_COUNT
 
 # ggml precision / op / triangular / scale / opt / backend-device-type
@@ -209,6 +223,7 @@ LLAMA_VOCAB_TYPE_WPM = _N.LLAMA_VOCAB_TYPE_WPM
 LLAMA_VOCAB_TYPE_UGM = _N.LLAMA_VOCAB_TYPE_UGM
 LLAMA_VOCAB_TYPE_RWKV = _N.LLAMA_VOCAB_TYPE_RWKV
 LLAMA_VOCAB_TYPE_PLAMO2 = _N.LLAMA_VOCAB_TYPE_PLAMO2
+LLAMA_VOCAB_TYPE_TEST = _N.LLAMA_VOCAB_TYPE_TEST
 
 # llama RoPE type
 LLAMA_ROPE_TYPE_NONE = _N.LLAMA_ROPE_TYPE_NONE
@@ -276,6 +291,7 @@ LLAMA_FTYPE_MOSTLY_TQ2_0 = _N.LLAMA_FTYPE_MOSTLY_TQ2_0
 LLAMA_FTYPE_MOSTLY_MXFP4_MOE = _N.LLAMA_FTYPE_MOSTLY_MXFP4_MOE
 LLAMA_FTYPE_MOSTLY_NVFP4 = _N.LLAMA_FTYPE_MOSTLY_NVFP4
 LLAMA_FTYPE_MOSTLY_Q1_0 = _N.LLAMA_FTYPE_MOSTLY_Q1_0
+LLAMA_FTYPE_MOSTLY_Q2_0 = _N.LLAMA_FTYPE_MOSTLY_Q2_0
 LLAMA_FTYPE_GUESSED = _N.LLAMA_FTYPE_GUESSED
 
 # llama RoPE scaling
@@ -329,8 +345,28 @@ LLAMA_KV_OVERRIDE_TYPE_FLOAT = _N.LLAMA_KV_OVERRIDE_TYPE_FLOAT
 LLAMA_KV_OVERRIDE_TYPE_BOOL = _N.LLAMA_KV_OVERRIDE_TYPE_BOOL
 LLAMA_KV_OVERRIDE_TYPE_STR = _N.LLAMA_KV_OVERRIDE_TYPE_STR
 
+# llama model meta key
+LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE = _N.LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE
+LLAMA_MODEL_META_KEY_SAMPLING_TOP_K = _N.LLAMA_MODEL_META_KEY_SAMPLING_TOP_K
+LLAMA_MODEL_META_KEY_SAMPLING_TOP_P = _N.LLAMA_MODEL_META_KEY_SAMPLING_TOP_P
+LLAMA_MODEL_META_KEY_SAMPLING_MIN_P = _N.LLAMA_MODEL_META_KEY_SAMPLING_MIN_P
+LLAMA_MODEL_META_KEY_SAMPLING_XTC_PROBABILITY = _N.LLAMA_MODEL_META_KEY_SAMPLING_XTC_PROBABILITY
+LLAMA_MODEL_META_KEY_SAMPLING_XTC_THRESHOLD = _N.LLAMA_MODEL_META_KEY_SAMPLING_XTC_THRESHOLD
+LLAMA_MODEL_META_KEY_SAMPLING_TEMP = _N.LLAMA_MODEL_META_KEY_SAMPLING_TEMP
+LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_LAST_N = _N.LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_LAST_N
+LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_REPEAT = _N.LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_REPEAT
+LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT = _N.LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT
+LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_TAU = _N.LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_TAU
+LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA = _N.LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA
+
 # llama token sentinel
 LLAMA_TOKEN_NULL = _N.LLAMA_TOKEN_NULL
+
+# llama state seq flags
+LLAMA_STATE_SEQ_FLAGS_NONE = _N.LLAMA_STATE_SEQ_FLAGS_NONE
+LLAMA_STATE_SEQ_FLAGS_SWA_ONLY = _N.LLAMA_STATE_SEQ_FLAGS_SWA_ONLY
+LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY = _N.LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY
+LLAMA_STATE_SEQ_FLAGS_ON_DEVICE = _N.LLAMA_STATE_SEQ_FLAGS_ON_DEVICE
 
 
 # ---------------------------------------------------------------------------

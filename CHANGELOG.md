@@ -22,7 +22,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.5.1]
+
+### Added
+
+- **`LlamaModel.from_fileobj()`, `LlamaModel.lora_adapter_init_from_fileobj()` and `GGUFContext.from_fileobj()`** load from an open binary file or int fd, optionally at a byte offset, so a GGUF can ship inside a larger file. They wrap `llama_model_load_from_file_ptr`, `llama_adapter_lora_init_from_file_ptr` and `gguf_init_from_file_ptr`, which take a `FILE*`; the binding opens one over a dup of the fd. The fd is validated before crossing into C: regular file, offset in range, and GGUF header, except for `GGUFContext`, which accepts zero-tensor files as `from_file()` does. With mmap, an embedded model's data section must be 32-byte aligned in the file.
+
+- **State save/restore on `LlamaContext`**: `get_state_data`/`set_state_data`, `save_state_file`/`load_state_file`, and per-sequence `get_state_seq_data`/`set_state_seq_data`/`save_state_seq_file`/`load_state_seq_file` with an optional `flags` argument (`LLAMA_STATE_SEQ_FLAGS_*`). Before this only `get_state_size` was bound, so no state could be saved or restored. Loads raise on failure. Token buffers default to `n_ctx` rather than a fixed 256, which would fail on longer sessions.
+
+- **`llama_version()`**, the version compiled into the loaded llama.cpp library; `python -m inferna info` prints it. **`LlamaContext.get_embeddings_seq()`** for pooled embeddings and reranker scores, and **`LlamaModel.n_embd_out`** / **`n_cls_out`**.
+
+- **Training**: `LlamaContext.opt_init()` and `opt_epoch()` finetune a model on a token list, and `LlamaModel.save_to_file()` writes the result. llama.cpp supports F32 models only. A quantized model overflows the backward graph (`GGML_ASSERT` in `ggml_graph_add_node`), so `opt_init` rejects it; it also rejects an F16 KV cache and batch sizes that do not divide the context. `opt_epoch` rejects a split that leaves no training window, which otherwise trains on nothing and returns eval-only results.
+
+- **`LlamaModel.from_metadata()`** builds a model from GGUF metadata and a Python tensor initialiser, without a weights file (`llama_model_init_from_user`). With the new `GGUFContext.set_arr_str()` and llama.cpp's `"test"` tokenizer, `tests/test_training.py` builds a 2-layer F32 llama in memory to train.
+
+- **Backend sampling** [EXPERIMENTAL upstream]: `LlamaContext(..., samplers={seq_id: chain})` and `set_sampler()` attach a chain that runs inside the decode graph; `sampled_token_ith()`, `sampled_probs_ith()`, `sampled_logits_ith()` and `sampled_candidates_ith()` read the results. llama.cpp initialises an attached chain for that context and never resets it. A second attach trips a `GGML_ASSERT`, and CPU sampling on another context skips the offloaded links and returns wrong tokens. The binding therefore binds a chain to its first context: reattaching, sampling with another context, and editing the chain all raise. `clone()` gives an unbound chain.
+
+- **Python samplers**: `LlamaSampler.add_custom(obj)` adds a chain link whose `apply(ids, logits, probs)` is Python (`llama_sampler_init`). An exception in any callback propagates from the call that ran the chain.
+
+- **Other llama.h functions**, completing the API apart from three `llama_state_seq_*` functions that llama.cpp implements as their wrapped `_ext` variants:
+  - sampler chains: `len()`, `chain_get()`, `chain_remove()`, `copy_state_from()`, `add_grammar_lazy_patterns()`;
+  - context: `memory_seq_div()`, `memory_can_shift()`, `set_adapter_cvec()` (control vectors);
+  - model: `from_splits()`, `ftype`, `n_swa`, `is_diffusion`, `cls_label()`; LoRA `alora_invocation_tokens`; vocab `token_mask()`, `get_suppress_tokens()`;
+  - module: `llama_print_system_info`, `llama_ftype_name`, `llama_load_mode_name`/`_from_str`, `llama_model_meta_key_str`, `llama_split_path`/`_prefix` (0-based `split_no`, unlike the header comment's example), `llama_max_parallel_sequences`, `llama_max_tensor_buft_overrides`, `get_log_callback`.
+
+- **`tests/test_llama_api_coverage.py`** fails when llama.h gains a function or enum value that the bindings do not wrap. It also checks that `inferna.llama.llama_cpp` re-exports every native name. Functions left unwrapped on purpose are listed in its `KNOWN_UNWRAPPED` with a reason. On adding it, the bindings were missing `LLAMA_VOCAB_TYPE_TEST`, `LLAMA_FTYPE_MOSTLY_Q2_0`, `GGML_TYPE_NVFP4`/`Q1_0`/`Q2_0` and the `llama_model_meta_key` enum; all are now exported.
+
+### Fixed
+
+- **`memory_seq_*` aborted the process on an out-of-range `seq_id`.** llama.cpp checks it with `GGML_ASSERT`, so `ctx.memory_seq_pos_max(300)` killed the interpreter with SIGABRT. Every `memory_seq_*` method now raises `IndexError` outside `[0, n_seq_max)`, and `memory_seq_add` / `_div` raise `ValueError` for M-RoPE models, which llama.cpp also asserts against.
+
+- **A log callback installed at exit kept its globals alive past shutdown.** The binding holds the callback in a static, and a closure's globals can reach every model, so nanobind reported leaked instances. `disable_logging()` now drops the callback, and it is cleared at exit.
+
+- **`LlamaSampler.sample()` aborted the process** instead of raising. `llama_sampler_sample` uses `GGML_ASSERT` in two places: when the chain selects no token (no greedy, dist, mirostat or adaptive-p link, or a filter after it), and when the output index has no logits (out of range, logits flag unset, or no decode yet). `sample()` now runs the same steps in C++ and raises `ValueError` in both cases. `tests/test_sampler_sample.py` compares it against upstream's function on cloned chains, so drift after a llama.cpp bump fails there.
+
+- **`Speculative.draft()` ignored `last_token_id`**, so every draft was one position early: it continued `prompt_tokens[-1]` instead of the target's newest token. It now decodes `last_token_id` after the prompt first, as upstream's draft-model speculator does. Three related departures from upstream are also fixed. `p_min` was read but never applied; drafting now stops when the top candidate's probability (softmax over the top 10 logits) falls below it, and a draft shorter than `n_min` is discarded. Tokens were drawn at random (`dist`) instead of taking the top candidate. Each token was accepted into the sampler twice. `tests/test_speculative.py` checks drafts against an independent implementation of the upstream rule.
+
+- **`tests/examples/speculative_example.py` called APIs that no longer exist** (`are_compatible`, `gen_draft`, `n_draft`, `n_reuse`, `add_replacement`). pytest does not collect `tests/examples`, so nothing caught it. It is now a draft/verify loop following llama.cpp's `examples/speculative-simple`, with `--bench`. `tests/test_speculative_example.py` checks that greedy verification reproduces plain greedy decoding exactly.
+
+- **`from inferna.whisper import WhisperContext` raised `ImportError`.** The README, `api_reference.md`, `quickstart.md` and `whisper.md` all use it, but `inferna.whisper` exported nothing. It now re-exports the `whisper_cpp` public names, as cyllama does.
+
+- **A LoRA adapter did not keep its model alive.** A model's destructor frees every adapter registered to it, so `LlamaModel(path).lora_adapter_init(lora)` left the adapter pointing at freed memory once the temporary model was collected. The adapter now holds a reference, exposed as `LlamaAdapterLora.model`.
+
+- **`get_embeddings()` and `get_embeddings_ith()` returned `n_embd` floats.** llama.cpp lays out output embeddings with `n_embd_out` floats per row. The two differ for models with a projection after the last layer, which then got a truncated vector or read past the row.
+
+- **`SqliteVectorStore` wrote float32 blobs for every `vector_type`.** `float16`, `int8` and `uint8` were accepted and passed to `vector_init`, then encoded with `struct` format `f`. sqlite-vector reads `dimension * sizeof(element)` bytes and does not check blob length, so a FLOAT16 column read each 4-byte float as two halves. Search returned wrong rows with no error. Encoding now follows the declared type, and the integer types raise on a value they cannot represent instead of wrapping.
+
+- **Deleting a source's last chunk left its dedup record behind.** `is_source_indexed()` kept reporting the source as present, so a later `add_documents()` skipped reindexing it. A `source_hash` column now links each chunk to its source, and `delete()` drops the record with the last chunk. Tables written before the column keep NULL and behave as before.
+
+- **`SqliteVectorStore.clear()` left the source dedup records behind.** After `RAG.clear()`, `add_documents()` on the same files skipped each one and indexed nothing, and `add()` with the same `source_hash` raised `sqlite3.IntegrityError`. `clear()` now drops the source records in the same transaction as the chunks.
+
+- **`Embedder.close()` released nothing.** The context and model were left to their destructors, so every RAG lifecycle kept its GPU working set until a garbage collection ran. `close()` now frees the context, drops every model reference, and waits for an in-flight embed. Later calls raise. `RAG.close()` delegates here.
+
+- **`TokenTextSplitter` force-split on character offsets.** `_force_split` advanced by `chunk_size` characters while `length_function` counted tokens, so a 32-token limit produced 32-character chunks of about 8 tokens. It now measures with the configured function. Character splitters change too: chunks after the first were `chunk_size + chunk_overlap` long and are now `chunk_size`, so an index built by the old code will not match a rebuild.
+
+- **Undrained subprocess pipes could block the server launcher and the MCP client.** Both piped stdout and stderr and read neither. llama-server logs to stderr, so once the 64KB pipe buffer filled, the child blocked and readiness checks and inference hung. Each stream is now drained on a reader thread into a bounded buffer. `LlamaServer.get_logs()` returns those lines instead of placeholder strings.
+
+- **MCP requests ignored `request_timeout`.** The value was read and never used, and the response was read with a blocking `readline()`, so a server that never answered blocked the agent thread forever. Responses now arrive on a queue with a deadline. A response carrying an id nobody waits for is discarded rather than handed to the next caller.
+
+- **`AsyncReActAgent.close()` raced with `run()` and `stream()`.** Close did not take the lock those operations hold, so it could free the native context while work still used it. Close now serializes with them, is idempotent, and later calls raise. `AsyncConstrainedAgent` had the same gap.
+
+- **Response cache could return output generated under different sampling.** The key omitted `frequency_penalty`, `presence_penalty`, `penalty_last_n`, the three `mirostat` fields, `typical_p`, `typical_min_keep`, both `xtc` fields, both `dynatemp` fields, `logit_bias` and `n_ctx`. The key now covers every `GenerationConfig` field except a listed set of device-placement and batching fields, each with a reason. A new field is keyed unless explicitly excluded.
+
+### Security
+
+- **`quarto_render` wrote wherever the model pointed it.** `input` and `output_dir` come from the model. The tool created the parent directory, wrote the document, then rendered it, which executes its code cells; `output_dir` went to `--output-dir` unchecked. Text an agent merely read could therefore choose the destination. Writes are now confined to the output directory: a relative `input` resolves inside it, an absolute one must already be under it, and `..` or a symlink out of it is refused. `output_dir` gets the same check. `INFERNA_QUARTO_OUTPUT_DIR` widens the root; there is no per-call override, because the model controls the call.
+
+- **Server 500 responses carried exception text.** `/v1/chat/completions` and `/v1/embeddings` in both `PythonServer` and `EmbeddedServer`, and the embedded server's SSE error frame, put `str(e)` in the response, which can disclose model and filesystem paths. All five sites now return a generic message and log the detail.
+
+### Removed
+
+- **`SpeculativeParams.p_split`**, which had no effect: upstream reads it only in its tree-based drafting example. `n_min` and `p_min` are now keyword-only, so a former `(n_max, n_min, p_split)` positional call raises `TypeError` instead of silently setting `p_min`.
+
 ### Changed
+
+- **llama.cpp updated to `v0.5.0` (`b11146`, from `v0.4.1`).** The ggml RPC protocol is now major version 7, so it does not interoperate with `rpc-server` from older llama.cpp.
 
 - **A source patch that no longer applies now fails the build** with git's reason, instead of logging "no longer applies" and building without the fix. The llama.cpp v0.4.0 bump lost the Metal MSL pin that way until it was caught by hand. `ggml-*.patch` no longer go to stable-diffusion.cpp's vendored ggml: shared-ggml mode does not compile it, and vendored mode compiles leejet's fork, whose layout they do not match. Without this, every static-link GPU wheel build (`SD_USE_VENDORED_GGML=1`) would fail on the Metal patch. Tests: `tests/test_build_patches.py`.
 

@@ -1,6 +1,7 @@
 """Tests for the RAG Embedder class."""
 
 import math
+import sys
 from pathlib import Path
 
 import pytest
@@ -591,3 +592,55 @@ class TestLRUCacheMemoryAware:
         info = cache.info()
         assert hasattr(info, "memory_bytes")
         assert info.memory_bytes == 0
+
+
+class TestEmbedderClose:
+    """``close()`` must release the native context and model rather than
+    leaving them to their destructors. ``RAG.close()`` delegates here, so
+    a no-op strands a GPU working set per RAG lifecycle until a
+    nondeterministic collection runs.
+    """
+
+    def test_close_frees_context(self, model_path: str):
+        emb = Embedder(model_path, n_ctx=512, n_gpu_layers=0)
+        ctx = emb._ctx
+        emb.close()
+        assert ctx.is_valid is False
+
+    def test_close_drops_every_model_reference(self, model_path: str):
+        """LlamaModel has no close() and no weakref support, so check that
+        the caller's reference is the only one left once close() returns."""
+        emb = Embedder(model_path, n_ctx=512, n_gpu_layers=0)
+        model = emb._model
+        baseline = sys.getrefcount(model)
+        emb.close()
+        # The context and the vocab view each held a reference.
+        assert sys.getrefcount(model) == 2
+        assert baseline > 2
+
+    def test_close_does_not_release_twice(self, model_path: str):
+        emb = Embedder(model_path, n_ctx=512, n_gpu_layers=0)
+        calls: list[str] = []
+
+        class _Recorder:
+            def close(self) -> None:
+                calls.append("ctx")
+
+        emb._ctx = _Recorder()
+        emb.close()
+        emb.close()
+        assert calls == ["ctx"]
+
+    def test_use_after_close_raises_clearly(self, model_path: str):
+        emb = Embedder(model_path, n_ctx=512, n_gpu_layers=0)
+        emb.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            emb.embed("anything")
+
+    def test_context_manager_closes(self, model_path: str):
+        emb = Embedder(model_path, n_ctx=512, n_gpu_layers=0)
+        with emb:
+            emb.embed("hello")
+        assert emb._closed is True
+        with pytest.raises(RuntimeError, match="closed"):
+            emb.embed("after")

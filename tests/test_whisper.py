@@ -651,3 +651,11 @@ class TestWhisperContextConcurrencyGuard:
         # Should not raise
         ctx._try_acquire_busy()
         ctx._busy_lock.release()
+
+
+def test_package_reexports_public_api():
+    """The docs import these from inferna.whisper directly."""
+    import inferna.whisper as pkg
+
+    for name in pkg.__all__:
+        assert getattr(pkg, name) is getattr(wh, name)

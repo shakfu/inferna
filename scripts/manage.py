@@ -172,9 +172,8 @@ PY_VER_MINOR = sys.version_info.minor
 # identical values — the flag was a no-op.)
 # Pin the bNNNNN nightly tag, not the semver tag it duplicates: upstream
 # publishes the prebuilt binary assets only under bNNNNN, so `download_release()`
-# (every dynamic GPU wheel) 404s on a vN.N.N pin. b10964 and v0.4.1 are the same
-# commit, b29c606.
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b10964")  # equivalent to v0.4.1
+# (every dynamic GPU wheel) 404s on a vN.N.N pin.
+LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b11146")  # equivalent to v0.5.0
 WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.4")  # from: v1.9.2
 
 # As of upstream b9352 llama.cpp no longer ships a prebuilt server SPA under

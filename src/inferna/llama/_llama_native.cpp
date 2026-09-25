@@ -13,8 +13,12 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <algorithm>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,12 +28,50 @@
 #include "ggml-backend.h"  // ok here — this TU only sees llama.cpp's vendored copy
 #include "ggml-cpu.h"
 #include "gguf.h"
+#include "ggml-opt.h"
 
 #include "_llama_native.hpp"
 #include "common/backend_loader.hpp"
 
+#ifdef _WIN32
+#include <io.h>
+#define INFERNA_DUP    _dup
+#define INFERNA_CLOSE  _close
+#define INFERNA_FDOPEN _fdopen
+#define INFERNA_LSEEK  _lseeki64
+#else
+#include <unistd.h>
+#define INFERNA_DUP    dup
+#define INFERNA_CLOSE  close
+#define INFERNA_FDOPEN fdopen
+#define INFERNA_LSEEK  lseek
+#endif
+
 namespace nb = nanobind;
 using namespace nb::literals;
+
+// Runs fn(FILE*) on a dup of fileobj's fd, positioned at the GGUF by
+// validation.seek_gguf_fd. The dup shares the fd's OS offset, so the saved
+// offset is restored after fclose. Python cannot hand C a FILE*.
+template <class Fn>
+static auto with_gguf_file(nb::handle fileobj, nb::handle offset, const char* kind,
+                           bool check_header, Fn&& fn) -> decltype(fn((FILE*) nullptr)) {
+    nb::module_ validation = nb::module_::import_("inferna.utils.validation");
+    nb::tuple r = nb::cast<nb::tuple>(
+        validation.attr("seek_gguf_fd")(fileobj, offset, kind, check_header));
+    struct Guard {
+        int fd; long long saved; FILE* fp = nullptr;
+        ~Guard() { if (fp) fclose(fp); INFERNA_LSEEK(fd, saved, SEEK_SET); }
+    } g{nb::cast<int>(r[0]), nb::cast<long long>(r[1])};
+    int dup_fd = INFERNA_DUP(g.fd);
+    if (dup_fd < 0) throw std::runtime_error(std::string("dup failed for ") + kind + " fd");
+    g.fp = INFERNA_FDOPEN(dup_fd, "rb");
+    if (!g.fp) {
+        INFERNA_CLOSE(dup_fd);
+        throw std::runtime_error(std::string("fdopen failed for ") + kind + " fd");
+    }
+    return fn(g.fp);
+}
 
 // =============================================================================
 // Macros to reduce boilerplate. Reused across the parameter wrappers.
@@ -234,6 +276,8 @@ struct LlamaVocabW {
 struct LlamaAdapterLoraW {
     llama_adapter_lora* ptr = nullptr;
     bool owner = false;
+    // The model's destructor frees every adapter registered to it.
+    nb::object model_obj;
     ~LlamaAdapterLoraW() {
         if (owner && ptr) { llama_adapter_lora_free(ptr); ptr = nullptr; }
     }
@@ -286,6 +330,7 @@ struct LlamaModelW {
         }
         initialize_cache();
     }
+    LlamaModelW() = default;  // for from_fileobj
 
     ~LlamaModelW() {
         if (ptr && owner) { llama_model_free(ptr); ptr = nullptr; }
@@ -373,6 +418,24 @@ extern "C" void _llama_no_log_cb(ggml_log_level, const char*, void*) {}
 // If you ever need to add a busy-lock-style guard here, mirror the
 // `WhisperContextW::kBusyMsg` / `inferna::BusyGuard` pattern used in
 // `_whisper_native.cpp` and `_sd_native.cpp`.
+// Learning rate and weight decay read by llama.cpp before each optimizer step.
+struct OptState {
+    float lr = 1e-5f;
+    float wd = 0.0f;
+};
+
+static ggml_opt_optimizer_params opt_pars_cb(void* ud) {
+    auto* o = static_cast<OptState*>(ud);
+    ggml_opt_optimizer_params p = ggml_opt_get_default_optimizer_params(nullptr);
+    p.adamw.alpha = p.sgd.alpha = o->lr;
+    p.adamw.wd = p.sgd.wd = o->wd;
+    return p;
+}
+
+// Identifies a context for backend-sampler binding. Unlike an address, a
+// serial is never reused by a later context.
+static uint64_t g_ctx_serial = 0;
+
 struct LlamaContextW {
     llama_context* ptr = nullptr;
     bool owner = true;
@@ -380,6 +443,15 @@ struct LlamaContextW {
     bool verbose = true;
     int  n_tokens = 0;
     bool cancel_flag = false;
+    uint64_t serial = 0;
+    int type_k = GGML_TYPE_F16;
+    int type_v = GGML_TYPE_F16;
+    // seq_id -> LlamaSampler attached for backend sampling. llama.cpp keeps
+    // only the raw chain pointer, so the wrappers must outlive ptr.
+    nb::dict backend_samplers;
+    // 0: opt_init not called, 1: ready, 2: failed part-way (unusable)
+    int opt_status = 0;
+    OptState opt;
 
     // Throw a normal Python exception if the context has been closed,
     // instead of letting llama.cpp dereference a null pointer.
@@ -388,8 +460,9 @@ struct LlamaContextW {
             "LlamaContext has been closed and is no longer usable");
     }
 
-    LlamaContextW(nb::object model_o, std::optional<LlamaContextParamsW*> p_opt, bool verbose_)
-        : model_obj(std::move(model_o)), verbose(verbose_)
+    LlamaContextW(nb::object model_o, std::optional<LlamaContextParamsW*> p_opt, bool verbose_,
+                  uint64_t serial_ = 0, const std::vector<llama_sampler_seq_config>& samplers = {})
+        : model_obj(std::move(model_o)), verbose(verbose_), serial(serial_ ? serial_ : ++g_ctx_serial)
     {
         LlamaModelW* model = nullptr;
         try { model = nb::cast<LlamaModelW*>(model_obj); }
@@ -443,7 +516,12 @@ struct LlamaContextW {
             }
         }
 
-        ptr = llama_init_from_model(model->ptr, cp->p);
+        type_k = cp->p.type_k;
+        type_v = cp->p.type_v;
+        llama_context_params cparams = cp->p;
+        cparams.samplers = samplers.empty() ? nullptr : const_cast<llama_sampler_seq_config*>(samplers.data());
+        cparams.n_samplers = samplers.size();
+        ptr = llama_init_from_model(model->ptr, cparams);
         if (!ptr) {
             throw std::runtime_error(
                 "Failed to create llama_context (model=" + model->path_model +
@@ -456,8 +534,16 @@ struct LlamaContextW {
         }
     }
 
-    ~LlamaContextW() {
-        if (ptr && owner) { llama_free(ptr); ptr = nullptr; }
+    ~LlamaContextW() { free_ctx(); }
+    void free_ctx();  // defined after LlamaSamplerW
+    // Throw if seq_id is outside [0, n_seq_max); llama.cpp asserts instead.
+    void check_seq(int seq_id, bool allow_all = false) const {
+        ensure_valid();
+        if (allow_all && seq_id == -1) return;
+        uint32_t n = llama_n_seq_max(ptr);
+        if (seq_id < 0 || (uint32_t) seq_id >= n)
+            throw std::out_of_range("seq_id " + std::to_string(seq_id) +
+                                    " is outside [0, n_seq_max=" + std::to_string(n) + ")");
     }
     LlamaContextW(const LlamaContextW&) = delete;
     LlamaContextW& operator=(const LlamaContextW&) = delete;
@@ -470,6 +556,15 @@ struct LlamaContextW {
 struct LlamaSamplerW {
     llama_sampler* ptr = nullptr;
     bool owner = true;
+    std::vector<llama_token_data> cur;  // candidate buffer reused across sample()
+    nb::object parent;       // owning chain, for a chain_get() view
+    // Serial of the context this chain was attached to for backend sampling.
+    // llama.cpp initialises the chain for that context's graph and never
+    // resets it, so the binding lasts for the chain's life.
+    uint64_t bound_ctx = 0;
+    bool attached = false;   // a context holds this chain's pointer
+
+    bool is_chain() const { return ptr && llama_sampler_chain_get(ptr, -1) != nullptr; }
 
     explicit LlamaSamplerW(std::optional<LlamaSamplerChainParamsW*> p_opt) {
         LlamaSamplerChainParamsW default_params;
@@ -490,12 +585,280 @@ struct LlamaSamplerW {
 // silently no-ops the chain entry. Wrap every add_* through this guard
 // so callers get a clear error at the boundary instead of a baffling
 // sampler that quietly skips the rule they configured.
-static inline void chain_add_checked(llama_sampler* chain, llama_sampler* inner,
+static void check_modifiable_chain(const LlamaSamplerW& s) {
+    if (!s.is_chain()) throw std::invalid_argument(
+        "sampler is not a chain; build links on a LlamaSampler()");
+    if (s.bound_ctx) throw std::runtime_error(
+        "chain is bound to a context for backend sampling and cannot be "
+        "modified; build a new chain instead");
+}
+
+static inline void chain_add_checked(LlamaSamplerW& s, llama_sampler* inner,
                                        const char* init_name) {
     if (!inner) throw std::invalid_argument(
         std::string("llama_sampler_init_") + init_name +
         " returned NULL (likely invalid arguments)");
-    llama_sampler_chain_add(chain, inner);
+    try { check_modifiable_chain(s); }
+    catch (...) { llama_sampler_free(inner); throw; }
+    llama_sampler_chain_add(s.ptr, inner);
+}
+
+static LlamaSamplerW& check_backend_sampler(nb::handle obj, int seq_id, uint32_t n_seq_max) {
+    if (!nb::isinstance<LlamaSamplerW>(obj)) throw nb::type_error(
+        ("backend sampler must be a LlamaSampler, got " +
+         nb::cast<std::string>(nb::type_name(obj.type()))).c_str());
+    auto& smpl = nb::cast<LlamaSamplerW&>(obj);
+    if (!smpl.ptr) throw std::invalid_argument("backend sampler has been freed");
+    if (!smpl.is_chain()) throw nb::type_error(
+        "backend sampler must be a chain (LlamaSampler()), not a chain link");
+    if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max) throw std::invalid_argument(
+        "seq_id " + std::to_string(seq_id) + " is outside [0, n_seq_max=" +
+        std::to_string(n_seq_max) + ")");
+    if (smpl.bound_ctx) throw std::invalid_argument(
+        "this chain was already attached for backend sampling, which binds it "
+        "to that context for life; attach sampler.clone() instead");
+    return smpl;
+}
+
+// llama.cpp asserts that seq_add / seq_div positions are one-dimensional.
+static void check_positions_shiftable(LlamaContextW& s) {
+    auto rt = llama_model_rope_type(llama_get_model(s.ptr));
+    if (rt == LLAMA_ROPE_TYPE_MROPE || rt == LLAMA_ROPE_TYPE_IMROPE || rt == LLAMA_ROPE_TYPE_VISION)
+        throw std::invalid_argument(
+            "position shifting is not supported for multi-dimensional (M-RoPE) positions");
+}
+
+// Python param_filter for llama_opt_init; llama.cpp offers it only F32 tensors.
+static bool param_filter_cb(const ggml_tensor* t, void* ud) {
+    auto& fn = *static_cast<nb::object*>(ud);
+    if (PyErr_Occurred()) return false;
+    if (fn.is_none()) return llama_opt_param_filter_all(t, nullptr);
+    try { return nb::cast<bool>(fn(std::string(t->name))); }
+    catch (nb::python_error& e) { e.restore(); return false; }
+}
+
+void LlamaContextW::free_ctx() {
+    if (ptr && owner) {
+        llama_free(ptr);
+        ptr = nullptr;
+        // the dict may already be cleared if the GC broke a cycle through self
+        for (auto item : backend_samplers)
+            nb::cast<LlamaSamplerW&>(item.second).attached = false;
+        backend_samplers.clear();
+    }
+}
+
+// Tensor initialiser for llama_model_init_from_user. The callback runs with
+// the GIL held; after a Python error the rest are skipped and the load fails.
+static void init_tensor_cb(ggml_tensor* t, void* ud) {
+    auto& fn = *static_cast<nb::object*>(ud);
+    if (PyErr_Occurred()) return;
+    try {
+        nb::list shape;
+        for (int i = 0; i < ggml_n_dims(t); ++i) shape.append(t->ne[i]);
+        nb::object data = fn(std::string(t->name), nb::tuple(shape));
+        Py_buffer view;
+        if (PyObject_GetBuffer(data.ptr(), &view, PyBUF_C_CONTIGUOUS) != 0) throw nb::python_error();
+        struct Release { Py_buffer* v; ~Release() { PyBuffer_Release(v); } } rel{&view};
+        const int64_t n = ggml_nelements(t);
+        if (view.len != n * (Py_ssize_t) sizeof(float)) throw std::invalid_argument(
+            std::string("init_tensor returned ") + std::to_string(view.len) + " bytes for " + t->name +
+            "; expected " + std::to_string(n) + " float32 values");
+        const float* src = static_cast<const float*>(view.buf);
+        if (t->type == GGML_TYPE_F32) {
+            ggml_backend_tensor_set(t, src, 0, ggml_nbytes(t));
+        } else if (t->type == GGML_TYPE_F16) {
+            std::vector<ggml_fp16_t> half(n);
+            ggml_fp32_to_fp16_row(src, half.data(), n);
+            ggml_backend_tensor_set(t, half.data(), 0, ggml_nbytes(t));
+        } else {
+            throw std::invalid_argument(std::string("tensor ") + t->name + " has type " +
+                                        ggml_type_name(t->type) + "; only F32 and F16 can be initialised");
+        }
+    } catch (nb::python_error& e) {
+        e.restore();
+    } catch (std::exception& e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
+    }
+}
+
+enum { SAMPLE_OK = 0, SAMPLE_NO_LOGITS = 1, SAMPLE_NONE_SELECTED = 2 };
+
+// Mirrors llama_sampler_sample() in llama-sampler.cpp, but returns an error
+// code at each of its GGML_ASSERTs instead of aborting the process.
+static int sampler_sample_checked(llama_sampler* smpl, llama_context* ctx, int32_t idx,
+                                  std::vector<llama_token_data>& cur, llama_token& out) {
+    llama_token token = llama_get_sampled_token_ith(ctx, idx);
+    if (token != LLAMA_TOKEN_NULL) {
+        llama_sampler_accept(smpl, token);
+        out = token;
+        return SAMPLE_OK;
+    }
+    const float* probs = llama_get_sampled_probs_ith(ctx, idx);
+    const float* logits = llama_get_sampled_logits_ith(ctx, idx);
+    const llama_token* ids = llama_get_sampled_candidates_ith(ctx, idx);
+
+    if (probs) {
+        uint32_t n = llama_get_sampled_probs_count_ith(ctx, idx);
+        cur.resize(n);
+        for (uint32_t i = 0; i < n; ++i) cur[i] = llama_token_data{ids[i], logits[i], probs[i]};
+    } else if (logits) {
+        uint32_t n = llama_get_sampled_logits_count_ith(ctx, idx);
+        cur.resize(n);
+        for (uint32_t i = 0; i < n; ++i) cur[i] = llama_token_data{ids[i], logits[i], 0.0f};
+    } else {
+        logits = llama_get_logits_ith(ctx, idx);
+        if (!logits) return SAMPLE_NO_LOGITS;
+        int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+        cur.resize(n_vocab);
+        for (llama_token i = 0; i < n_vocab; ++i) cur[i] = llama_token_data{i, logits[i], 0.0f};
+    }
+
+    llama_token_data_array cur_p = {cur.data(), cur.size(), -1, false};
+    llama_sampler_apply(smpl, &cur_p);
+    // cur_p.data may now point at a sampler-owned buffer
+    if (cur_p.selected < 0 || cur_p.selected >= (int64_t) cur_p.size) return SAMPLE_NONE_SELECTED;
+
+    token = cur_p.data[cur_p.selected].id;
+    llama_sampler_accept(smpl, token);
+    out = token;
+    return SAMPLE_OK;
+}
+
+// -----------------------------------------------------------------------------
+// Python-defined sampler (llama_sampler_init). Callbacks may run with the GIL
+// released by sample(), so each acquires it. A Python exception is left set
+// and the remaining callbacks become no-ops; the binding that called into
+// llama.cpp raises it on return.
+// -----------------------------------------------------------------------------
+
+struct PySamplerCtx {
+    nb::object obj;
+    std::string name;
+};
+
+static llama_sampler* make_py_sampler(nb::object obj);
+static llama_sampler* new_py_sampler(PySamplerCtx* c);
+
+static const char* pys_name(const llama_sampler* smpl) {
+    return static_cast<PySamplerCtx*>(smpl->ctx)->name.c_str();
+}
+
+static void pys_call(llama_sampler* smpl, const char* method, nb::handle arg = nb::handle()) {
+    nb::gil_scoped_acquire gil;
+    if (PyErr_Occurred()) return;
+    nb::object& obj = static_cast<PySamplerCtx*>(smpl->ctx)->obj;
+    try {
+        if (!nb::hasattr(obj, method)) return;
+        if (arg.is_valid()) obj.attr(method)(arg); else obj.attr(method)();
+    } catch (nb::python_error& e) { e.restore(); }
+}
+
+static void pys_accept(llama_sampler* smpl, llama_token token) {
+    nb::gil_scoped_acquire gil;
+    pys_call(smpl, "accept", nb::int_(token));
+}
+
+static void pys_reset(llama_sampler* smpl) { pys_call(smpl, "reset"); }
+
+// Copies a strided llama_token_data field into a stdlib array and back.
+template <class T>
+static nb::object field_to_array(const char* code, const llama_token_data_array* cur, size_t offset) {
+    std::vector<T> tmp(cur->size);
+    for (size_t i = 0; i < cur->size; ++i)
+        std::memcpy(&tmp[i], reinterpret_cast<const char*>(&cur->data[i]) + offset, sizeof(T));
+    nb::object arr = nb::module_::import_("array").attr("array")(code);
+    arr.attr("frombytes")(nb::bytes(reinterpret_cast<const char*>(tmp.data()), tmp.size() * sizeof(T)));
+    return arr;
+}
+
+static void array_to_field(nb::handle arr, llama_token_data_array* cur, size_t offset) {
+    Py_buffer view;
+    if (PyObject_GetBuffer(arr.ptr(), &view, PyBUF_C_CONTIGUOUS) != 0) throw nb::python_error();
+    struct Release { Py_buffer* v; ~Release() { PyBuffer_Release(v); } } rel{&view};
+    if ((size_t) view.len != cur->size * sizeof(float))
+        throw std::invalid_argument("apply() must not resize the logits or probs arrays");
+    for (size_t i = 0; i < cur->size; ++i)
+        std::memcpy(reinterpret_cast<char*>(&cur->data[i]) + offset,
+                    static_cast<const char*>(view.buf) + i * sizeof(float), sizeof(float));
+}
+
+static void pys_apply(llama_sampler* smpl, llama_token_data_array* cur) {
+    nb::gil_scoped_acquire gil;
+    if (PyErr_Occurred()) return;
+    nb::object& obj = static_cast<PySamplerCtx*>(smpl->ctx)->obj;
+    try {
+        nb::object ids = field_to_array<int32_t>("i", cur, offsetof(llama_token_data, id));
+        nb::object logits = field_to_array<float>("f", cur, offsetof(llama_token_data, logit));
+        nb::object probs = field_to_array<float>("f", cur, offsetof(llama_token_data, p));
+        nb::object sel = obj.attr("apply")(ids, logits, probs);
+        array_to_field(logits, cur, offsetof(llama_token_data, logit));
+        array_to_field(probs, cur, offsetof(llama_token_data, p));
+        cur->sorted = false;
+        if (!sel.is_none()) {
+            int64_t i = nb::cast<int64_t>(sel);
+            if (i < 0 || i >= (int64_t) cur->size) throw std::out_of_range(
+                "apply() returned index " + std::to_string(i) + " outside the " +
+                std::to_string(cur->size) + " candidates");
+            cur->selected = i;
+        }
+    } catch (nb::python_error& e) {
+        e.restore();
+    } catch (std::exception& e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
+    }
+}
+
+static llama_sampler* pys_clone(const llama_sampler* smpl) {
+    nb::gil_scoped_acquire gil;
+    nb::object& obj = static_cast<PySamplerCtx*>(smpl->ctx)->obj;
+    try {
+        nb::object copy = nb::hasattr(obj, "clone") ? obj.attr("clone")()
+                                                   : nb::module_::import_("copy").attr("deepcopy")(obj);
+        return make_py_sampler(copy);
+    } catch (nb::python_error& e) {
+        // never return NULL: a chain clone would add it as a link. Share the
+        // object instead; the clone() binding raises and frees the result.
+        e.restore();
+        return new_py_sampler(new PySamplerCtx{obj, pys_name(smpl)});
+    }
+}
+
+static void pys_free(llama_sampler* smpl) {
+    nb::gil_scoped_acquire gil;
+    delete static_cast<PySamplerCtx*>(smpl->ctx);
+}
+
+static llama_sampler_i g_py_sampler_iface = [] {
+    llama_sampler_i i{};
+    i.name = pys_name;
+    i.accept = pys_accept;
+    i.apply = pys_apply;
+    i.reset = pys_reset;
+    i.clone = pys_clone;
+    i.free = pys_free;
+    return i;
+}();
+
+static llama_sampler* make_py_sampler(nb::object obj) {
+    if (!nb::hasattr(obj, "apply")) throw nb::type_error("custom sampler must define apply(ids, logits, probs)");
+    nb::object name = nb::getattr(obj, "name", nb::none());
+    std::string n = nb::cast<std::string>(nb::str(name.is_none() ? obj.type().attr("__name__") : name));
+    return new_py_sampler(new PySamplerCtx{std::move(obj), std::move(n)});
+}
+
+static llama_sampler* new_py_sampler(PySamplerCtx* c) { return llama_sampler_init(&g_py_sampler_iface, c); }
+
+// llama_sampler_copy asserts that both samplers have the same type, and for
+// chains the same links.
+static bool same_sampler_shape(llama_sampler* a, llama_sampler* b) {
+    if (a->iface != b->iface) return false;
+    if (!llama_sampler_chain_get(a, -1)) return true;
+    int n = llama_sampler_chain_n(a);
+    if (n != llama_sampler_chain_n(b)) return false;
+    for (int i = 0; i < n; ++i)
+        if (!same_sampler_shape(llama_sampler_chain_get(a, i), llama_sampler_chain_get(b, i))) return false;
+    return true;
 }
 
 // =============================================================================
@@ -988,6 +1351,12 @@ NB_MODULE(_llama_native, m) {
         .def("token_sep", [](LlamaVocabW& s){ return llama_vocab_sep(s.ptr); })
         .def("token_nl",  [](LlamaVocabW& s){ return llama_vocab_nl(s.ptr); })
         .def("token_pad", [](LlamaVocabW& s){ return llama_vocab_pad(s.ptr); })
+        .def("token_mask", [](LlamaVocabW& s){ return llama_vocab_mask(s.ptr); })
+        .def("get_suppress_tokens", [](LlamaVocabW& s){
+            int32_t n = 0;
+            const llama_token* t = llama_vocab_get_suppress_tokens(s.ptr, &n);
+            return t ? std::vector<llama_token>(t, t + n) : std::vector<llama_token>{};
+        }, "Model-specific suppress tokens (gguf key tokenizer.ggml.suppress_tokens).")
         .def("get_add_bos", [](LlamaVocabW& s){ return (bool) llama_vocab_get_add_bos(s.ptr); })
         .def("get_add_eos", [](LlamaVocabW& s){ return (bool) llama_vocab_get_add_eos(s.ptr); })
         .def("get_add_sep", [](LlamaVocabW& s){ return (bool) llama_vocab_get_add_sep(s.ptr); })
@@ -1064,6 +1433,15 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     nb::class_<LlamaAdapterLoraW>(m, "LlamaAdapterLora",
         "A loaded LoRA adapter handle. Construct via LlamaModel.lora_adapter_init.")
+        .def_prop_ro("model", [](LlamaAdapterLoraW& s){ return s.model_obj; })
+        .def_prop_ro("n_alora_invocation_tokens", [](LlamaAdapterLoraW& s){
+            return llama_adapter_get_alora_n_invocation_tokens(s.ptr);
+        })
+        .def_prop_ro("alora_invocation_tokens", [](LlamaAdapterLoraW& s){
+            const llama_token* t = llama_adapter_get_alora_invocation_tokens(s.ptr);
+            uint64_t n = llama_adapter_get_alora_n_invocation_tokens(s.ptr);
+            return t ? std::vector<llama_token>(t, t + n) : std::vector<llama_token>{};
+        }, "Token sequence that activates an activated LoRA (aLoRA); empty for a plain LoRA.")
         .def("meta_val_str", [](LlamaAdapterLoraW& s, const std::string& key){
             if (key.empty()) throw std::invalid_argument("key must not be an empty string");
             std::vector<char> buf(512);
@@ -1115,7 +1493,93 @@ NB_MODULE(_llama_native, m) {
                  new (self) LlamaModelW(path, params, verbose);
              },
              "path_model"_a, "params"_a = nb::none(), "verbose"_a = true)
-        .def_ro("path_model", &LlamaModelW::path_model)
+        .def_static("from_fileobj",
+             [](nb::object fileobj, nb::object offset,
+                std::optional<LlamaModelParamsW*> p_opt, bool verbose) {
+                 LlamaModelParamsW default_params;
+                 LlamaModelParamsW* lp = p_opt && *p_opt ? *p_opt : &default_params;
+                 llama_model* ptr = with_gguf_file(fileobj, offset, "GGUF model", true,
+                     [&](FILE* f){ return llama_model_load_from_file_ptr(f, lp->p); });
+                 if (!ptr) throw std::invalid_argument(
+                     "Failed to load model from file object. The header passed "
+                     "format checks but llama.cpp could not load it. With mmap, the "
+                     "GGUF data section must sit at a 32-byte aligned file offset. "
+                     "Run with verbose=True to see detailed errors from llama.cpp.");
+                 auto* w = new LlamaModelW();
+                 w->ptr = ptr;
+                 w->verbose = verbose;
+                 nb::object name = nb::getattr(fileobj, "name", nb::none());
+                 if (nb::isinstance<nb::str>(name)) w->path_model = nb::cast<std::string>(name);
+                 w->initialize_cache();
+                 return nb::cast(w, nb::rv_policy::take_ownership);
+             },
+             "fileobj"_a, "offset"_a = nb::none(), "params"_a = nb::none(), "verbose"_a = true,
+             "Load a model from an open binary file or int fd, optionally at a byte "
+             "offset (default: current position). The caller's file position is "
+             "unchanged on return. With mmap, the GGUF data section must be 32-byte "
+             "aligned in the file.")
+        .def_static("from_splits",
+             [](const std::vector<std::string>& paths, std::optional<LlamaModelParamsW*> p_opt, bool verbose) {
+                 if (paths.empty()) throw std::invalid_argument("paths must not be empty");
+                 nb::module_ validation = nb::module_::import_("inferna.utils.validation");
+                 validation.attr("validate_gguf_file")(paths[0], "kind"_a = "GGUF model");
+                 std::vector<const char*> c;
+                 for (auto& x : paths) c.push_back(x.c_str());
+                 LlamaModelParamsW default_params;
+                 LlamaModelParamsW* lp = p_opt && *p_opt ? *p_opt : &default_params;
+                 llama_model* ptr = llama_model_load_from_splits(c.data(), c.size(), lp->p);
+                 if (!ptr) throw std::invalid_argument("Failed to load model from splits starting at " + paths[0]);
+                 auto* w = new LlamaModelW();
+                 w->ptr = ptr;
+                 w->verbose = verbose;
+                 w->path_model = paths[0];
+                 w->initialize_cache();
+                 return nb::cast(w, nb::rv_policy::take_ownership);
+             }, "paths"_a, "params"_a = nb::none(), "verbose"_a = true,
+             "Load a model split across files, given in order. For names that follow "
+             "the -00001-of-0000N.gguf pattern, the constructor finds the rest itself.")
+        .def_static("from_metadata",
+             [](GGUFContextW& metadata, nb::object init_tensor,
+                std::optional<LlamaModelParamsW*> p_opt, bool verbose) {
+                 LlamaModelParamsW default_params;
+                 LlamaModelParamsW* lp = p_opt && *p_opt ? *p_opt : &default_params;
+                 llama_model* ptr = llama_model_init_from_user(metadata.ptr, init_tensor_cb, &init_tensor, lp->p);
+                 if (PyErr_Occurred()) {
+                     if (ptr) llama_model_free(ptr);
+                     throw nb::python_error();
+                 }
+                 if (!ptr) throw std::invalid_argument(
+                     "llama_model_init_from_user failed; run with logging enabled for details");
+                 auto* w = new LlamaModelW();
+                 w->ptr = ptr;
+                 w->verbose = verbose;
+                 w->initialize_cache();
+                 return nb::cast(w, nb::rv_policy::take_ownership);
+             }, "metadata"_a, "init_tensor"_a, "params"_a = nb::none(), "verbose"_a = true,
+             "Create a model from GGUF metadata (architecture hyperparameters and "
+             "tokenizer), without a weights file. init_tensor(name, shape) is called "
+             "for each tensor and returns its values as float32 in any buffer (array('f'), "
+             "numpy). shape is in ggml order: ne0 first. Tensors are F32 unless the "
+             "metadata declares a tensor of the same name with another type.")
+        .def("save_to_file", [](LlamaModelW& s, const std::string& path){
+            nb::gil_scoped_release rel;
+            llama_model_save_to_file(s.ptr, path.c_str());
+        }, "path"_a, "Write the model, including any trained weights, as GGUF.")
+        .def_prop_ro("ftype", [](LlamaModelW& s){ return (int) llama_model_ftype(s.ptr); },
+                     "LLAMA_FTYPE_* value; see llama_ftype_name().")
+        .def_prop_ro("n_swa", [](LlamaModelW& s){ return llama_model_n_swa(s.ptr); },
+                     "Sliding-window attention size; 0 without SWA.")
+        .def_prop_ro("is_diffusion", [](LlamaModelW& s){ return (bool) llama_model_is_diffusion(s.ptr); })
+        .def("cls_label", [](LlamaModelW& s, uint32_t i) -> nb::object {
+            if (i >= llama_model_n_cls_out(s.ptr)) throw nb::index_error("classifier output index out of range");
+            const char* l = llama_model_cls_label(s.ptr, i);
+            if (!l) return nb::none();
+            return nb::str(l);
+        }, "i"_a, "Label of classifier output i, or None if the model has no labels.")
+        .def_prop_ro("path_model", [](LlamaModelW& s) -> nb::object {
+            if (s.path_model.empty()) return nb::none();
+            return nb::cast(s.path_model);
+        })
         .def_ro("verbose", &LlamaModelW::verbose)
         .def_prop_ro("rope_type", [](LlamaModelW& s){
             return (int) llama_model_rope_type(s.ptr);
@@ -1123,6 +1587,8 @@ NB_MODULE(_llama_native, m) {
         .def_prop_ro("n_ctx_train", [](LlamaModelW& s){ return s.cached_n_ctx_train; })
         .def_prop_ro("n_embd",      [](LlamaModelW& s){ return s.cached_n_embd; })
         .def_prop_ro("n_embd_inp",  [](LlamaModelW& s){ return s.cached_n_embd_inp; })
+        .def_prop_ro("n_embd_out",  [](LlamaModelW& s){ return llama_model_n_embd_out(s.ptr); })
+        .def_prop_ro("n_cls_out",   [](LlamaModelW& s){ return llama_model_n_cls_out(s.ptr); })
         .def_prop_ro("n_layer",     [](LlamaModelW& s){ return s.cached_n_layer; })
         .def_prop_ro("n_layer_nextn", [](LlamaModelW& s){ return s.cached_n_layer_nextn; })
         .def_prop_ro("n_head",      [](LlamaModelW& s){ return s.cached_n_head; })
@@ -1163,8 +1629,22 @@ NB_MODULE(_llama_native, m) {
             w->ptr = a;
             // The model owns the adapter (frees on dtor); don't double-free.
             w->owner = false;
+            w->model_obj = self_obj;
             return nb::cast(w, nb::rv_policy::take_ownership);
         })
+        .def("lora_adapter_init_from_fileobj", [](nb::object self_obj, nb::object fileobj, nb::object offset){
+            LlamaModelW& s = nb::cast<LlamaModelW&>(self_obj);
+            llama_adapter_lora* a = with_gguf_file(fileobj, offset, "LoRA adapter", true,
+                [&](FILE* f){ return llama_adapter_lora_init_from_file_ptr(s.ptr, f); });
+            if (!a) throw std::invalid_argument("Failed to load LoRA adapter from file object");
+            auto* w = new LlamaAdapterLoraW{};
+            w->ptr = a;
+            w->owner = false;
+            w->model_obj = self_obj;
+            return nb::cast(w, nb::rv_policy::take_ownership);
+        }, "fileobj"_a, "offset"_a = nb::none(),
+           "Load a LoRA adapter from an open binary file or int fd, optionally at "
+           "a byte offset. Ownership is as for lora_adapter_init.")
         .def("meta_val_str", [](LlamaModelW& s, const std::string& key){
             std::vector<char> buf(512);
             int rc = llama_model_meta_val_str(s.ptr, key.c_str(), buf.data(), (int) buf.size());
@@ -1358,16 +1838,44 @@ NB_MODULE(_llama_native, m) {
         "and per-context perf counters. Single-threaded per instance.")
         .def("__init__",
              [](LlamaContextW* self, nb::object model,
-                std::optional<LlamaContextParamsW*> params, bool verbose) {
-                 new (self) LlamaContextW(model, params, verbose);
+                std::optional<LlamaContextParamsW*> params, bool verbose, nb::object samplers) {
+                 if (samplers.is_none()) { new (self) LlamaContextW(model, params, verbose); return; }
+                 uint32_t n_seq_max = params && *params ? (*params)->p.n_seq_max
+                                                        : llama_context_default_params().n_seq_max;
+                 uint64_t serial = ++g_ctx_serial;
+                 std::vector<llama_sampler_seq_config> configs;
+                 std::vector<std::pair<int, nb::object>> entries;
+                 for (auto item : nb::borrow<nb::dict>(nb::handle((PyObject*) &PyDict_Type)(samplers))) {
+                     int seq_id = nb::cast<int>(item.first);
+                     check_backend_sampler(item.second, seq_id, n_seq_max);
+                     for (auto& e : entries)
+                         if (e.second.is(item.second)) throw std::invalid_argument(
+                             "the same sampler was given for more than one seq_id");
+                     entries.emplace_back(seq_id, nb::borrow(item.second));
+                 }
+                 for (auto& e : entries) {
+                     auto& smpl = nb::cast<LlamaSamplerW&>(e.second);
+                     configs.push_back({e.first, smpl.ptr});
+                     // bind before the call: the constructor may initialise
+                     // the chain and still fail later; llama.cpp skips empty chains
+                     if (llama_sampler_chain_n(smpl.ptr) > 0) smpl.bound_ctx = serial;
+                 }
+                 new (self) LlamaContextW(model, params, verbose, serial, configs);
+                 for (auto& e : entries) {
+                     auto& smpl = nb::cast<LlamaSamplerW&>(e.second);
+                     if (llama_sampler_chain_n(smpl.ptr) > 0) {
+                         smpl.attached = true;
+                         self->backend_samplers[nb::int_(e.first)] = e.second;
+                     }
+                 }
              },
-             "model"_a, "params"_a = nb::none(), "verbose"_a = true)
+             "model"_a, "params"_a = nb::none(), "verbose"_a = true, "samplers"_a = nb::none(),
+             "Create a context. samplers: optional {seq_id: LlamaSampler} chains for "
+             "backend sampling [EXPERIMENTAL]; see set_sampler().")
         .def_ro("verbose", &LlamaContextW::verbose)
         .def_rw("n_tokens", &LlamaContextW::n_tokens)
         .def_prop_ro("model", [](LlamaContextW& s){ return s.model_obj; })
-        .def("close", [](LlamaContextW& s){
-            if (s.ptr && s.owner) { llama_free(s.ptr); s.ptr = nullptr; }
-        })
+        .def("close", [](LlamaContextW& s){ s.free_ctx(); })
         .def_prop_ro("is_valid", [](LlamaContextW& s){ return s.ptr != nullptr; })
         .def_prop_ro("n_ctx",      [](LlamaContextW& s){ s.ensure_valid(); return llama_n_ctx(s.ptr); })
         .def_prop_ro("n_ctx_seq",  [](LlamaContextW& s){ s.ensure_valid(); return llama_n_ctx_seq(s.ptr); })
@@ -1468,41 +1976,329 @@ NB_MODULE(_llama_native, m) {
             [](LlamaContextW& s, bool v){ s.cancel_flag = v; })
         .def("synchronize", [](LlamaContextW& s){ s.ensure_valid(); llama_synchronize(s.ptr); })
         .def("get_state_size", [](LlamaContextW& s){ s.ensure_valid(); return llama_state_get_size(s.ptr); })
+        .def("get_state_data", [](LlamaContextW& s){
+            s.ensure_valid();
+            std::vector<uint8_t> buf(llama_state_get_size(s.ptr));
+            size_t n;
+            {
+                nb::gil_scoped_release rel;
+                n = llama_state_get_data(s.ptr, buf.data(), buf.size());
+            }
+            return nb::bytes(reinterpret_cast<const char*>(buf.data()), n);
+        }, "Serialize the full context state (logits, embeddings, KV cache).")
+        .def("set_state_data", [](LlamaContextW& s, nb::bytes data){
+            s.ensure_valid();
+            size_t n;
+            {
+                nb::gil_scoped_release rel;
+                n = llama_state_set_data(s.ptr, reinterpret_cast<const uint8_t*>(data.c_str()), data.size());
+            }
+            if (n == 0) throw std::invalid_argument("Failed to load state data");
+            return n;
+        }, "data"_a, "Restore state from get_state_data(). Returns the bytes read.")
+        .def("save_state_file", [](LlamaContextW& s, const std::string& path, const std::vector<llama_token>& tokens){
+            s.ensure_valid();
+            bool ok;
+            {
+                nb::gil_scoped_release rel;
+                ok = llama_state_save_file(s.ptr, path.c_str(), tokens.data(), tokens.size());
+            }
+            if (!ok) throw std::runtime_error("llama_state_save_file failed for " + path);
+        }, "path"_a, "tokens"_a,
+           "Save the full state and the tokens that produced it to a session file.")
+        .def("load_state_file", [](LlamaContextW& s, const std::string& path, std::optional<size_t> max_n_tokens){
+            s.ensure_valid();
+            std::vector<llama_token> tokens(max_n_tokens ? *max_n_tokens : llama_n_ctx(s.ptr));
+            size_t n = 0;
+            bool ok;
+            {
+                nb::gil_scoped_release rel;
+                ok = llama_state_load_file(s.ptr, path.c_str(), tokens.data(), tokens.size(), &n);
+            }
+            if (!ok) throw std::runtime_error("llama_state_load_file failed for " + path);
+            tokens.resize(n);
+            return tokens;
+        }, "path"_a, "max_n_tokens"_a = nb::none(),
+           "Load a session file; returns its tokens. max_n_tokens defaults to n_ctx.")
+        .def("get_state_seq_size", [](LlamaContextW& s, int seq_id, uint32_t flags){
+            s.ensure_valid();
+            return llama_state_seq_get_size_ext(s.ptr, seq_id, flags);
+        }, "seq_id"_a, "flags"_a = 0)
+        .def("get_state_seq_data", [](LlamaContextW& s, int seq_id, uint32_t flags){
+            s.ensure_valid();
+            std::vector<uint8_t> buf(llama_state_seq_get_size_ext(s.ptr, seq_id, flags));
+            size_t n;
+            {
+                nb::gil_scoped_release rel;
+                n = llama_state_seq_get_data_ext(s.ptr, buf.data(), buf.size(), seq_id, flags);
+            }
+            return nb::bytes(reinterpret_cast<const char*>(buf.data()), n);
+        }, "seq_id"_a, "flags"_a = 0,
+           "Serialize one sequence's KV cache. flags: LLAMA_STATE_SEQ_FLAGS_*.")
+        .def("set_state_seq_data", [](LlamaContextW& s, nb::bytes data, int dest_seq_id, uint32_t flags){
+            s.ensure_valid();
+            size_t n;
+            {
+                nb::gil_scoped_release rel;
+                n = llama_state_seq_set_data_ext(s.ptr, reinterpret_cast<const uint8_t*>(data.c_str()),
+                                                 data.size(), dest_seq_id, flags);
+            }
+            if (n == 0) throw std::invalid_argument("Failed to load sequence state data");
+            return n;
+        }, "data"_a, "dest_seq_id"_a, "flags"_a = 0,
+           "Restore get_state_seq_data() into dest_seq_id. Returns the bytes read.")
+        .def("save_state_seq_file", [](LlamaContextW& s, const std::string& path, int seq_id,
+                                       const std::vector<llama_token>& tokens){
+            s.ensure_valid();
+            size_t n;
+            {
+                nb::gil_scoped_release rel;
+                n = llama_state_seq_save_file(s.ptr, path.c_str(), seq_id, tokens.data(), tokens.size());
+            }
+            if (n == 0) throw std::runtime_error("llama_state_seq_save_file failed for " + path);
+            return n;
+        }, "path"_a, "seq_id"_a, "tokens"_a,
+           "Save one sequence's state and tokens to a file. Returns the bytes written.")
+        .def("load_state_seq_file", [](LlamaContextW& s, const std::string& path, int dest_seq_id,
+                                       std::optional<size_t> max_n_tokens){
+            s.ensure_valid();
+            std::vector<llama_token> tokens(max_n_tokens ? *max_n_tokens : llama_n_ctx(s.ptr));
+            size_t n = 0, read;
+            {
+                nb::gil_scoped_release rel;
+                read = llama_state_seq_load_file(s.ptr, path.c_str(), dest_seq_id,
+                                                 tokens.data(), tokens.size(), &n);
+            }
+            if (read == 0) throw std::runtime_error("llama_state_seq_load_file failed for " + path);
+            tokens.resize(n);
+            return tokens;
+        }, "path"_a, "dest_seq_id"_a, "max_n_tokens"_a = nb::none(),
+           "Load a sequence file into dest_seq_id; returns its tokens.")
         .def("kv_cache_clear", [](LlamaContextW& s, bool clear_data){
             s.ensure_valid();
             llama_memory_t mem = llama_get_memory(s.ptr);
             if (mem) llama_memory_clear(mem, clear_data);
         }, "clear_data"_a = true)
         .def("memory_seq_rm", [](LlamaContextW& s, int seq_id, int p0, int p1){
-            s.ensure_valid();
+            s.check_seq(seq_id, true);
             llama_memory_t mem = llama_get_memory(s.ptr);
             return mem ? (bool) llama_memory_seq_rm(mem, seq_id, p0, p1) : false;
         })
         .def("memory_seq_cp", [](LlamaContextW& s, int src, int dst, int p0, int p1){
-            s.ensure_valid();
+            s.check_seq(src);
+            s.check_seq(dst);
             llama_memory_t mem = llama_get_memory(s.ptr);
             if (mem) llama_memory_seq_cp(mem, src, dst, p0, p1);
         })
         .def("memory_seq_keep", [](LlamaContextW& s, int seq_id){
-            s.ensure_valid();
+            s.check_seq(seq_id);
             llama_memory_t mem = llama_get_memory(s.ptr);
             if (mem) llama_memory_seq_keep(mem, seq_id);
         })
         .def("memory_seq_add", [](LlamaContextW& s, int seq_id, int p0, int p1, int delta){
-            s.ensure_valid();
+            s.check_seq(seq_id);
+            check_positions_shiftable(s);
             llama_memory_t mem = llama_get_memory(s.ptr);
             if (mem) llama_memory_seq_add(mem, seq_id, p0, p1, delta);
         })
         .def("memory_seq_pos_min", [](LlamaContextW& s, int seq_id){
-            s.ensure_valid();
+            s.check_seq(seq_id);
             llama_memory_t mem = llama_get_memory(s.ptr);
             return mem ? llama_memory_seq_pos_min(mem, seq_id) : -1;
         })
         .def("memory_seq_pos_max", [](LlamaContextW& s, int seq_id){
-            s.ensure_valid();
+            s.check_seq(seq_id);
             llama_memory_t mem = llama_get_memory(s.ptr);
             return mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
         })
+        .def("memory_seq_div", [](LlamaContextW& s, int seq_id, int p0, int p1, int d){
+            s.check_seq(seq_id);
+            check_positions_shiftable(s);
+            if (d < 1) throw std::invalid_argument("d must be >= 1");
+            llama_memory_t mem = llama_get_memory(s.ptr);
+            if (mem) llama_memory_seq_div(mem, seq_id, p0, p1, d);
+        }, "seq_id"_a, "p0"_a, "p1"_a, "d"_a,
+           "Integer-divide the positions of seq_id in [p0, p1) by d (self-extend).")
+        .def("memory_can_shift", [](LlamaContextW& s){
+            s.ensure_valid();
+            llama_memory_t mem = llama_get_memory(s.ptr);
+            return mem ? llama_memory_can_shift(mem) : false;
+        }, "Whether the memory supports position shifting (memory_seq_add / _div).")
+        .def("set_adapter_cvec", [](LlamaContextW& s, std::optional<std::vector<float>> data,
+                                    int n_embd, int il_start, int il_end){
+            s.ensure_valid();
+            int rc = data
+                ? llama_set_adapter_cvec(s.ptr, data->data(), data->size(), n_embd, il_start, il_end)
+                : llama_set_adapter_cvec(s.ptr, nullptr, 0, n_embd, il_start, il_end);
+            if (rc != 0) throw std::invalid_argument(
+                "llama_set_adapter_cvec failed (rc=" + std::to_string(rc) +
+                "); data must hold n_embd floats per layer, starting at layer 1");
+        }, "data"_a.none(), "n_embd"_a, "il_start"_a, "il_end"_a,
+           "Apply a control vector to layers [il_start, il_end], or clear it with data=None. "
+           "data is n_embd x n_layer floats starting at layer 1.")
+        .def("set_sampler", [](nb::object self_obj, int seq_id, nb::object sampler){
+            LlamaContextW& s = nb::cast<LlamaContextW&>(self_obj);
+            s.ensure_valid();
+            nb::object key = nb::int_(seq_id);
+            if (!sampler.is_none() && s.backend_samplers.contains(key) &&
+                s.backend_samplers[key].is(sampler)) return true;
+            bool ok;
+            LlamaSamplerW* smpl = nullptr;
+            if (!sampler.is_none()) {
+                smpl = &check_backend_sampler(sampler, seq_id, llama_n_seq_max(s.ptr));
+                if (llama_sampler_chain_n(smpl->ptr) > 0) smpl->bound_ctx = s.serial;
+                ok = llama_set_sampler(s.ptr, seq_id, smpl->ptr);
+            } else {
+                ok = llama_set_sampler(s.ptr, seq_id, nullptr);
+            }
+            // llama.cpp replaces or drops the previous chain for seq_id either way
+            if (s.backend_samplers.contains(key)) {
+                nb::cast<LlamaSamplerW&>(s.backend_samplers[key]).attached = false;
+                PyDict_DelItem(s.backend_samplers.ptr(), key.ptr());
+            }
+            if (smpl && ok) {
+                smpl->attached = true;
+                s.backend_samplers[key] = sampler;
+            }
+            return ok;
+        }, "seq_id"_a, "sampler"_a.none(),
+           "Attach a sampler chain to seq_id for backend sampling [EXPERIMENTAL], or "
+           "detach with None. Attaching binds the chain to this context for life: it "
+           "cannot be attached again, used with another context, or modified. Use "
+           "sampler.clone() for a fresh chain. Returns False if llama.cpp could not "
+           "offload the chain.")
+        .def_prop_ro("backend_samplers", [](LlamaContextW& s){
+            return nb::steal<nb::dict>(PyDict_Copy(s.backend_samplers.ptr()));
+        },
+           "Chains attached for backend sampling, keyed by seq_id.")
+        .def("sampled_token_ith", [](LlamaContextW& s, int i) -> nb::object {
+            s.ensure_valid();
+            llama_token t = llama_get_sampled_token_ith(s.ptr, i);
+            if (t == LLAMA_TOKEN_NULL) return nb::none();
+            return nb::int_(t);
+        }, "Backend-sampled token for output i, or None.")
+        .def("sampled_probs_ith", [](LlamaContextW& s, int i) -> nb::object {
+            s.ensure_valid();
+            const float* d = llama_get_sampled_probs_ith(s.ptr, i);
+            uint32_t n = llama_get_sampled_probs_count_ith(s.ptr, i);
+            if (!d || !n) return nb::none();
+            return nb::cast(std::vector<float>(d, d + n));
+        }, "Backend probabilities for output i, aligned with sampled_candidates_ith().")
+        .def("sampled_logits_ith", [](LlamaContextW& s, int i) -> nb::object {
+            s.ensure_valid();
+            const float* d = llama_get_sampled_logits_ith(s.ptr, i);
+            uint32_t n = llama_get_sampled_logits_count_ith(s.ptr, i);
+            if (!d || !n) return nb::none();
+            return nb::cast(std::vector<float>(d, d + n));
+        }, "Backend logits for output i, aligned with sampled_candidates_ith().")
+        .def("sampled_candidates_ith", [](LlamaContextW& s, int i) -> nb::object {
+            s.ensure_valid();
+            const llama_token* d = llama_get_sampled_candidates_ith(s.ptr, i);
+            uint32_t n = llama_get_sampled_candidates_count_ith(s.ptr, i);
+            if (!d || !n) return nb::none();
+            return nb::cast(std::vector<llama_token>(d, d + n));
+        }, "Vocab token ids indexing sampled_probs_ith() / sampled_logits_ith().")
+        .def("opt_init", [](LlamaContextW& s, float learning_rate, float weight_decay,
+                            const std::string& optimizer, uint32_t n_ctx_train, nb::object param_filter){
+            s.ensure_valid();
+            if (s.opt_status) throw std::runtime_error("opt_init was already called on this context");
+            // quantized weights overflow the backward graph (GGML_ASSERT in
+            // ggml_graph_add_node); upstream supports finetuning F32 models only
+            int ftype = llama_model_ftype(llama_get_model(s.ptr)) & ~LLAMA_FTYPE_GUESSED;
+            if (ftype != LLAMA_FTYPE_ALL_F32) throw std::invalid_argument(
+                std::string("training needs an F32 model; this one is ") +
+                llama_ftype_name((llama_ftype) ftype));
+            if (s.type_k != GGML_TYPE_F32 || s.type_v != GGML_TYPE_F32) throw std::invalid_argument(
+                "training needs an F32 KV cache: set type_k = type_v = GGML_TYPE_F32");
+            ggml_opt_optimizer_type type;
+            if (optimizer == "adamw") type = GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+            else if (optimizer == "sgd") type = GGML_OPT_OPTIMIZER_TYPE_SGD;
+            else throw std::invalid_argument("optimizer must be 'adamw' or 'sgd'");
+            uint32_t n_train = n_ctx_train ? n_ctx_train : llama_n_ctx(s.ptr);
+            uint32_t n_batch = std::min(llama_n_batch(s.ptr), n_train);
+            uint32_t n_ubatch = std::min(llama_n_ubatch(s.ptr), n_batch);
+            if (n_train % n_batch || n_batch % n_ubatch) throw std::invalid_argument(
+                "n_ctx_train (" + std::to_string(n_train) + ") must be a multiple of n_batch (" +
+                std::to_string(n_batch) + "), and n_batch of n_ubatch (" + std::to_string(n_ubatch) + ")");
+            s.opt.lr = learning_rate;
+            s.opt.wd = weight_decay;
+            llama_opt_params lp{};
+            lp.n_ctx_train = n_ctx_train;
+            lp.param_filter = param_filter_cb;
+            lp.param_filter_ud = &param_filter;
+            lp.get_opt_pars = opt_pars_cb;
+            lp.get_opt_pars_ud = &s.opt;
+            lp.optimizer_type = type;
+            s.opt_status = 2;
+            llama_opt_init(s.ptr, const_cast<llama_model*>(llama_get_model(s.ptr)), lp);
+            if (PyErr_Occurred()) throw nb::python_error();
+            s.opt_status = 1;
+        }, "learning_rate"_a = 1e-5f, "weight_decay"_a = 0.0f, "optimizer"_a = "adamw",
+           "n_ctx_train"_a = 0, "param_filter"_a = nb::none(),
+           "Prepare this context for training. param_filter(name) -> bool selects "
+           "trainable tensors among the F32 ones (default: all). Needs an F32 model and "
+           "an F32 KV cache. "
+           "Sets the model's n_ctx_train to n_ctx_train, or to n_ctx when 0.")
+        .def("opt_epoch", [](LlamaContextW& s, const std::vector<llama_token>& tokens, float val_split,
+                             std::optional<int64_t> stride, std::optional<float> learning_rate){
+            s.ensure_valid();
+            if (s.opt_status == 0) throw std::runtime_error("call opt_init first");
+            if (s.opt_status == 2) throw std::runtime_error("opt_init failed; this context cannot train");
+            if (!(val_split >= 0.0f && val_split < 1.0f)) throw std::invalid_argument("val_split must be in [0, 1)");
+            const int64_t n_ctx = llama_n_ctx(s.ptr);
+            const int64_t step = stride ? *stride : std::max<int64_t>(n_ctx / 2, 1);
+            if (step < 1) throw std::invalid_argument("stride must be >= 1");
+            const int64_t n_tok = (int64_t) tokens.size();
+            const int64_t ndata = n_tok > n_ctx ? (n_tok - n_ctx - 1) / step : 0;
+            if (ndata < 1) throw std::invalid_argument(
+                "need at least n_ctx + stride + 1 = " + std::to_string(n_ctx + step + 1) + " tokens");
+            int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(s.ptr)));
+            for (llama_token t : tokens)
+                if (t < 0 || t >= n_vocab) throw std::invalid_argument(
+                    "token " + std::to_string(t) + " is outside the vocabulary");
+            if (learning_rate) s.opt.lr = *learning_rate;
+
+            struct Owned {
+                ggml_opt_dataset_t data; ggml_opt_result_t train, eval;
+                ~Owned() { ggml_opt_result_free(eval); ggml_opt_result_free(train); ggml_opt_dataset_free(data); }
+            } o{ggml_opt_dataset_init(GGML_TYPE_I32, GGML_TYPE_I32, n_ctx, n_ctx, ndata, 1),
+                ggml_opt_result_init(), ggml_opt_result_init()};
+            // same layout as llama.cpp's common_opt_dataset_init: labels are inputs shifted by one
+            auto* in = (llama_token*) ggml_opt_dataset_data(o.data)->data;
+            auto* lab = (llama_token*) ggml_opt_dataset_labels(o.data)->data;
+            for (int64_t i = 0; i < ndata; ++i) {
+                std::memcpy(in + i * n_ctx, tokens.data() + i * step, n_ctx * sizeof(llama_token));
+                std::memcpy(lab + i * n_ctx, tokens.data() + i * step + 1, n_ctx * sizeof(llama_token));
+            }
+            const int64_t split = (int64_t) (ndata * (1.0f - val_split));
+            if (split < 1) throw std::invalid_argument(
+                std::to_string(ndata) + " window(s) of n_ctx=" + std::to_string(n_ctx) +
+                " tokens leave none for training at val_split=" + std::to_string(val_split) +
+                "; pass more tokens or a smaller val_split");
+            {
+                nb::gil_scoped_release rel;
+                llama_opt_epoch(s.ptr, o.data, o.train, o.eval, split, nullptr, nullptr);
+            }
+            auto summary = [](ggml_opt_result_t r) -> nb::object {
+                int64_t n = 0;
+                ggml_opt_result_ndata(r, &n);
+                nb::dict d;
+                d["n_tokens"] = n;
+                double loss = 0, unc = 0, acc = 0;
+                ggml_opt_result_loss(r, &loss, &unc);
+                d["loss"] = n ? nb::cast(loss) : nb::none();
+                ggml_opt_result_accuracy(r, &acc, &unc);
+                d["accuracy"] = n ? nb::cast(acc) : nb::none();
+                return d;
+            };
+            nb::dict out;
+            out["train"] = summary(o.train);
+            out["eval"] = summary(o.eval);
+            return out;
+        }, "tokens"_a, "val_split"_a = 0.05f, "stride"_a = nb::none(), "learning_rate"_a = nb::none(),
+           "Run one training epoch over windows of n_ctx tokens taken every stride tokens "
+           "(default n_ctx / 2); the last val_split of windows are evaluated only. Returns "
+           "{'train': {...}, 'eval': {...}}, each with n_tokens (predictions scored), loss and accuracy.")
         .def("get_logits", [](LlamaContextW& s){
             s.ensure_valid();
             LlamaModelW& model = nb::cast<LlamaModelW&>(s.model_obj);
@@ -1522,7 +2318,7 @@ NB_MODULE(_llama_native, m) {
         .def("get_embeddings", [](LlamaContextW& s){
             s.ensure_valid();
             LlamaModelW& model = nb::cast<LlamaModelW&>(s.model_obj);
-            int n_embd = model.cached_n_embd;
+            int n_embd = llama_model_n_embd_out(model.ptr);
             float* e = llama_get_embeddings(s.ptr);
             if (!e) throw std::invalid_argument("no embeddings available");
             return std::vector<float>(e, e + n_embd);
@@ -1530,11 +2326,23 @@ NB_MODULE(_llama_native, m) {
         .def("get_embeddings_ith", [](LlamaContextW& s, int i){
             s.ensure_valid();
             LlamaModelW& model = nb::cast<LlamaModelW&>(s.model_obj);
-            int n_embd = model.cached_n_embd;
+            int n_embd = llama_model_n_embd_out(model.ptr);
             float* e = llama_get_embeddings_ith(s.ptr, i);
             if (!e) throw std::invalid_argument(std::to_string(i) + " is an invalid id");
             return std::vector<float>(e, e + n_embd);
         })
+        .def("get_embeddings_seq", [](LlamaContextW& s, int seq_id) -> nb::object {
+            s.ensure_valid();
+            float* e = llama_get_embeddings_seq(s.ptr, seq_id);
+            if (!e) return nb::none();
+            LlamaModelW& model = nb::cast<LlamaModelW&>(s.model_obj);
+            // the effective pooling type: params may say UNSPECIFIED (model default)
+            int n = llama_pooling_type(s.ptr) == LLAMA_POOLING_TYPE_RANK
+                ? (int) llama_model_n_cls_out(model.ptr) : llama_model_n_embd_out(model.ptr);
+            return nb::cast(std::vector<float>(e, e + n));
+        }, "seq_id"_a,
+           "Pooled embedding for seq_id, or None when pooling_type is NONE. With "
+           "RANK pooling, returns the n_cls_out classifier scores.")
         .def("get_perf_data", [](LlamaContextW& s){
             s.ensure_valid();
             llama_perf_context_data d = llama_perf_context(s.ptr);
@@ -1565,52 +2373,112 @@ NB_MODULE(_llama_native, m) {
         .def("name", [](LlamaSamplerW& s){
             return std::string(llama_sampler_name(s.ptr));
         })
-        .def("accept", [](LlamaSamplerW& s, int t){ llama_sampler_accept(s.ptr, t); })
-        .def("reset",  [](LlamaSamplerW& s){ llama_sampler_reset(s.ptr); })
+        .def("accept", [](LlamaSamplerW& s, int t){
+            llama_sampler_accept(s.ptr, t);
+            if (PyErr_Occurred()) throw nb::python_error();
+        })
+        .def("reset",  [](LlamaSamplerW& s){
+            llama_sampler_reset(s.ptr);
+            if (PyErr_Occurred()) throw nb::python_error();
+        })
+        .def("__len__", [](LlamaSamplerW& s){ return s.is_chain() ? llama_sampler_chain_n(s.ptr) : 0; },
+             "Number of chain links.")
+        .def("chain_get", [](nb::object self_obj, int i){
+            LlamaSamplerW& s = nb::cast<LlamaSamplerW&>(self_obj);
+            if (!s.is_chain()) throw std::invalid_argument("sampler is not a chain");
+            int n = llama_sampler_chain_n(s.ptr);
+            if (i < 0) i += n;
+            if (i < 0 || i >= n) throw nb::index_error(
+                ("chain index out of range (chain has " + std::to_string(n) + " links)").c_str());
+            auto* w = new LlamaSamplerW{};
+            w->ptr = llama_sampler_chain_get(s.ptr, i);
+            w->owner = false;  // the chain frees it
+            w->parent = self_obj;
+            return nb::cast(w, nb::rv_policy::take_ownership);
+        }, "i"_a, "Link i as a view owned by this chain.")
+        .def("chain_remove", [](LlamaSamplerW& s, int i){
+            check_modifiable_chain(s);
+            int n = llama_sampler_chain_n(s.ptr);
+            if (i < 0) i += n;
+            if (i < 0 || i >= n) throw nb::index_error(
+                ("chain index out of range (chain has " + std::to_string(n) + " links)").c_str());
+            auto* w = new LlamaSamplerW{};
+            w->ptr = llama_sampler_chain_remove(s.ptr, i);
+            w->owner = true;  // ownership moves out of the chain
+            return nb::cast(w, nb::rv_policy::take_ownership);
+        }, "i"_a, "Detach link i and return it; the caller now owns it.")
+        .def("copy_state_from", [](LlamaSamplerW& s, LlamaSamplerW& src){
+            if (!s.ptr || !src.ptr) throw std::invalid_argument("sampler has been freed");
+            if (!same_sampler_shape(src.ptr, s.ptr)) throw std::invalid_argument(
+                "samplers differ in type or chain links; copy_state_from needs a clone of the same chain");
+            llama_sampler_copy(src.ptr, s.ptr);
+            if (PyErr_Occurred()) throw nb::python_error();
+        }, "src"_a, "Copy src's state (RNG, penalty history, ...) into this sampler.")
+        .def("add_custom", [](LlamaSamplerW& s, nb::object obj){
+            chain_add_checked(s, make_py_sampler(obj), "custom");
+        }, "sampler"_a,
+           "Add a Python sampler: an object with apply(ids, logits, probs) -> index | None "
+           "and optional name, accept(token), reset(), clone(). The three arguments are "
+           "stdlib arrays ('i', 'f', 'f') copied from the candidates; changes to logits "
+           "and probs are copied back. Returning an index selects that candidate.")
+        .def("add_grammar_lazy_patterns", [](LlamaSamplerW& s, LlamaVocabW& vocab,
+                const std::string& grammar_str, const std::string& grammar_root,
+                const std::vector<std::string>& trigger_patterns,
+                const std::vector<llama_token>& trigger_tokens){
+            std::vector<const char*> pats;
+            for (auto& t : trigger_patterns) pats.push_back(t.c_str());
+            chain_add_checked(s, llama_sampler_init_grammar_lazy_patterns(
+                vocab.ptr, grammar_str.c_str(), grammar_root.c_str(),
+                pats.data(), pats.size(), trigger_tokens.data(), trigger_tokens.size()),
+                "grammar_lazy_patterns");
+        }, "vocab"_a, "grammar_str"_a, "grammar_root"_a,
+           "trigger_patterns"_a = std::vector<std::string>{}, "trigger_tokens"_a = std::vector<llama_token>{},
+           "Grammar that activates on the first match of a trigger pattern or token.")
         .def("clone",  [](LlamaSamplerW& s){
             auto* w = new LlamaSamplerW{};
             w->ptr = llama_sampler_clone(s.ptr);
             w->owner = true;
+            if (PyErr_Occurred()) { delete w; throw nb::python_error(); }
             return nb::cast(w, nb::rv_policy::take_ownership);
-        })
+        }, "Copy of this sampler with its state. A clone is never bound to a context.")
         .def("get_seed", [](LlamaSamplerW& s){ return llama_sampler_get_seed(s.ptr); })
         .def("add_greedy", [](LlamaSamplerW& s){
-            chain_add_checked(s.ptr, llama_sampler_init_greedy(), "greedy");
+            chain_add_checked(s, llama_sampler_init_greedy(), "greedy");
         })
         .def("add_dist", [](LlamaSamplerW& s, uint32_t seed){
-            chain_add_checked(s.ptr, llama_sampler_init_dist(seed), "dist");
+            chain_add_checked(s, llama_sampler_init_dist(seed), "dist");
         })
         .def("add_top_k", [](LlamaSamplerW& s, int32_t k){
-            chain_add_checked(s.ptr, llama_sampler_init_top_k(k), "top_k");
+            chain_add_checked(s, llama_sampler_init_top_k(k), "top_k");
         })
         .def("add_top_p", [](LlamaSamplerW& s, float p, size_t mk){
-            chain_add_checked(s.ptr, llama_sampler_init_top_p(p, mk), "top_p");
+            chain_add_checked(s, llama_sampler_init_top_p(p, mk), "top_p");
         })
         .def("add_min_p", [](LlamaSamplerW& s, float p, size_t mk){
-            chain_add_checked(s.ptr, llama_sampler_init_min_p(p, mk), "min_p");
+            chain_add_checked(s, llama_sampler_init_min_p(p, mk), "min_p");
         })
         .def("add_typical", [](LlamaSamplerW& s, float p, size_t mk){
-            chain_add_checked(s.ptr, llama_sampler_init_typical(p, mk), "typical");
+            chain_add_checked(s, llama_sampler_init_typical(p, mk), "typical");
         })
         .def("add_temp", [](LlamaSamplerW& s, float t){
-            chain_add_checked(s.ptr, llama_sampler_init_temp(t), "temp");
+            chain_add_checked(s, llama_sampler_init_temp(t), "temp");
         })
         .def("add_temp_ext", [](LlamaSamplerW& s, float t, float d, float e){
-            chain_add_checked(s.ptr, llama_sampler_init_temp_ext(t, d, e), "temp_ext");
+            chain_add_checked(s, llama_sampler_init_temp_ext(t, d, e), "temp_ext");
         })
         .def("add_xtc", [](LlamaSamplerW& s, float p, float t, size_t mk, uint32_t seed){
-            chain_add_checked(s.ptr, llama_sampler_init_xtc(p, t, mk, seed), "xtc");
+            chain_add_checked(s, llama_sampler_init_xtc(p, t, mk, seed), "xtc");
         })
         .def("add_mirostat", [](LlamaSamplerW& s, int n_vocab, uint32_t seed,
                                   float tau, float eta, int m){
-            chain_add_checked(s.ptr, llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m), "mirostat");
+            chain_add_checked(s, llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m), "mirostat");
         })
         .def("add_mirostat_v2", [](LlamaSamplerW& s, uint32_t seed, float tau, float eta){
-            chain_add_checked(s.ptr, llama_sampler_init_mirostat_v2(seed, tau, eta), "mirostat_v2");
+            chain_add_checked(s, llama_sampler_init_mirostat_v2(seed, tau, eta), "mirostat_v2");
         })
         .def("add_grammar", [](LlamaSamplerW& s, LlamaVocabW& vocab,
                                  const std::string& grammar_str, const std::string& grammar_root){
-            chain_add_checked(s.ptr,
+            chain_add_checked(s,
                 llama_sampler_init_grammar(vocab.ptr, grammar_str.c_str(), grammar_root.c_str()),
                 "grammar");
         })
@@ -1619,7 +2487,7 @@ NB_MODULE(_llama_native, m) {
         // rather than defaulted (matching add_mirostat / add_logit_bias).
         .def("add_penalties", [](LlamaSamplerW& s, int n_vocab, int last_n, float repeat,
                                   float freq, float present){
-            chain_add_checked(s.ptr,
+            chain_add_checked(s,
                 llama_sampler_init_penalties(n_vocab, last_n, repeat, freq, present),
                 "penalties");
         }, "n_vocab"_a, "penalty_last_n"_a, "penalty_repeat"_a, "penalty_freq"_a, "penalty_present"_a)
@@ -1633,16 +2501,16 @@ NB_MODULE(_llama_native, m) {
                 b.bias  = nb::cast<float>(t[1]);
                 arr.push_back(b);
             }
-            chain_add_checked(s.ptr,
+            chain_add_checked(s,
                 llama_sampler_init_logit_bias(n_vocab, (int) arr.size(),
                                                 arr.empty() ? nullptr : arr.data()),
                 "logit_bias");
         })
         .def("add_infill", [](LlamaSamplerW& s, LlamaVocabW& vocab){
-            chain_add_checked(s.ptr, llama_sampler_init_infill(vocab.ptr), "infill");
+            chain_add_checked(s, llama_sampler_init_infill(vocab.ptr), "infill");
         })
         .def("add_top_n_sigma", [](LlamaSamplerW& s, float n){
-            chain_add_checked(s.ptr, llama_sampler_init_top_n_sigma(n), "top_n_sigma");
+            chain_add_checked(s, llama_sampler_init_top_n_sigma(n), "top_n_sigma");
         }, "n"_a)
         .def("add_dry", [](LlamaSamplerW& s, LlamaVocabW& vocab,
                            float dry_multiplier, float dry_base, int32_t dry_allowed_length,
@@ -1655,7 +2523,7 @@ NB_MODULE(_llama_native, m) {
             std::vector<const char*> breakers_c;
             breakers_c.reserve(breakers_owned.size());
             for (auto& b : breakers_owned) breakers_c.push_back(b.c_str());
-            chain_add_checked(s.ptr,
+            chain_add_checked(s,
                 llama_sampler_init_dry(vocab.ptr, dry_multiplier, dry_base,
                                        dry_allowed_length, dry_penalty_last_n,
                                        breakers_c.empty() ? nullptr : breakers_c.data(),
@@ -1664,9 +2532,38 @@ NB_MODULE(_llama_native, m) {
         }, "vocab"_a, "dry_multiplier"_a, "dry_base"_a,
            "dry_allowed_length"_a, "dry_penalty_last_n"_a, "seq_breakers"_a)
         .def("add_adaptive_p", [](LlamaSamplerW& s, float target, float decay, uint32_t seed){
-            chain_add_checked(s.ptr, llama_sampler_init_adaptive_p(target, decay, seed), "adaptive_p");
+            chain_add_checked(s, llama_sampler_init_adaptive_p(target, decay, seed), "adaptive_p");
         }, "target"_a, "decay"_a, "seed"_a)
         .def("sample", [](LlamaSamplerW& s, LlamaContextW& ctx, int idx){
+            if (!s.ptr) throw std::runtime_error("Sampler is closed");
+            ctx.ensure_valid();
+            // a bound chain skips its backend links on the CPU, so it would
+            // silently sample wrong on any other context
+            if (s.bound_ctx && s.bound_ctx != ctx.serial) throw std::invalid_argument(
+                "chain is bound to another context for backend sampling; "
+                "use sampler.clone() with this context");
+            llama_token tok = LLAMA_TOKEN_NULL;
+            int rc;
+            {
+                nb::gil_scoped_release rel;
+                rc = sampler_sample_checked(s.ptr, ctx.ptr, idx, s.cur, tok);
+            }
+            if (PyErr_Occurred()) throw nb::python_error();
+            if (rc == SAMPLE_NO_LOGITS) throw std::invalid_argument(
+                "no logits for output " + std::to_string(idx) +
+                ": index out of range, or its batch.logits flag was not set");
+            if (rc == SAMPLE_NONE_SELECTED) throw std::invalid_argument(
+                "sampler chain selected no token: end it with a selecting sampler "
+                "(greedy, dist, mirostat, mirostat_v2 or adaptive_p) and add no "
+                "filters after it");
+            return tok;
+        }, "ctx"_a, "idx"_a,
+           "Sample and accept a token from the idx-th output of the last decode. "
+           "Equivalent to llama_sampler_sample, which aborts the process where "
+           "this raises ValueError.")
+        .def("_sample_upstream", [](LlamaSamplerW& s, LlamaContextW& ctx, int idx){
+            // Test use only: the reference sample() must match. Aborts where sample() raises.
+            nb::gil_scoped_release rel;
             return llama_sampler_sample(s.ptr, ctx.ptr, idx);
         })
         .def("get_perf_data", [](LlamaSamplerW& s){
@@ -1684,7 +2581,22 @@ NB_MODULE(_llama_native, m) {
     // -------------------------------------------------------------------------
     m.def("disable_logging", [](){
         llama_log_set(_llama_no_log_cb, nullptr);
+        g_log_cb = nb::object();
     }, "Silence all llama.cpp / ggml log output by installing a no-op callback.");
+    // A callback left installed at exit would keep everything its globals
+    // reference alive past interpreter shutdown.
+    nb::module_::import_("atexit").attr("register")(nb::cpp_function([](){
+        if (g_log_cb.is_valid()) llama_log_set(nullptr, nullptr);
+        g_log_cb = nb::object();
+    }));
+    m.def("get_log_callback", []() -> nb::object {
+        ggml_log_callback cb = nullptr;
+        void* ud = nullptr;
+        llama_log_get(&cb, &ud);
+        if (cb == _llama_log_cb && g_log_cb.is_valid()) return g_log_cb;
+        return nb::none();
+    }, "The callable installed by set_log_callback, or None when llama.cpp logs to "
+       "stderr or logging is disabled.");
     m.def("set_log_callback", [](nb::object cb){
         g_log_cb = cb;
         if (cb.is_none()) llama_log_set(nullptr, nullptr);
@@ -1779,6 +2691,56 @@ NB_MODULE(_llama_native, m) {
           "True if mlock-pinning model memory is supported.");
     m.def("llama_supports_gpu_offload", [](){ return (bool) llama_supports_gpu_offload(); },
           "True if any GPU backend is available for layer offloading.");
+    m.def("_draft_top_p", [](LlamaContextW& ctx, int idx, int k){
+        // Softmax probability of the top token over the k largest logits of output idx.
+        ctx.ensure_valid();
+        const float* logits = llama_get_logits_ith(ctx.ptr, idx);
+        if (!logits) throw std::invalid_argument("no logits for output " + std::to_string(idx));
+        int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx.ptr)));
+        k = std::max(1, std::min(k, n_vocab));
+        std::vector<float> top(logits, logits + n_vocab);
+        std::partial_sort(top.begin(), top.begin() + k, top.end(), std::greater<float>());
+        double total = 0.0;
+        for (int j = 0; j < k; ++j) total += std::exp((double) top[j] - top[0]);
+        return 1.0 / total;
+    }, "ctx"_a, "idx"_a, "k"_a = 10);
+    m.def("llama_print_system_info", [](){ return std::string(llama_print_system_info()); },
+          "Backend and CPU feature summary.");
+    m.def("llama_max_parallel_sequences", [](){ return llama_max_parallel_sequences(); });
+    m.def("llama_max_tensor_buft_overrides", [](){ return llama_max_tensor_buft_overrides(); });
+    m.def("llama_ftype_name", [](int ftype){ return std::string(llama_ftype_name((llama_ftype) ftype)); },
+          "ftype"_a, "Name of a LLAMA_FTYPE_* value, e.g. 'Q8_0'.");
+    m.def("llama_load_mode_name", [](int mode){
+        // llama.cpp aborts on a value outside the enum
+        if (mode < LLAMA_LOAD_MODE_AUTO || mode > LLAMA_LOAD_MODE_DIRECT_IO)
+            throw std::invalid_argument("unknown load mode " + std::to_string(mode));
+        return std::string(llama_load_mode_name((llama_load_mode) mode));
+    },
+          "mode"_a, "Name of a LLAMA_LOAD_MODE_* value.");
+    m.def("llama_load_mode_from_str", [](const std::string& name){
+        return (int) llama_load_mode_from_str(name.c_str());
+    }, "name"_a, "LLAMA_LOAD_MODE_* value for a name from llama_load_mode_name().");
+    m.def("llama_model_meta_key_str", [](int key) -> nb::object {
+        const char* k = llama_model_meta_key_str((llama_model_meta_key) key);
+        if (!k) return nb::none();
+        return nb::str(k);
+    }, "key"_a, "GGUF key name for a LLAMA_MODEL_META_KEY_* value, or None.");
+    m.def("llama_split_path", [](const std::string& prefix, int split_no, int split_count){
+        std::vector<char> buf(prefix.size() + 64);
+        int n = llama_split_path(buf.data(), buf.size(), prefix.c_str(), split_no, split_count);
+        if (n <= 0) throw std::invalid_argument("llama_split_path failed");
+        return std::string(buf.data(), n);
+    }, "path_prefix"_a, "split_no"_a, "split_count"_a,
+       "Split file name for 0-based split_no: ('/m/model', 1, 4) -> '/m/model-00002-of-00004.gguf'.");
+    m.def("llama_split_prefix", [](const std::string& path, int split_no, int split_count) -> nb::object {
+        std::vector<char> buf(path.size() + 1);
+        int n = llama_split_prefix(buf.data(), buf.size(), path.c_str(), split_no, split_count);
+        if (n <= 0) return nb::none();
+        return nb::str(buf.data(), n);
+    }, "split_path"_a, "split_no"_a, "split_count"_a,
+       "Path prefix of a split file name, or None if the 0-based split_no or split_count do not match.");
+    m.def("llama_version", [](){ return std::string(llama_version()); },
+          "llama.cpp version compiled into the loaded library.");
     m.def("llama_supports_rpc",         [](){ return (bool) llama_supports_rpc(); },
           "True if the RPC backend is compiled in.");
 
@@ -1968,6 +2930,22 @@ NB_MODULE(_llama_native, m) {
             w->owner = true;
             return nb::cast(w, nb::rv_policy::take_ownership);
         }, "filename"_a, "no_alloc"_a = true)
+        .def_static("from_fileobj", [](nb::object fileobj, nb::object offset, bool no_alloc){
+            gguf_init_params params{};
+            params.no_alloc = no_alloc;
+            params.ctx = nullptr;
+            // gguf's parser rejects malformed input itself, as for from_file()
+            gguf_context* ptr = with_gguf_file(fileobj, offset, "GGUF", false,
+                [&](FILE* f){ return gguf_init_from_file_ptr(f, params); });
+            if (!ptr) throw std::runtime_error("Failed to load GGUF from file object");
+            auto* w = new GGUFContextW();
+            w->ptr = ptr;
+            w->owner = true;
+            return nb::cast(w, nb::rv_policy::take_ownership);
+        }, "fileobj"_a, "offset"_a = nb::none(), "no_alloc"_a = true,
+           "Load GGUF metadata from an open binary file or int fd, optionally at a "
+           "byte offset. data_offset is relative to the start of that file. The "
+           "caller's file position is unchanged on return.")
         .def_prop_ro("version",   [](GGUFContextW& s){ return gguf_get_version(s.ptr); })
         .def_prop_ro("alignment", [](GGUFContextW& s){ return gguf_get_alignment(s.ptr); })
         .def_prop_ro("data_offset", [](GGUFContextW& s){ return gguf_get_data_offset(s.ptr); })
@@ -2050,6 +3028,11 @@ NB_MODULE(_llama_native, m) {
         .def("set_val_str",  [](GGUFContextW& s, const std::string& k, const std::string& v){
             gguf_set_val_str(s.ptr, k.c_str(), v.c_str());
         })
+        .def("set_arr_str", [](GGUFContextW& s, const std::string& k, const std::vector<std::string>& v){
+            std::vector<const char*> ptrs;
+            for (auto& x : v) ptrs.push_back(x.c_str());
+            gguf_set_arr_str(s.ptr, k.c_str(), ptrs.data(), ptrs.size());
+        }, "key"_a, "values"_a)
         .def("set_val_bool", [](GGUFContextW& s, const std::string& k, bool v){
             gguf_set_val_bool(s.ptr, k.c_str(), v);
         })

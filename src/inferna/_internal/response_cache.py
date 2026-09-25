@@ -6,21 +6,20 @@ same one that lived inline as ``_ResponseLRUCache``; the public surface
 on ``LLM`` (``cache_enabled`` / ``cache_info()`` / ``cache_clear()``) is
 unchanged.
 
-``make_cache_key`` is the canonical key derivation: it includes only
-output-affecting fields of :class:`GenerationConfig` (prompt,
-temperature, top_k, top_p, min_p, repeat_penalty, max_tokens, sorted
-stop_sequences, seed, add_bos, parse_special) and excludes
-infrastructure (n_gpu_layers, main_gpu, split_mode, tensor_split, n_ctx,
-n_batch). It returns ``None`` when ``seed == LLAMA_DEFAULT_SEED`` so
-non-deterministic runs bypass the cache automatically.
+``make_cache_key`` is the canonical key derivation: it hashes the prompt
+and every :class:`GenerationConfig` field not named in
+``CACHE_KEY_EXCLUDED_FIELDS``. A new field therefore joins the key by
+default; excluding one requires a stated reason. It returns ``None`` when
+``seed == LLAMA_DEFAULT_SEED`` so non-deterministic runs bypass the cache.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import time
 from collections import OrderedDict
-from typing import Any, NamedTuple, Optional, TYPE_CHECKING, Tuple
+from typing import Any, Dict, NamedTuple, Optional, TYPE_CHECKING, Tuple
 
 if TYPE_CHECKING:
     from ..api import GenerationConfig
@@ -95,6 +94,26 @@ class ResponseCache:
         )
 
 
+# GenerationConfig fields left out of the cache key, with the reason. These
+# set device placement and batching, not sampler settings.
+CACHE_KEY_EXCLUDED_FIELDS: Dict[str, str] = {
+    "n_gpu_layers": "device placement",
+    "main_gpu": "device placement",
+    "split_mode": "device placement",
+    "tensor_split": "device placement",
+    "n_batch": "prompt-processing batch size",
+}
+
+
+def _canonical(name: str, value: Any) -> str:
+    """Render a config value so that equivalent settings hash alike."""
+    if name == "stop_sequences":
+        return repr(sorted(value))
+    if isinstance(value, dict):
+        return repr(sorted(value.items()))
+    return repr(value)
+
+
 def make_cache_key(
     prompt: str,
     config: "GenerationConfig",
@@ -112,18 +131,9 @@ def make_cache_key(
     if config.seed == random_seed_sentinel:
         return None
 
-    key_parts = [
-        prompt,
-        str(config.temperature),
-        str(config.top_k),
-        str(config.top_p),
-        str(config.min_p),
-        str(config.repeat_penalty),
-        str(config.max_tokens),
-        str(sorted(config.stop_sequences)),
-        str(config.seed),
-        str(config.add_bos),
-        str(config.parse_special),
-    ]
+    key_parts = [prompt]
+    for f in dataclasses.fields(config):
+        if f.name not in CACHE_KEY_EXCLUDED_FIELDS:
+            key_parts.append(f"{f.name}={_canonical(f.name, getattr(config, f.name))}")
     key_str = "\0".join(key_parts)
     return hashlib.sha256(key_str.encode()).hexdigest()

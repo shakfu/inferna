@@ -13,9 +13,13 @@ Tests cover:
 - Cached responses retain stats and model path
 """
 
+import dataclasses
 import time
 
+import pytest
+
 from inferna import LLM, GenerationConfig, ResponseCacheInfo
+from inferna._internal.response_cache import CACHE_KEY_EXCLUDED_FIELDS, make_cache_key
 
 
 class TestCacheDisabled:
@@ -334,3 +338,73 @@ class TestExportedFromPackage:
         # Verify it's a NamedTuple
         assert hasattr(ResponseCacheInfo, "_fields")
         assert "hits" in ResponseCacheInfo._fields
+
+
+class TestCacheKeyFields:
+    """Every GenerationConfig field is either in the key or excluded with a
+    reason. A new field joins the key by default; this table makes the test
+    fail until it is given a distinguishing value."""
+
+    SENTINEL = -1
+    # A valid value for each keyed field that differs from BASE.
+    ALTERNATES = {
+        "max_tokens": 17,
+        "temperature": 0.3,
+        "top_k": 7,
+        "top_p": 0.5,
+        "min_p": 0.2,
+        "repeat_penalty": 1.3,
+        "frequency_penalty": 0.4,
+        "presence_penalty": 0.6,
+        "penalty_last_n": 32,
+        "mirostat": 2,
+        "mirostat_tau": 3.0,
+        "mirostat_eta": 0.2,
+        "typical_p": 0.7,
+        "typical_min_keep": 3,
+        "xtc_probability": 0.5,
+        "xtc_threshold": 0.2,
+        "dynatemp_range": 0.5,
+        "dynatemp_exponent": 2.0,
+        "logit_bias": {15: -5.0},
+        "n_ctx": 1024,
+        "seed": 43,
+        "stop_sequences": ["END"],
+        "add_bos": False,
+        "parse_special": False,
+    }
+    BASE = GenerationConfig(seed=42)
+
+    def _key(self, config: GenerationConfig) -> str:
+        key = make_cache_key("hello", config, random_seed_sentinel=self.SENTINEL)
+        assert key is not None
+        return key
+
+    def test_every_field_is_keyed_or_excluded(self):
+        names = {f.name for f in dataclasses.fields(GenerationConfig)}
+        assert set(CACHE_KEY_EXCLUDED_FIELDS) <= names
+        assert names - set(CACHE_KEY_EXCLUDED_FIELDS) == set(self.ALTERNATES)
+        assert all(CACHE_KEY_EXCLUDED_FIELDS.values()), "each exclusion needs a reason"
+
+    @pytest.mark.parametrize("name", sorted(ALTERNATES))
+    def test_keyed_field_changes_the_key(self, name):
+        changed = dataclasses.replace(self.BASE, **{name: self.ALTERNATES[name]})
+        assert self._key(changed) != self._key(self.BASE)
+
+    @pytest.mark.parametrize(
+        "name,value",
+        [("n_gpu_layers", 0), ("main_gpu", 1), ("split_mode", 2), ("tensor_split", [0.5, 0.5]), ("n_batch", 64)],
+    )
+    def test_excluded_field_does_not_change_the_key(self, name, value):
+        assert name in CACHE_KEY_EXCLUDED_FIELDS
+        changed = dataclasses.replace(self.BASE, **{name: value})
+        assert self._key(changed) == self._key(self.BASE)
+
+    def test_order_insensitive_values_hash_alike(self):
+        a = dataclasses.replace(self.BASE, stop_sequences=["a", "b"], logit_bias={1: 1.0, 2: -1.0})
+        b = dataclasses.replace(self.BASE, stop_sequences=["b", "a"], logit_bias={2: -1.0, 1: 1.0})
+        assert self._key(a) == self._key(b)
+
+    def test_random_seed_sentinel_returns_none(self):
+        config = dataclasses.replace(self.BASE, seed=self.SENTINEL)
+        assert make_cache_key("hello", config, random_seed_sentinel=self.SENTINEL) is None

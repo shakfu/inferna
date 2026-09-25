@@ -22,6 +22,18 @@ from .types import SearchResult, VectorStoreProtocol
 _VALID_TABLE_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
+# vector_type -> (name passed to vector_init, struct format code).
+# The extension stores raw element arrays of dimension * sizeof(element)
+# bytes and does not validate blob length, so the struct code must match
+# the declared type or search silently reads garbage.
+_VECTOR_TYPE_TO_STRUCT = {
+    "float32": ("FLOAT32", "f"),
+    "float16": ("FLOAT16", "e"),
+    "int8": ("INT8", "b"),
+    "uint8": ("UINT8", "B"),
+}
+
+
 def _validate_table_name(name: str) -> None:
     """Validate that a table name is a safe SQL identifier."""
     if not _VALID_TABLE_NAME.match(name):
@@ -99,7 +111,7 @@ class SqliteVectorStore(VectorStoreProtocol):
     VALID_METRICS = {"cosine", "l2", "dot", "l1", "squared_l2"}
 
     # Valid vector types (bfloat16 excluded - not supported by sqlite-vector)
-    VALID_VECTOR_TYPES = {"float32", "float16", "int8", "uint8"}
+    VALID_VECTOR_TYPES = frozenset(_VECTOR_TYPE_TO_STRUCT)
 
     def __init__(
         self,
@@ -249,9 +261,11 @@ class SqliteVectorStore(VectorStoreProtocol):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 text TEXT NOT NULL,
                 embedding BLOB NOT NULL,
-                metadata TEXT
+                metadata TEXT,
+                source_hash TEXT
             )
         """)
+        self._ensure_source_hash_column()
 
         meta_table = f"{self.table_name}_meta"
         self.conn.execute(f"""
@@ -347,14 +361,7 @@ class SqliteVectorStore(VectorStoreProtocol):
         }
         distance = distance_map[self.metric]
 
-        # Map vector type names
-        type_map = {
-            "float32": "FLOAT32",
-            "float16": "FLOAT16",
-            "int8": "INT8",
-            "uint8": "UINT8",
-        }
-        vtype = type_map[self.vector_type]
+        vtype = _VECTOR_TYPE_TO_STRUCT[self.vector_type][0]
 
         # Initialize vector extension for this table
         try:
@@ -365,6 +372,20 @@ class SqliteVectorStore(VectorStoreProtocol):
             self.conn.commit()
         except sqlite3.OperationalError as e:
             raise VectorStoreError(f"Failed to initialize vector search: {e}") from e
+
+    def _ensure_source_hash_column(self) -> None:
+        """Add the chunk -> source link to a table created before it existed.
+
+        Rows predating the column keep NULL, which reads as "source
+        unknown": delete() cannot reconcile them, exactly as before the
+        column was added. New rows link properly.
+        """
+        columns = {row[1] for row in self.conn.execute(f"PRAGMA table_info({self.table_name})")}
+        if "source_hash" not in columns:
+            self.conn.execute(f"ALTER TABLE {self.table_name} ADD COLUMN source_hash TEXT")
+        self.conn.execute(
+            f"CREATE INDEX IF NOT EXISTS {self.table_name}_source_hash_idx ON {self.table_name}(source_hash)"
+        )
 
     def _verify_compatibility(self, stored: dict[str, str]) -> None:
         """Verify the caller's configuration matches what's already in
@@ -482,17 +503,30 @@ class SqliteVectorStore(VectorStoreProtocol):
                 )
 
     def _encode_vector(self, vector: list[float]) -> bytes:
-        """Encode vector as binary BLOB (Float32).
+        """Encode vector as a binary BLOB in the store's element type.
+
+        Integer element types are rounded, not scaled: the caller supplies
+        values already in the type's range.
 
         Args:
             vector: Vector to encode
 
         Returns:
             Binary representation of the vector
+
+        Raises:
+            ValueError: If the vector length or an element is out of range
+                for the store's element type.
         """
         if len(vector) != self.dimension:
             raise ValueError(f"Vector dimension mismatch: expected {self.dimension}, got {len(vector)}")
-        return struct.pack(f"{len(vector)}f", *vector)
+        code = _VECTOR_TYPE_TO_STRUCT[self.vector_type][1]
+        if code in ("b", "B"):
+            try:
+                return struct.pack(f"{len(vector)}{code}", *(int(round(x)) for x in vector))
+            except struct.error as e:
+                raise ValueError(f"Vector value out of range for vector_type={self.vector_type!r}: {e}") from e
+        return struct.pack(f"{len(vector)}{code}", *vector)
 
     def _decode_vector(self, blob: bytes) -> list[float]:
         """Decode binary BLOB back to vector.
@@ -503,7 +537,8 @@ class SqliteVectorStore(VectorStoreProtocol):
         Returns:
             Vector as list of floats
         """
-        return list(struct.unpack(f"{self.dimension}f", blob))
+        code = _VECTOR_TYPE_TO_STRUCT[self.vector_type][1]
+        return [float(x) for x in struct.unpack(f"{self.dimension}{code}", blob)]
 
     # ------------------------------------------------------------------
     # Source-deduplication queries (the records are written by add()
@@ -643,8 +678,8 @@ class SqliteVectorStore(VectorStoreProtocol):
                 for emb, text, meta in zip(embeddings, texts, metadata):
                     blob = self._encode_vector(emb)
                     cursor.execute(
-                        f"INSERT INTO {self.table_name} (text, embedding, metadata) VALUES (?, ?, ?)",
-                        (text, blob, json.dumps(meta) if meta else None),
+                        f"INSERT INTO {self.table_name} (text, embedding, metadata, source_hash) VALUES (?, ?, ?, ?)",
+                        (text, blob, json.dumps(meta) if meta else None, source_hash),
                     )
                     ids.append(cursor.lastrowid or 0)
 
@@ -825,26 +860,59 @@ class SqliteVectorStore(VectorStoreProtocol):
             return 0
 
         placeholders = ",".join("?" * len(ids))
-        cursor = self.conn.execute(
-            f"DELETE FROM {self.table_name} WHERE id IN ({placeholders})",
-            [int(id_) for id_ in ids],
-        )
-        self.conn.commit()
+        int_ids = [int(id_) for id_ in ids]
+        sources_table = f"{self.table_name}_sources"
+
+        with self.conn:
+            # Which sources these chunks belong to, before the rows go.
+            affected = [
+                row[0]
+                for row in self.conn.execute(
+                    f"SELECT DISTINCT source_hash FROM {self.table_name} "
+                    f"WHERE id IN ({placeholders}) AND source_hash IS NOT NULL",
+                    int_ids,
+                )
+            ]
+            cursor = self.conn.execute(
+                f"DELETE FROM {self.table_name} WHERE id IN ({placeholders})",
+                int_ids,
+            )
+            # Drop the dedup record once its last chunk is gone, or
+            # is_source_indexed() keeps reporting the source as present.
+            for source_hash in affected:
+                still_present = self.conn.execute(
+                    f"SELECT 1 FROM {self.table_name} WHERE source_hash = ? LIMIT 1",
+                    (source_hash,),
+                ).fetchone()
+                if still_present is None:
+                    self.conn.execute(
+                        f"DELETE FROM {sources_table} WHERE content_hash = ?",
+                        (source_hash,),
+                    )
+
         self._quantized = False  # Invalidate quantization
         return cursor.rowcount
 
     def clear(self) -> int:
-        """Delete all embeddings.
+        """Delete all embeddings and forget every indexed source.
+
+        Leaving the source records behind would make
+        :meth:`is_source_indexed` answer True for sources whose chunks
+        are gone, so re-adding the same files would index nothing.
 
         Returns:
-            Number of rows deleted
+            Number of embedding rows deleted (source records aren't
+            counted -- the return value is a chunk count).
         """
         self._check_closed()
 
-        cursor = self.conn.execute(f"DELETE FROM {self.table_name}")
-        self.conn.commit()
+        sources_table = f"{self.table_name}_sources"
+        with self.conn:
+            cursor = self.conn.execute(f"DELETE FROM {self.table_name}")
+            deleted = cursor.rowcount
+            self.conn.execute(f"DELETE FROM {sources_table}")
         self._quantized = False
-        return cursor.rowcount
+        return deleted
 
     def quantize(self, max_memory: str = "30MB") -> int:
         """Quantize vectors for faster approximate search.

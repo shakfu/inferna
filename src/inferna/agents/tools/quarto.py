@@ -156,6 +156,49 @@ _QUARTO_EXAMPLE_CONTENT = (
 )
 
 
+def _quarto_confine(path: _Path, base: _Path) -> _Path:
+    """Resolve ``path`` against ``base`` and require it under the output dir.
+
+    Paths reach here straight from the model, and the write is followed by
+    ``quarto render``, which executes code cells in the document. Unconfined,
+    text the agent merely reads could pick the destination. Point
+    ``INFERNA_QUARTO_OUTPUT_DIR`` elsewhere to widen the root; there is
+    deliberately no per-call override, since the model controls the call.
+
+    Raises:
+        ValueError: If the resolved path escapes the output dir
+    """
+    root = default_quarto_output_dir().resolve()
+    target = path.expanduser()
+    if not target.is_absolute():
+        target = base / target
+    # Non-strict resolve: collapses ".." and follows symlinks on the parts
+    # that exist, so neither can be used to step outside the root.
+    target = target.resolve()
+    if target != root and not target.is_relative_to(root):
+        raise ValueError(
+            f"refusing to write outside the quarto output directory: "
+            f"{target} is not under {root}. Pass a path inside it, or set "
+            f"INFERNA_QUARTO_OUTPUT_DIR to the directory you want written to."
+        )
+    return target
+
+
+def _quarto_write_target(input_path: str, content: str) -> _Path:
+    """Resolve where ``content`` may be written, confined to the output dir.
+
+    A relative ``input_path`` is taken as relative to the output dir; an
+    absolute one must already be inside it. See :func:`_quarto_confine`.
+
+    Raises:
+        ValueError: If the resolved path escapes the output dir
+    """
+    root = default_quarto_output_dir().resolve()
+    if not input_path:
+        return _quarto_unique_path(root, _quarto_slug_from_content(content), ".qmd")
+    return _quarto_confine(_Path(input_path), root)
+
+
 @tool
 def quarto_render(
     input: str = "",
@@ -190,7 +233,8 @@ def quarto_render(
         input: Path to an existing input file (``.qmd``, ``.md``,
             ``.ipynb``) or quarto project directory. When ``content`` is
             supplied this is the destination path the tool writes
-            ``content`` to before rendering. May be empty if ``content``
+            ``content`` to before rendering; it must then resolve inside
+            the quarto output directory. May be empty if ``content``
             is supplied (a slug-derived path is used).
         content: Inline Quarto document source (YAML frontmatter +
             markdown body). When provided, the tool writes this to
@@ -202,8 +246,9 @@ def quarto_render(
             ``ipynb``, ``jats``, ``mediawiki``, ``commonmark``. Defaults
             to ``html``.
         output_dir: Optional directory for the rendered output, relative
-            to the input's directory. When omitted quarto writes
-            alongside the input.
+            to the input's directory. Must resolve inside the quarto
+            output directory. When omitted quarto writes alongside the
+            input.
 
     Returns:
         Quarto's combined stdout/stderr, followed by an ``Output file:
@@ -222,6 +267,12 @@ def quarto_render(
     if fmt not in _QUARTO_FORMATS:
         raise ValueError(f"unsupported format {fmt!r} (allowed: {', '.join(sorted(_QUARTO_FORMATS))})")
 
+    target = _quarto_write_target(input_path, body) if body.strip() else None
+    abs_input = target if target is not None else _Path(input_path).expanduser().resolve()
+    od = output_dir.strip()
+    # --output-dir is relative to the input's directory; confine it like input.
+    out_dir = _quarto_confine(_Path(od), abs_input.parent) if od else None
+
     if not quarto_available():
         raise RuntimeError(
             "quarto CLI not found on PATH. Install via `brew install quarto` "
@@ -229,25 +280,17 @@ def quarto_render(
         )
 
     # CREATE-AND-RENDER: materialize content to disk before invoking quarto.
-    if body.strip():
-        if not input_path:
-            dest_dir = default_quarto_output_dir()
-            target = _quarto_unique_path(dest_dir, _quarto_slug_from_content(body), ".qmd")
-        else:
-            target = _Path(input_path).expanduser()
-            target.parent.mkdir(parents=True, exist_ok=True)
+    if target is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(body, encoding="utf-8")
-        input_path = str(target)
 
-    abs_input = _Path(input_path).expanduser().resolve()
     if not abs_input.exists():
         raise FileNotFoundError(f"input not found: {abs_input}")
 
     cmd: List[str] = ["quarto", "render", str(abs_input), "--to", fmt]
     cwd = str(abs_input.parent)
-    od = output_dir.strip()
-    if od:
-        cmd.extend(["--output-dir", od])
+    if out_dir is not None:
+        cmd.extend(["--output-dir", str(out_dir)])
 
     try:
         proc = _subprocess.run(

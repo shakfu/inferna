@@ -14,7 +14,9 @@ input *before* it crosses the FFI boundary.
 
 from __future__ import annotations
 
+import io
 import os
+import stat
 import struct
 from typing import Optional
 
@@ -119,35 +121,104 @@ def validate_gguf_file(path: str, *, kind: str = "GGUF model") -> None:
     except OSError as e:
         raise PermissionError(f"failed to read {kind} header from {path}: {e}") from e
 
+    check_gguf_header(header, path)
+
+
+def check_gguf_header(header: bytes, source: str) -> None:
+    """Validate the first 24 bytes of a GGUF stream.
+
+    Args:
+        header: Bytes read from the start of the GGUF data.
+        source: Label for error messages (a path, or "fd 5 at offset 64").
+
+    Raises:
+        ValueError: if the magic, version or header counts are invalid.
+    """
     if len(header) < 24:
         raise ValueError(
-            f"{path} is too small to contain a valid GGUF header "
+            f"{source} is too small to contain a valid GGUF header "
             f"(need at least 24 bytes, got {len(header)}). "
             "The file is truncated or not a GGUF file."
         )
 
     # Layout: char[4] magic | uint32 version | uint64 tensor_count | uint64 kv_count
     # All little-endian per the GGUF spec.
-    _magic, version, tensor_count, kv_count = struct.unpack("<4sIQQ", header)
+    magic, version, tensor_count, kv_count = struct.unpack("<4sIQQ", header)
+
+    if magic != GGUF_MAGIC:
+        raise ValueError(
+            f"{source} does not look like a valid GGUF file "
+            f"(expected magic {GGUF_MAGIC!r}, got {magic!r}). "
+            "The data may be corrupt, truncated, or in a different format."
+        )
 
     if version not in GGUF_KNOWN_VERSIONS:
         raise ValueError(
-            f"{path} has unsupported GGUF version {version} "
+            f"{source} has unsupported GGUF version {version} "
             f"(this build understands versions {GGUF_KNOWN_VERSIONS}). "
             "The file may be corrupt or produced by a much newer tool."
         )
 
     if tensor_count == 0 or tensor_count > GGUF_MAX_TENSORS:
         raise ValueError(
-            f"{path} has implausible GGUF tensor_count={tensor_count} "
+            f"{source} has implausible GGUF tensor_count={tensor_count} "
             f"(expected 1..{GGUF_MAX_TENSORS}). The file is corrupt or truncated."
         )
 
     if kv_count > GGUF_MAX_KV_PAIRS:
         raise ValueError(
-            f"{path} has implausible GGUF kv_count={kv_count} "
+            f"{source} has implausible GGUF kv_count={kv_count} "
             f"(expected 0..{GGUF_MAX_KV_PAIRS}). The file is corrupt or truncated."
         )
+
+
+def seek_gguf_fd(fileobj: object, offset: Optional[int], kind: str, check_header: bool = True) -> tuple[int, int]:
+    """Position a binary file's fd at a GGUF for a native ``FILE*`` load.
+
+    Args:
+        fileobj: Binary file object with ``fileno()``, or an int fd.
+        offset: Byte offset of the GGUF. ``None`` means the current position.
+        kind: Label for error messages.
+        check_header: Validate the GGUF header at ``offset``.
+
+    Returns:
+        ``(fd, saved)``. The fd is at ``offset``; the caller restores it to ``saved``.
+
+    Raises:
+        TypeError: ``fileobj`` is a text-mode file.
+        ValueError: the fd is not a regular file, ``offset`` is out of range,
+            or the header is invalid.
+    """
+    if isinstance(fileobj, io.TextIOBase):
+        raise TypeError(f"{kind} file must be opened in binary mode")
+    if isinstance(fileobj, int):
+        fd = fileobj
+    else:
+        fd = fileobj.fileno()  # type: ignore[attr-defined]
+        flush = getattr(fileobj, "flush", None)
+        if flush is not None:
+            flush()
+
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        raise ValueError(f"{kind} fd {fd} is not a regular file")
+
+    saved = os.lseek(fd, 0, os.SEEK_CUR)
+    if offset is None:
+        # the OS offset of a buffered reader runs ahead of its logical position
+        offset = saved if isinstance(fileobj, int) else fileobj.tell()  # type: ignore[attr-defined]
+    if not 0 <= offset < st.st_size:
+        raise ValueError(f"{kind} offset {offset} is outside fd {fd} (size {st.st_size})")
+
+    try:
+        if check_header:
+            os.lseek(fd, offset, os.SEEK_SET)
+            check_gguf_header(os.read(fd, 24), f"{kind} fd {fd} at offset {offset}")
+        os.lseek(fd, offset, os.SEEK_SET)
+    except BaseException:
+        os.lseek(fd, saved, os.SEEK_SET)
+        raise
+    return fd, saved
 
 
 def validate_whisper_file(path: str, *, kind: str = "whisper model") -> None:

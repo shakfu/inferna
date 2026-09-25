@@ -234,8 +234,8 @@ responses = batch_generate(prompts, model_path="model.gguf")
 from inferna.llama.llama_cpp import Speculative, SpeculativeParams
 
 params = SpeculativeParams(n_max=16, p_min=0.75)
-spec = Speculative(params, ctx_target)
-draft_tokens = spec.draft(prompt_tokens, last_token)
+spec = Speculative(params, ctx_target, ctx_draft)
+draft_tokens = spec.draft(params, prompt_tokens, last_token)
 ```
 
 **GPU layer estimation**:
@@ -243,8 +243,8 @@ draft_tokens = spec.draft(prompt_tokens, last_token)
 ```python
 from inferna import estimate_gpu_layers
 
-estimate = estimate_gpu_layers(model_path="model.gguf", available_vram_mb=8000)
-print(f"Recommended GPU layers: {estimate.n_gpu_layers}")
+estimate = estimate_gpu_layers(model_path="model.gguf", gpu_memory_mb=8000)
+print(f"Recommended GPU layers: {estimate.layers}")
 ```
 
 **N-gram cache** -- reuse n-gram matches as draft tokens for repetitive text:

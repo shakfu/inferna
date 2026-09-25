@@ -1,6 +1,6 @@
 # Inferna API Reference
 
-**Version**: 0.2.11 **Date**: April 2026
+**Version**: 0.5.1 **Date**: September 2026
 
 Complete API reference for inferna, a high-performance Python library for LLM inference built on llama.cpp.
 
@@ -242,6 +242,9 @@ class Response:
     stats: Optional[GenerationStats]    # Generation statistics
     finish_reason: str = "stop"         # Why generation stopped
     model: str = ""                     # Model path used
+    parsed: Optional[Any] = None        # Set when called with response_format=
+    tool_calls: Optional[List[ToolCall]] = None  # Set when called with tools=
+    logprobs: Optional[list] = None     # Set when called with logprobs=True
 ```
 
 **Attributes:**
@@ -513,6 +516,9 @@ class GenerationConfig:
     dynatemp_exponent: float = 1.0
     logit_bias: Optional[Dict[int, float]] = None
     n_gpu_layers: int = -1
+    main_gpu: int = 0
+    split_mode: int = 1
+    tensor_split: Optional[List[float]] = None
     n_ctx: Optional[int] = None
     n_batch: int = 2048
     seed: int = 0xFFFFFFFF
@@ -562,6 +568,12 @@ class GenerationConfig:
 - `logit_bias`: Optional `{token_id: bias}` map applied to the raw logits before any sampler stage. `None` = no bias. Matches the OpenAI `logit_bias` shape (default: None)
 
 - `n_gpu_layers`: GPU layers to offload (default: -1 = all)
+
+- `main_gpu`: GPU index used with `split_mode=0` (default: 0)
+
+- `split_mode`: Multi-GPU split: 0 = single GPU, 1 = by layer, 2 = by row (default: 1)
+
+- `tensor_split`: Share of the model per GPU, e.g. `[0.3, 0.7]` (default: None = auto)
 
 - `n_ctx`: Context window size, None = auto (default: None)
 
@@ -860,9 +872,10 @@ from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 
 llm = InfernaLLM(
     model_path="models/llama.gguf",
-    streaming=True,
     callbacks=[StreamingStdOutCallbackHandler()]
 )
+for chunk in llm.stream("Explain quantum computing"):
+    print(chunk, end="", flush=True)
 ```
 
 ---
@@ -877,22 +890,30 @@ Estimate optimal number of GPU layers for available VRAM.
 
 ```python
 def estimate_gpu_layers(
-    model_path: str,
-    available_vram_mb: int,
-    n_ctx: int = 2048,
-    n_batch: int = 512
+    model_path: str | Path,
+    gpu_memory_mb: int | list[int],
+    ctx_size: int = 2048,
+    batch_size: int = 1,
+    n_parallel: int = 1,
+    kv_cache_type: str = "f16",
+    use_mmap: bool = True,
+    verbose: bool = False,
 ) -> MemoryEstimate
 ```
 
 **Parameters:**
 
-- `model_path` (str): Path to GGUF model file
+- `model_path`: Path to GGUF model file
 
-- `available_vram_mb` (int): Available VRAM in megabytes
+- `gpu_memory_mb`: Available VRAM in megabytes; a list gives one value per GPU and fills `tensor_split`
 
-- `n_ctx` (int): Context window size
+- `ctx_size`: Context window size
 
-- `n_batch` (int): Batch size
+- `batch_size`: Batch size
+
+- `n_parallel`: Number of parallel sequences
+
+- `kv_cache_type`: KV cache type (`"f16"` or `"f32"`)
 
 **Returns:**
 
@@ -905,11 +926,11 @@ from inferna import estimate_gpu_layers
 
 estimate = estimate_gpu_layers(
     model_path="models/llama.gguf",
-    available_vram_mb=8000,  # 8GB VRAM
-    n_ctx=2048
+    gpu_memory_mb=8000,  # 8GB VRAM
+    ctx_size=2048
 )
 
-print(f"Recommended GPU layers: {estimate.n_gpu_layers}")
+print(f"Recommended GPU layers: {estimate.layers}")
 print(f"Estimated VRAM usage: {estimate.vram / 1024 / 1024:.2f} MB")
 ```
 
@@ -917,16 +938,18 @@ print(f"Estimated VRAM usage: {estimate.vram / 1024 / 1024:.2f} MB")
 
 ### `estimate_memory_usage()`
 
-Estimate total memory requirements for model loading.
+Estimate memory requirements without GPU constraints.
 
 ```python
 def estimate_memory_usage(
-    model_path: str,
-    n_ctx: int = 2048,
-    n_batch: int = 512,
-    n_gpu_layers: int = 0
-) -> MemoryEstimate
+    model_path: str | Path,
+    ctx_size: int = 2048,
+    batch_size: int = 1,
+    verbose: bool = False,
+) -> dict[str, Any]
 ```
+
+The dict has `model_size_mb`, `kv_cache_mb`, `graph_mb` and `parameters` (model architecture values).
 
 ---
 
@@ -937,7 +960,7 @@ Memory estimation results.
 ```python
 @dataclass
 class MemoryEstimate:
-    layers: int                          # Total layers
+    layers: int                          # Recommended GPU layers
     graph_size: int                      # Computation graph size
     vram: int                            # VRAM usage (bytes)
     vram_kv: int                         # KV cache VRAM (bytes)
@@ -974,14 +997,42 @@ model = LlamaModel("models/llama.gguf", params)
 
 # Properties
 print(model.n_params)      # Total parameters
-print(model.n_layers)      # Number of layers
+print(model.n_layer)       # Number of layers
 print(model.n_embd)        # Embedding dimension
+print(model.n_embd_out)    # Output embedding dimension
 print(model.n_vocab)       # Vocabulary size
+print(model.n_ctx_train)   # Training context length
+print(model.desc)          # Short description, e.g. "llama 1B Q8_0"
 
 # Methods
-vocab = model.get_vocab()  # Get vocabulary
-model.free()               # Free resources
+vocab = model.get_vocab()                    # Get vocabulary
+arch = model.meta_val_str("general.architecture")
+adapter = model.lora_adapter_init("adapter.gguf")
+del model                                    # Freed when the last reference goes
 ```
+
+`LlamaModel.from_fileobj(fileobj, offset=None, params=None)` loads from an open
+binary file or an int fd. The GGUF may be embedded in a larger file at `offset`
+(default: the current position). With mmap, the GGUF data section must sit at a
+32-byte aligned file offset; use `LLAMA_LOAD_MODE_NONE` otherwise. The caller's
+file position is unchanged.
+
+```python
+with open("bundle.bin", "rb") as f:
+    model = LlamaModel.from_fileobj(f, offset=4096)
+```
+
+Other constructors and model queries:
+
+| API | Description |
+|-----|-------------|
+| `LlamaModel.from_splits(paths, params=None)` | Load a model split across files, given in order |
+| `LlamaModel.from_metadata(gguf, init_tensor, params=None)` | Build a model from GGUF metadata without a weights file; `init_tensor(name, shape)` returns float32 values (any buffer), `shape` in ggml order |
+| `model.save_to_file(path)` | Write the model, including trained weights, as GGUF |
+| `model.ftype`, `llama_ftype_name(ftype)` | Weight type, e.g. `"Q8_0"` |
+| `model.n_swa`, `model.is_diffusion` | Sliding-window size (0 without SWA); diffusion model flag |
+| `model.n_cls_out`, `model.cls_label(i)` | Classifier outputs and their labels (`None` if unlabelled) |
+| `adapter.alora_invocation_tokens` | Tokens that activate an aLoRA adapter; empty for a plain LoRA |
 
 ---
 
@@ -1007,12 +1058,94 @@ ctx.decode(batch)
 
 # KV cache management
 ctx.kv_cache_clear()
-ctx.kv_cache_seq_rm(seq_id, p0, p1)
-ctx.kv_cache_seq_add(seq_id, p0, p1, delta)
+ctx.memory_seq_rm(seq_id, p0, p1)          # p1 = -1: to the end
+ctx.memory_seq_add(seq_id, p0, p1, delta)  # shift positions
+ctx.memory_seq_cp(src, dst, p0, p1)
+ctx.memory_seq_pos_max(seq_id)             # -1 if empty
+
+# Outputs
+logits = ctx.get_logits_ith(-1)
+emb = ctx.get_embeddings_ith(-1)
+
+# LoRA: replaces the whole set; empty lists clear it
+ctx.set_adapters_lora([adapter], [1.0])
+
+ctx.close()                                # Idempotent
 
 # Performance
 ctx.print_perf_data()
 ```
+
+**State save/restore.** Whole-context state covers logits, embeddings and the KV
+cache; per-sequence state covers one sequence's KV cache. Each loader raises on
+failure. Token lists default to `n_ctx` capacity on load.
+
+```python
+state = ctx.get_state_data()               # bytes
+ctx.set_state_data(state)
+
+ctx.save_state_file("session.bin", tokens)
+tokens = ctx.load_state_file("session.bin")
+
+data = ctx.get_state_seq_data(0)           # optional flags: LLAMA_STATE_SEQ_FLAGS_*
+ctx.set_state_seq_data(data, dest_seq_id=1)
+ctx.save_state_seq_file("seq.bin", 0, tokens)
+tokens = ctx.load_state_seq_file("seq.bin", dest_seq_id=1)
+```
+
+`get_embeddings_seq(seq_id)` returns a pooled embedding (`n_embd_out` floats), the
+`n_cls_out` scores with `LLAMA_POOLING_TYPE_RANK`, or `None` without pooling.
+
+Other context methods:
+
+| Method | Description |
+|--------|-------------|
+| `memory_seq_div(seq_id, p0, p1, d)` | Integer-divide positions in `[p0, p1)` by `d` (self-extend) |
+| `memory_can_shift()` | Whether `memory_seq_add` / `memory_seq_div` are supported |
+| `set_adapter_cvec(data, n_embd, il_start, il_end)` | Apply a control vector (`n_embd` floats per layer, from layer 1); `data=None` clears it |
+
+Every `memory_seq_*` method raises `IndexError` for a `seq_id` outside `[0, n_seq_max)`.
+
+**Backend sampling [EXPERIMENTAL upstream].** A chain attached to a context runs
+inside the decode graph. `sample()` then returns the backend token, or finishes
+on the CPU from the first link that cannot be offloaded.
+
+```python
+chain = LlamaSampler()
+chain.add_top_k(40)
+chain.add_temp(0.7)
+chain.add_dist(seed)
+
+ctx = LlamaContext(model, ctx_params, samplers={0: chain})  # or ctx.set_sampler(0, chain)
+ctx.decode(batch)
+token_id = chain.sample(ctx, -1)
+
+ctx.sampled_token_ith(-1)        # backend token, or None
+ctx.sampled_probs_ith(-1)        # aligned with sampled_candidates_ith(-1), or None
+ctx.set_sampler(0, None)         # detach
+```
+
+Attaching binds the chain to that context for life: llama.cpp never resets the
+chain's backend state. A bound chain cannot be attached again, sampled with
+another context, or modified. Each case raises instead of aborting or sampling
+wrong. `chain.clone()` returns an unbound copy.
+
+**Training.** llama.cpp supports finetuning F32 models only; a quantized model
+overflows the backward graph and aborts, so `opt_init` rejects it. The KV cache
+must be F32 as well.
+
+```python
+ctx_params.type_k = ctx_params.type_v = GGML_TYPE_F32
+ctx = LlamaContext(model, ctx_params)
+ctx.opt_init(learning_rate=1e-5, optimizer="adamw")   # or "sgd"; param_filter=lambda name: ...
+for epoch in range(2):
+    stats = ctx.opt_epoch(tokens, val_split=0.05)
+    print(stats["train"]["loss"], stats["eval"]["loss"])
+model.save_to_file("finetuned.gguf")
+```
+
+`opt_epoch` trains on windows of `n_ctx` tokens taken every `stride` tokens
+(default `n_ctx / 2`). `opt_init` sets the model's `n_ctx_train` to the context size.
 
 ---
 
@@ -1032,12 +1165,40 @@ sampler.add_top_p(0.95, 1)
 sampler.add_temp(0.7)
 sampler.add_dist(seed)
 
-# Sample token
+# Sample and accept a token. Raises ValueError where llama_sampler_sample
+# would abort: idx has no logits, or the chain selects no token.
 token_id = sampler.sample(ctx, idx)
 
 # Reset state
 sampler.reset()
+
+# Chain editing
+len(sampler)                       # number of links
+sampler.chain_get(0).name()        # link view, owned by the chain
+link = sampler.chain_remove(1)     # detached link, now owned by the caller
+fresh = sampler.clone()            # copy with state; never bound to a context
+fresh.copy_state_from(sampler)     # copy RNG / history between same-shaped chains
 ```
+
+A Python object can act as a chain link. `apply` receives stdlib arrays of the
+candidate ids, logits and probabilities. Edits to `logits` and `probs` are
+copied back. Returning an index selects that candidate.
+
+```python
+class BanToken:
+    def __init__(self, token):
+        self.token = token
+
+    def apply(self, ids, logits, probs):   # also optional: name, accept, reset, clone
+        for i, t in enumerate(ids):
+            if t == self.token:
+                logits[i] = float("-inf")
+
+sampler.add_custom(BanToken(13))
+```
+
+`add_grammar_lazy_patterns(vocab, grammar, root, trigger_patterns=[], trigger_tokens=[])`
+adds a grammar that applies from the first trigger match.
 
 ---
 
@@ -1054,7 +1215,7 @@ tokens = vocab.tokenize("Hello world", add_special=True, parse_special=True)
 # Detokenization
 text = vocab.detokenize(tokens)
 piece = vocab.token_to_piece(token_id, special=True)
-raw = vocab.token_to_piece_bytes(token_id, special=True)  # may be a partial UTF-8 character
+raw = vocab.token_to_piece_bytes(token_id, 0, True)  # may be a partial UTF-8 character
 
 # Streaming detokenization: holds a split character until complete
 from inferna.llama.token_decoder import TokenDecoder
@@ -1062,9 +1223,11 @@ decoder = TokenDecoder(vocab)
 text = "".join(decoder.decode(t) for t in token_ids) + decoder.flush()
 
 # Special tokens
-print(vocab.bos)           # Begin-of-sequence token
-print(vocab.eos)           # End-of-sequence token
-print(vocab.eot)           # End-of-turn token
+print(vocab.token_bos())   # Begin-of-sequence token
+print(vocab.token_eos())   # End-of-sequence token
+print(vocab.token_eot())   # End-of-turn token
+print(vocab.token_mask())  # Mask token (LLAMA_TOKEN_NULL if none)
+print(vocab.get_suppress_tokens())  # Model-specific suppress tokens
 print(vocab.n_vocab)       # Vocabulary size
 
 # Check token types
@@ -1087,12 +1250,15 @@ batch = LlamaBatch(n_tokens=512, embd=0, n_seq_max=1)
 # Add token
 batch.add(token_id, pos, seq_ids=[0], logits=True)
 
+# Fill with one sequence from position n_past
+batch.set_batch(tokens, 0, False)  # tokens, n_past, logits_all
+
 # Clear batch
 batch.clear()
 
-# Convenience function
+# Convenience function: only the last token's logits are enabled
 from inferna.llama.llama_cpp import llama_batch_get_one
-batch = llama_batch_get_one(tokens, pos_offset=0)
+batch = llama_batch_get_one(tokens, n_past=0)
 ```
 
 ---
@@ -1102,20 +1268,34 @@ batch = llama_batch_get_one(tokens, pos_offset=0)
 ```python
 from inferna.llama.llama_cpp import (
     ggml_backend_load_all,
-    ggml_backend_offload_supported,
-    ggml_backend_metal_set_n_cb
+    ggml_backend_dev_info,
+    llama_supports_gpu_offload,
+    llama_version,
 )
 
 # Load all available backends (Metal, CUDA, etc.)
 ggml_backend_load_all()
 
 # Check GPU support
-if ggml_backend_offload_supported():
+if llama_supports_gpu_offload():
     print("GPU offload supported")
 
-# Configure Metal (macOS)
-ggml_backend_metal_set_n_cb(2)  # Number of command buffers
+for dev in ggml_backend_dev_info():
+    print(dev["name"], dev["type"], dev["description"])
+
+print(llama_version())  # llama.cpp version compiled into the library
 ```
+
+`python -m inferna info` prints the same information.
+
+| Function | Description |
+|----------|-------------|
+| `llama_print_system_info()` | CPU and backend feature summary |
+| `llama_max_parallel_sequences()`, `llama_max_tensor_buft_overrides()` | Library limits |
+| `llama_load_mode_name(mode)`, `llama_load_mode_from_str(name)` | Convert `LLAMA_LOAD_MODE_*` values |
+| `llama_model_meta_key_str(key)` | GGUF key for a `LLAMA_MODEL_META_KEY_*` value |
+| `llama_split_path(prefix, split_no, count)`, `llama_split_prefix(path, split_no, count)` | Split file names; `split_no` is 0-based |
+| `set_log_callback(fn)`, `get_log_callback()`, `disable_logging()` | Route or silence llama.cpp logging |
 
 ---
 
@@ -1133,18 +1313,24 @@ from inferna.llama.llama_cpp import GGUFContext
 # Read existing file
 ctx = GGUFContext.from_file("model.gguf")
 
+# From an open binary file or fd, optionally embedded at an offset.
+# data_offset is then relative to the start of the containing file.
+with open("bundle.bin", "rb") as f:
+    ctx = GGUFContext.from_fileobj(f, offset=4096)
+
 # Get metadata
 metadata = ctx.get_all_metadata()
 print(metadata['general.architecture'])
 print(metadata['general.name'])
 
-value = ctx.get_val_str("general.architecture")
+value = ctx.get_value("general.architecture")
 
 # Create new file
 ctx = GGUFContext.empty()
 ctx.set_val_str("custom.key", "value")
 ctx.set_val_u32("custom.number", 42)
-ctx.write_to_file("custom.gguf", write_tensors=False)
+ctx.set_arr_str("custom.tokens", ["a", "b"])
+ctx.write_to_file("custom.gguf", only_meta=True)
 
 # Modify existing
 ctx = GGUFContext.from_file("model.gguf")
@@ -1189,10 +1375,8 @@ Download models from HuggingFace with Ollama-style tags.
 from inferna.llama.llama_cpp import download_model, list_cached_models
 
 # Download from HuggingFace
-download_model(
-    hf_repo="bartowski/Llama-3.2-1B-Instruct-GGUF:q4",
-    cache_dir="~/.cache/inferna/models"
-)
+# Saved under ~/.cache/llama.cpp unless model_path is given
+download_model(hf_repo="bartowski/Llama-3.2-1B-Instruct-GGUF:q4")
 
 # List cached models
 models = list_cached_models()
@@ -1204,7 +1388,7 @@ for model in models:
 # Direct URL download
 download_model(
     url="https://example.com/model.gguf",
-    output_path="models/custom.gguf"
+    model_path="models/custom.gguf"
 )
 ```
 
@@ -1240,69 +1424,57 @@ cache.clear()
 
 ### Speculative Decoding
 
-Use draft model for 2-3x inference speedup.
+A small draft model proposes tokens; the target verifies them in one batch.
 
 ```python
 from inferna.llama.llama_cpp import (
-    LlamaModel, LlamaContext, LlamaModelParams, LlamaContextParams,
+    LlamaModel, LlamaContext, LlamaContextParams,
     Speculative, SpeculativeParams
 )
 
-# Load target and draft models
-model_target = LlamaModel("models/large.gguf", LlamaModelParams())
-model_draft = LlamaModel("models/small.gguf", LlamaModelParams())
+model_target = LlamaModel("models/large.gguf")
+model_draft = LlamaModel("models/small.gguf")
 
 ctx_params = LlamaContextParams()
 ctx_params.n_ctx = 2048
-
 ctx_target = LlamaContext(model_target, ctx_params)
+ctx_draft = LlamaContext(model_draft, ctx_params)
 
-# Configure speculative parameters
-params = SpeculativeParams(
-    n_max=16,        # Maximum number of draft tokens
-    n_reuse=8,       # Tokens to reuse
-    p_min=0.75       # Minimum acceptance probability
-)
+params = SpeculativeParams(n_max=16, n_min=0, p_min=0.75)
+spec = Speculative(params, ctx_target, ctx_draft)  # raises if ctx_target is incompatible
 
-# Create speculative decoding instance
-spec = Speculative(params, ctx_target)
+prompt_tokens = [1, 2, 3]   # tokens the target has processed
+spec.begin(prompt_tokens)
 
-# Check compatibility
-if spec.is_compat():
-    print("Models are compatible for speculative decoding")
+# Draft continuations of the target's newest sampled token,
+# which is not yet in prompt_tokens
+last_token = 4
+draft_tokens = spec.draft(params, prompt_tokens, last_token)
 
-    # Begin a speculative decoding round
-    spec.begin()
-
-    # Generate draft tokens
-    prompt_tokens = [1, 2, 3]
-    last_token = prompt_tokens[-1]
-    draft_tokens = spec.draft(prompt_tokens, last_token)
-
-    # Accept verified tokens
-    spec.accept()
-
-    # Print performance statistics
-    spec.print_stats()
+spec.accept(n_accepted)     # n_accepted from target verification
+spec.print_stats()
 ```
 
-**Parameters:**
+**Parameters** (`n_min` and `p_min` are keyword-only):
 
 - `n_max`: Maximum number of tokens to draft (default: 16)
 
-- `n_reuse`: Number of tokens to reuse from previous draft (default: 8)
+- `n_min`: A shorter draft is discarded (default: 0)
 
-- `p_min`: Minimum acceptance probability (default: 0.75)
+- `p_min`: Drafting stops when the top candidate's probability, a softmax over the draft model's top 10 logits, falls below this (default: 0.75)
 
 **Methods:**
 
 | Method | Description |
 |--------|-------------|
-| `is_compat()` | Check if target and draft models are compatible |
-| `begin()` | Begin a speculative decoding round |
-| `draft(...)` | Generate draft tokens from the draft model |
-| `accept()` | Accept verified tokens after evaluation |
-| `print_stats()` | Print speculative decoding performance statistics |
+| `Speculative.is_compat(ctx_target)` | Static: check that the target supports partial KV removal. Needs an empty sequence to probe |
+| `begin(prompt_tokens)` | Begin a speculative decoding round |
+| `draft(params, prompt_tokens, last_token_id)` | Draft greedy continuations of `last_token_id`, the target's newest token, which follows `prompt_tokens` |
+| `accept(n_accepted)` | Record the number of verified draft tokens |
+| `print_stats()` | Print speculative decoding statistics |
+
+`tests/examples/speculative_example.py` shows the full draft/verify loop, with
+`--bench` to compare against plain greedy decoding.
 
 ---
 
@@ -1565,7 +1737,7 @@ Same as `text_to_image()` but returns `List[SDImage]` and accepts `batch_count: 
 
 ### `image_to_image()`
 
-Img2img convenience function. Note: builds a context with `vae_decode_only=False` so the encoder is available.
+Img2img convenience function.
 
 ```python
 def image_to_image(
@@ -1646,11 +1818,8 @@ params.clip_g_path = "clip_g.safetensors" # Optional CLIP-G (SDXL/SD3)
 params.t5xxl_path = "t5xxl.safetensors"   # Optional T5-XXL (SD3/FLUX)
 params.control_net_path = "cn.safetensors" # Optional ControlNet
 params.n_threads = 4
-params.vae_decode_only = True             # Set False for img2img
 params.diffusion_flash_attn = False
-params.offload_params_to_cpu = False      # Low-VRAM mode
-params.keep_clip_on_cpu = False
-params.keep_vae_on_cpu = False
+params.apply_cpu_offload(offload_params=True, clip_on_cpu=True, vae_on_cpu=True)  # Low-VRAM mode
 params.wtype = SDType.COUNT               # COUNT = auto-detect
 params.rng_type = RngType.CUDA
 ```
@@ -2009,8 +2178,8 @@ All functions include comprehensive type hints for IDE support:
 ```python
 from typing import List, Dict, Optional, Iterator, Callable, Tuple
 from inferna import (
-    complete,          # str | Iterator[str]
-    chat,              # str | Iterator[str]
+    complete,          # Response | Iterator[str]
+    chat,              # Response | Iterator[str]
     LLM,               # class
     GenerationConfig,  # @dataclass
 )
@@ -2039,7 +2208,7 @@ for prompt in prompts:
 from inferna import batch_generate, GenerationConfig
 
 # BAD: Sequential processing
-responses = [generate(p, model_path="model.gguf") for p in prompts]
+responses = [complete(p, model_path="model.gguf") for p in prompts]
 
 # GOOD: Parallel batch processing (3-10x faster)
 prompts = ["What is 2+2?", "What is 3+3?", "What is 4+4?"]
@@ -2057,10 +2226,10 @@ responses = batch_generate(
 # Estimate optimal layers
 from inferna import estimate_gpu_layers
 
-estimate = estimate_gpu_layers("model.gguf", available_vram_mb=8000)
+estimate = estimate_gpu_layers("model.gguf", gpu_memory_mb=8000)
 
 # Use recommended settings
-config = GenerationConfig(n_gpu_layers=estimate.n_gpu_layers)
+config = GenerationConfig(n_gpu_layers=estimate.layers)
 gen = LLM("model.gguf", config=config)
 ```
 
@@ -2090,9 +2259,9 @@ for chunk in complete("Write a long essay", model_path="model.gguf",
 
 ## Version Compatibility
 
-- **Python**: >=3.10 (tested on 3.13)
+- **Python**: >=3.12
 
-- **llama.cpp**: b8833
+- **llama.cpp**: b11146 (v0.5.0)
 
 - **Platform**: macOS, Linux, Windows
 
@@ -2110,4 +2279,4 @@ for chunk in complete("Write a long essay", model_path="model.gguf",
 
 ---
 
-**Last Updated**: April 2026 **Inferna Version**: 0.2.11
+**Last Updated**: September 2026 **Inferna Version**: 0.5.1

@@ -663,8 +663,10 @@ class EmbeddedServer:
         except json.JSONDecodeError:
             conn.send_error(400, "Invalid JSON")
         except Exception as e:
+            # The message can carry model and filesystem paths; log it
+            # server-side and tell the client nothing specific.
             self._logger.error(f"Chat completion error: {e}")
-            conn.send_error(500, str(e))
+            conn.send_error(500, "Internal Server Error")
 
     def _handle_embeddings(self, conn: MongooseConnection, body: str) -> None:
         if not self._config.embedding or self._embedder is None:
@@ -705,7 +707,7 @@ class EmbeddedServer:
             conn.send_error(400, "Invalid JSON")
         except Exception as e:
             self._logger.error(f"Embeddings error: {e}")
-            conn.send_error(500, str(e))
+            conn.send_error(500, "Internal Server Error")
 
     def _resolve_max_tokens(self, request: ChatRequest) -> int:
         """Map the request's ``max_tokens`` to a concrete cap.
@@ -850,7 +852,7 @@ class EmbeddedServer:
         except Exception as e:
             self._logger.exception(f"Streaming worker error: {e}")
             if not state.cancelled:
-                err = {"error": {"type": "internal_error", "message": str(e)}}
+                err = {"error": {"type": "internal_error", "message": "Internal Server Error"}}
                 try:
                     state.chunks.put(b"data: " + json.dumps(err).encode() + b"\n\n")
                 except Exception:

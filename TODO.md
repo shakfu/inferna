@@ -4,13 +4,15 @@
 
 ## High
 
+- [ ] **Decide whether `quarto_render` render-existing mode confines `input`.** With `input` and no `content`, the tool renders a file anywhere on disk, which runs its code cells. Confining it would block rendering the user's own files outside the output dir. cyllama behaves the same. #security
+
 - [ ] **Update the web UI past `b9611`** (target: the release after `0.4.0`). The bucket now publishes only `dist.tar.gz`, with content-hashed JS/CSS, so `fetch_webui` 404s past `b9620`. Needs a tarball fetcher with a manifest, manifest-driven routes in `embedded.py`, and matching `--api-key` public paths in `python.py`. Findings, required changes and open decisions are in `docs/dev/update-webui.md`. #webui
 
 - [ ] **Ctrl-C does not interrupt `inferna.sd` generation** ([#8](https://github.com/shakfu/inferna/issues/8)) -- `generate_image()` is a single blocking C call with no abort path; the LLM cancellation work in `0.2.14` does not transfer (separate compute graph). Fix is gated on upstream PR [leejet/stable-diffusion.cpp#1124](https://github.com/leejet/stable-diffusion.cpp/pull/1124) which adds `sd_cancel_generation(sd_ctx, sd_cancel_mode_t)`. Once that merges and `--sd-version` bumps to a release containing it: extend `stable_diffusion.pxd` with the enum + extern, add `SDContext.cancel(mode)` and `SDContext.install_sigint_handler()` mirroring the LLM helpers (`src/inferna/api.py` `_SigintHandle`), wire into the inferna-desktop sidecar's `asyncio.CancelledError` path. Tests in `tests/test_sd_cancel.py` modeled on `tests/test_cancel.py`. #bugs
 
 - [ ] **Add `BusyGuard` on `SDContext.close`** (or document "do not close while generating"). Currently `_sd_native.cpp:789-791` calls `free_sd_ctx` with no `busy_lock` — concurrent `generate_image` (GIL released) races against the free. `WhisperContextW::close` has the same shape; check both. #hardening-small-bugs-ergonomic-gaps
 
-- [ ] **Make `WhisperContext.close` idempotent.** `_whisper_native.cpp:432-435` calls `s.ensure_valid()` before the null check, so a second close raises `RuntimeError` instead of being a no-op. Drop the `ensure_valid()` and gate cleanup on `s.ctx != nullptr`. #hardening-small-bugs-ergonomic-gaps
+- [ ] **Make `WhisperContext.close` idempotent.** `_whisper_native.cpp:463-466` calls `s.ensure_valid()` before the null check, so a second close raises `RuntimeError` instead of being a no-op. Drop the `ensure_valid()` and gate cleanup on `s.ctx != nullptr`. #hardening-small-bugs-ergonomic-gaps
 
 - [ ] **Continuous batching in `EmbeddedServer`.** Multi-day. Today's slot decode loop is sequential per request; a real per-slot continuous batching loop (one sampler per slot, ragged decode, true concurrent users) is the largest perf upgrade and the reason vLLM/llama-cpp-server outpace ad-hoc loops. Touches `src/inferna/llama/server/embedded.py`, `python.py:ServerSlot`, the streaming SSE path. Probably needs the `embedded.py` (~950 LOC) split first (see P3). #p1-high-impact
 
@@ -46,8 +48,6 @@
 - [ ] **Return `None` for failed slots in `generate_with_params`.** `_sd_native.cpp:825-844` wraps null-data results as stub `SDImage` objects mixed in with valid ones; only signal is a `warnings.warn`. Returning `None` for invalid slots makes `len(images) != batch` mean what it should. #hardening-small-bugs-ergonomic-gaps
 
 - [ ] **Bind the `whisper_*_with_state` family.** `_whisper_native.cpp:592-598` exposes `WhisperState` as a constructor-only stub. The whole point of `whisper_state` is concurrent decoding from one context; without methods (`whisper_full_with_state`, `whisper_encode_with_state`, etc.) the class is useless. #coverage-bindings-worth-filling-in
-
-- [ ] **Bind `llama_state_*` save/load.** Only `llama_state_get_size` is bound (`_llama_native.cpp` near line 1188); `llama_state_get_data` / `_set_data` / `_load_file` / `_save_file` and the `_seq_*` and `_ext` variants are all unbound. Required for context checkpointing/resumption. #coverage-bindings-worth-filling-in
 
 - [ ] **Bind whisper callbacks.** `whisper_full_params` exposes `new_segment_callback`, `progress_callback`, `encoder_begin_callback`, `abort_callback` — none are bound. SD module already has the analogous pattern; mirror it. #coverage-bindings-worth-filling-in
 
@@ -119,7 +119,7 @@
 
 - [ ] **Monotonic `b<commit-count>` build-tag scheme** -- llama.cpp's `get-tag-name/action.yml` uses `fetch-depth: 0` + `git rev-list --count HEAD` to produce `b${BUILD_NUMBER}` on `master`, `${branch}-b${count}-${sha7}` on branches. Lets every CI-built wheel be distinguishable without bumping `pyproject.toml` version on every pre-release. Apply in `build-cibw.yml` / `build-gpu-wheels.yml` upload steps #ci-workflows
 
-- [ ] **Replace per-token `LlamaBatch` alloc in `Speculative.draft`.** `_speculative.py:125, :144` constructs a fresh native batch each loop iteration; the project ships `BatchMemoryPool` in `_python_helpers.py` for exactly this. Pure perf, not correctness. #hardening-small-bugs-ergonomic-gaps
+- [ ] **Replace per-token `LlamaBatch` alloc in `Speculative.draft`.** `_speculative.py` `_decode_draft` constructs a fresh native batch each loop iteration; the project ships `BatchMemoryPool` in `_python_helpers.py` for exactly this. Pure perf, not correctness. #hardening-small-bugs-ergonomic-gaps
 
 - [ ] **Better `from_numpy` error for non-2D/3D inputs.** `_sd_native.cpp:447-479` falls through to a bare nanobind cast error on 4D+ arrays. Add an explicit `if ndim not in (2, 3): raise ValueError(...)`. #hardening-small-bugs-ergonomic-gaps
 
@@ -143,7 +143,7 @@
 
 - [ ] **Frozen dataclasses.** `GenerationStats`, `Response` (immutable in practice), `ResponseCacheInfo` could be `frozen=True`. Surfaces accidental mutation. (`TokenLogprob`, `TopLogprob`, `StreamSegment` already frozen.) #p3-polish-cleanup
 
-- [ ] **Context managers on remaining classes.** `EmbeddedServer`, `RAG`, `WhisperContext`, `SDContext` lack `__enter__`/`__exit__`. Native cleanup works either way; explicit is better. #p3-polish-cleanup
+- [ ] **Context manager on `WhisperContext`.** It lacks `__enter__`/`__exit__`; `EmbeddedServer`, `RAG` and `SDContext` have them. Native cleanup works either way; explicit is better. #p3-polish-cleanup
 
 - [ ] **Centralize sampler / server log routing.** `Sampler.print_perf_data()` and `EmbeddedServer` access logs go to stdout. Pipe through `logging` so deployments capture them. #p3-polish-cleanup
 

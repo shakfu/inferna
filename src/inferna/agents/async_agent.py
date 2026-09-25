@@ -113,6 +113,7 @@ class AsyncReActAgent:
             max_consecutive_same_tool=max_consecutive_same_tool,
         )
         self._lock = asyncio.Lock()
+        self._closed = False
 
     async def __aenter__(self) -> "AsyncReActAgent":
         """Async context manager entry."""
@@ -123,9 +124,22 @@ class AsyncReActAgent:
         await self.close()
 
     async def close(self) -> None:
-        """Release resources."""
-        if self._llm:
-            await asyncio.to_thread(self._llm.close)
+        """Release resources.
+
+        Takes the same lock as run() and stream() so the native context
+        cannot be freed while an operation is still using it.
+        """
+        async with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._llm:
+                await asyncio.to_thread(self._llm.close)
+
+    def _check_closed(self) -> None:
+        """Raise if the agent has been closed."""
+        if self._closed:
+            raise RuntimeError(f"{type(self).__name__} is closed")
 
     @property
     def metrics(self) -> Optional[AgentMetrics]:
@@ -146,7 +160,9 @@ class AsyncReActAgent:
             >>> result = await agent.run("What is the capital of France?")
             >>> print(result.answer)
         """
+        self._check_closed()
         async with self._lock:
+            self._check_closed()
             return await asyncio.to_thread(self._agent.run, task)
 
     async def stream(self, task: str) -> AsyncIterator[AgentEvent]:
@@ -166,6 +182,7 @@ class AsyncReActAgent:
             >>>     elif event.type == EventType.ACTION:
             >>>         print(f"Acting: {event.content}")
         """
+        self._check_closed()
         queue: asyncio.Queue[Union[AgentEvent, None, Exception]] = asyncio.Queue()
 
         async def producer() -> None:
@@ -184,6 +201,7 @@ class AsyncReActAgent:
         loop = asyncio.get_event_loop()
 
         async with self._lock:
+            self._check_closed()
             producer_task = asyncio.create_task(producer())
 
             try:
@@ -249,6 +267,7 @@ class AsyncConstrainedAgent:
             verbose=verbose,
         )
         self._lock = asyncio.Lock()
+        self._closed = False
 
     async def __aenter__(self) -> "AsyncConstrainedAgent":
         """Async context manager entry."""
@@ -259,9 +278,22 @@ class AsyncConstrainedAgent:
         await self.close()
 
     async def close(self) -> None:
-        """Release resources."""
-        if self._llm:
-            await asyncio.to_thread(self._llm.close)
+        """Release resources.
+
+        Takes the same lock as run() and stream() so the native context
+        cannot be freed while an operation is still using it.
+        """
+        async with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._llm:
+                await asyncio.to_thread(self._llm.close)
+
+    def _check_closed(self) -> None:
+        """Raise if the agent has been closed."""
+        if self._closed:
+            raise RuntimeError(f"{type(self).__name__} is closed")
 
     @property
     def metrics(self) -> Optional[AgentMetrics]:
@@ -278,7 +310,9 @@ class AsyncConstrainedAgent:
         Returns:
             AgentResult with answer and execution trace
         """
+        self._check_closed()
         async with self._lock:
+            self._check_closed()
             return await asyncio.to_thread(self._agent.run, task)
 
     async def stream(self, task: str) -> AsyncIterator[AgentEvent]:
@@ -291,6 +325,7 @@ class AsyncConstrainedAgent:
         Yields:
             AgentEvent instances as agent executes
         """
+        self._check_closed()
         queue: asyncio.Queue[Union[AgentEvent, None, Exception]] = asyncio.Queue()
 
         async def producer() -> None:
@@ -308,6 +343,7 @@ class AsyncConstrainedAgent:
         loop = asyncio.get_event_loop()
 
         async with self._lock:
+            self._check_closed()
             producer_task = asyncio.create_task(producer())
 
             try:
