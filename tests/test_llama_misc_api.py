@@ -337,3 +337,11 @@ class TestMemoryPositions:
         ctx = _decoded(model, tokens)
         assert ctx.memory_seq_rm(-1, 0, -1)
         assert ctx.memory_seq_pos_max(0) < 0
+
+
+def test_load_mode_setter_rejects_unknown_value():
+    p = cy.LlamaModelParams()
+    with pytest.raises(ValueError, match="unknown load mode"):
+        p.load_mode = 99
+    p.load_mode = cy.LLAMA_LOAD_MODE_NONE
+    assert p.load_mode == cy.LLAMA_LOAD_MODE_NONE

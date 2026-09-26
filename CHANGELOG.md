@@ -52,6 +52,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **`memory_seq_*` aborted the process on an out-of-range `seq_id`.** llama.cpp checks it with `GGML_ASSERT`, so `ctx.memory_seq_pos_max(300)` killed the interpreter with SIGABRT. Every `memory_seq_*` method now raises `IndexError` outside `[0, n_seq_max)`, and `memory_seq_add` / `_div` raise `ValueError` for M-RoPE models, which llama.cpp also asserts against.
 
+- **`LlamaModelParams.load_mode` accepted any integer**, which `llama_load_mode_name` rejects with `GGML_ABORT`. The setter now raises `ValueError` outside the enum.
+
 - **A log callback installed at exit kept its globals alive past shutdown.** The binding holds the callback in a static, and a closure's globals can reach every model, so nanobind reported leaked instances. `disable_logging()` now drops the callback, and it is cleared at exit.
 
 - **`LlamaSampler.sample()` aborted the process** instead of raising. `llama_sampler_sample` uses `GGML_ASSERT` in two places: when the chain selects no token (no greedy, dist, mirostat or adaptive-p link, or a filter after it), and when the output index has no logits (out of range, logits flag unset, or no decode yet). `sample()` now runs the same steps in C++ and raises `ValueError` in both cases. `tests/test_sampler_sample.py` compares it against upstream's function on cloned chains, so drift after a llama.cpp bump fails there.
@@ -64,7 +66,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **A LoRA adapter did not keep its model alive.** A model's destructor frees every adapter registered to it, so `LlamaModel(path).lora_adapter_init(lora)` left the adapter pointing at freed memory once the temporary model was collected. The adapter now holds a reference, exposed as `LlamaAdapterLora.model`.
 
-- **`get_embeddings()` and `get_embeddings_ith()` returned `n_embd` floats.** llama.cpp lays out output embeddings with `n_embd_out` floats per row. The two differ for models with a projection after the last layer, which then got a truncated vector or read past the row.
+- **`get_embeddings()` and `get_embeddings_ith()` returned `n_embd` floats.** llama.cpp lays out output embeddings with `n_embd_out` floats per row. The two differ for models with a projection after the last layer, which then got a truncated vector or read past the row. For WavTokenizer (`n_embd` 512, `n_embd_out` 1282) this made the vocoder read the wrong values; `tests/test_tts_vocoder.py` decodes the default speaker's codes with both WavTokenizer sizes and checks the result is speech. The mtmd `get_output_embeddings` docs now name `n_embd_inp`, the width of mtmd rows.
+
+- **The RAG `Embedder` pooled only the first token.** `get_embeddings()` returns one output row, so MEAN pooling (the default) returned the CLS vector and LAST returned an empty vector. It now collects every row with `get_embeddings_ith()`. `tests/test_rag_embedder.py` checks all three modes against llama.cpp's own pooling.
+
+- **`TTSGenerator` produced no audio with OuteTTS 0.3-1B.** It filtered and offset audio codes with a hardcoded Qwen2 range, `151672..155772`, and ignored its own `audio_code_range` argument. OuteTTS 0.3-1B is OLMo-based, with its codes at `50307..54402`, so every code was dropped. The code range and the guide token now come from the loaded vocabulary; explicit arguments still override them. OuteTTS 1.0, which uses a different codec, now fails at load with a clear error instead of producing noise. `tests/test_tts_fix.py` transcribes the output with whisper and checks the words; it used to check only that a WAV file was written. Both fixes are ports from cyllama 0.5.1.
 
 - **`SqliteVectorStore` wrote float32 blobs for every `vector_type`.** `float16`, `int8` and `uint8` were accepted and passed to `vector_init`, then encoded with `struct` format `f`. sqlite-vector reads `dimension * sizeof(element)` bytes and does not check blob length, so a FLOAT16 column read each 4-byte float as two halves. Search returned wrong rows with no error. Encoding now follows the declared type, and the integer types raise on a value they cannot represent instead of wrapping.
 

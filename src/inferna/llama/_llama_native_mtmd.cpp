@@ -436,7 +436,9 @@ void register_mtmd(nb::module_& m) {
                 if (!embd) throw std::runtime_error("No embeddings available");
                 size_t total = (size_t) n_tokens * (size_t) n_embd;
                 return std::vector<float>(embd, embd + total);
-            }, "n_tokens"_a, "n_embd"_a)
+            }, "n_tokens"_a, "n_embd"_a,
+            "Output embeddings of the last encoded chunk, flat row-major. n_embd is the "
+            "text model's input embedding width, LlamaModel.n_embd_inp.")
         .def("eval_chunks",
             [](MtmdContextW& s, nb::object llama_ctx,
                MtmdInputChunksW& chunks, int n_past, int seq_id,

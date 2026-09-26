@@ -8,12 +8,15 @@ This module provides:
 - Custom pytest markers
 """
 
+import os
 from pathlib import Path
 
 import pytest
 
 # Project root
 ROOT = Path.cwd()
+# Optional models; INFERNA_MODELS_DIR points tests at another download location
+MODELS_DIR = Path(os.environ.get("INFERNA_MODELS_DIR", ROOT / "models"))
 
 # Default model path constant (for use in subprocesses where fixtures aren't available)
 DEFAULT_MODEL = "models/Llama-3.2-1B-Instruct-Q8_0.gguf"

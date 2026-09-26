@@ -4,7 +4,7 @@
 
 ## High
 
-- [ ] **Decide whether `quarto_render` render-existing mode confines `input`.** With `input` and no `content`, the tool renders a file anywhere on disk, which runs its code cells. Confining it would block rendering the user's own files outside the output dir. cyllama behaves the same. #security
+- [ ] **Render existing files with `--no-execute` in `quarto_render`.** With `input` and no `content`, the tool runs `quarto render` on any file on disk (`agents/tools/quarto.py`), which executes its code cells, so injected text can make the agent run a planted `.qmd` / `.ipynb`. Pass `--no-execute` in that mode; keep execution for create-and-render, which is confined to the output dir. Chosen over confining `input`, which would block rendering the user's own files. Check how `--no-execute` interacts with frozen results in a quarto project, update the docstring, add tests, and apply the same change to cyllama. #security
 
 - [ ] **Update the web UI past `b9611`** (target: the release after `0.4.0`). The bucket now publishes only `dist.tar.gz`, with content-hashed JS/CSS, so `fetch_webui` 404s past `b9620`. Needs a tarball fetcher with a manifest, manifest-driven routes in `embedded.py`, and matching `--api-key` public paths in `python.py`. Findings, required changes and open decisions are in `docs/dev/update-webui.md`. #webui
 

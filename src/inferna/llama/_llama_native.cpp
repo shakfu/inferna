@@ -990,7 +990,14 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaModelParamsW, int,  split_mode,   "split_mode")
         PARAM_VAL(LlamaModelParamsW, int,  main_gpu,     "main_gpu")
         PARAM_VAL(LlamaModelParamsW, bool, vocab_only,    "vocab_only")
-        PARAM_VAL(LlamaModelParamsW, int,  load_mode,    "load_mode")
+        .def_prop_rw("load_mode",
+            [](LlamaModelParamsW& s) { return (int) s.p.load_mode; },
+            [](LlamaModelParamsW& s, int v) {
+                // llama.cpp aborts on a value outside the enum
+                if (v < LLAMA_LOAD_MODE_AUTO || v > LLAMA_LOAD_MODE_DIRECT_IO)
+                    throw std::invalid_argument("unknown load mode " + std::to_string(v));
+                s.p.load_mode = (llama_load_mode) v;
+            })
         PARAM_VAL(LlamaModelParamsW, int,  lazy_mode,    "lazy_mode")
         // use_mmap / use_mlock / use_direct_io are a compatibility view over
         // load_mode; setting one preserves the other two where the enum can
