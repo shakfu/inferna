@@ -43,8 +43,11 @@ def init_tensor(name, shape):
     return array.array("f", (rng.gauss(0.0, 0.02) for _ in range(n)))
 
 
-def tiny_model():
-    return cy.LlamaModel.from_metadata(tiny_metadata(), init_tensor, verbose=False)
+def tiny_model(n_gpu_layers=None):
+    p = cy.LlamaModelParams()
+    if n_gpu_layers is not None:
+        p.n_gpu_layers = n_gpu_layers
+    return cy.LlamaModel.from_metadata(tiny_metadata(), init_tensor, p, verbose=False)
 
 
 def train_ctx(model, **overrides):
@@ -61,6 +64,27 @@ def train_ctx(model, **overrides):
 
 def data(n_ctx, windows=6):
     return [i % PERIOD for i in range(n_ctx * windows)]
+
+
+def gpu_present():
+    return any(d["type"] in ("GPU", "iGPU") for d in cy.ggml_backend_dev_info())
+
+
+def trainable(**opt):
+    """(model, ctx) after opt_init; SGD on CPU if the default device cannot run the step."""
+    m = tiny_model()
+    ctx = train_ctx(m)
+    try:
+        ctx.opt_init(**opt)
+        return m, ctx
+    except ValueError as e:
+        if "no device can run" not in str(e):
+            raise
+    # e.g. paravirtual Metal; AdamW cannot fall back to CPU while a GPU is present
+    m = tiny_model(n_gpu_layers=0)
+    ctx = train_ctx(m)
+    ctx.opt_init(**{**opt, "optimizer": "sgd", "learning_rate": 1e-2})
+    return m, ctx
 
 
 def last_logits(model, tokens):
@@ -103,9 +127,7 @@ class TestFromMetadata:
 
 class TestTraining:
     def test_loss_falls_and_save_round_trips(self, tmp_path):
-        m = tiny_model()
-        ctx = train_ctx(m)
-        ctx.opt_init(learning_rate=1e-3)
+        m, ctx = trainable(learning_rate=1e-3)
         tokens = data(ctx.n_ctx)
         first = ctx.opt_epoch(tokens, val_split=0.2)
         for _ in range(3):
@@ -121,16 +143,14 @@ class TestTraining:
         assert last_logits(reloaded, probe) == pytest.approx(last_logits(m, probe), abs=1e-4)
 
     def test_param_filter_limits_training(self):
-        m = tiny_model()
-        before = last_logits(m, [1, 2, 3])
         names = []
 
         def only_output_norm(name):
             names.append(name)
             return name == "output_norm.weight"
 
-        ctx = train_ctx(m)
-        ctx.opt_init(learning_rate=1e-2, param_filter=only_output_norm)
+        m, ctx = trainable(learning_rate=1e-2, param_filter=only_output_norm)
+        before = last_logits(m, [1, 2, 3])
         ctx.opt_epoch(data(ctx.n_ctx), val_split=0.2)
         assert "output_norm.weight" in names
         assert last_logits(m, [1, 2, 3]) != before
@@ -151,8 +171,7 @@ class TestTrainingGuards:
     """Each case aborts the process inside llama.cpp without the wrapper's check."""
 
     def test_opt_init_twice(self):
-        ctx = train_ctx(tiny_model())
-        ctx.opt_init()
+        _, ctx = trainable()
         with pytest.raises(RuntimeError, match="already"):
             ctx.opt_init()
 
@@ -179,13 +198,50 @@ class TestTrainingGuards:
         with pytest.raises(ValueError, match="F32 model"):
             ctx.opt_init()
 
+    @pytest.mark.parametrize("optimizer", ["adamw", "sgd"])
+    def test_optimizer_step_device(self, optimizer):
+        # Metal without simdgroup reduction (e.g. paravirtual macOS VMs) cannot
+        # run the step on its weight buffers; there opt_init must raise.
+        ctx = train_ctx(tiny_model())
+        try:
+            ctx.opt_init(optimizer=optimizer)
+        except ValueError as e:
+            assert "no device can run" in str(e)
+            with pytest.raises(RuntimeError, match="opt_init failed"):
+                ctx.opt_epoch(data(ctx.n_ctx))
+            return
+        ctx.opt_epoch(data(ctx.n_ctx), val_split=0.2)
+
+    @pytest.mark.parametrize("n_gpu_layers", [0, 1])
+    def test_adamw_rejects_weights_off_first_device(self, n_gpu_layers):
+        # AdamW's m/v live on the first GPU; a step elsewhere silently drops momentum
+        if not gpu_present():
+            pytest.skip("needs a GPU device")
+        ctx = train_ctx(tiny_model(n_gpu_layers=n_gpu_layers))
+        with pytest.raises(ValueError, match="first device|no device can run"):
+            ctx.opt_init()
+
+    def test_sgd_on_cpu_matches_default_placement(self):
+        def losses(model):
+            ctx = train_ctx(model)
+            ctx.opt_init(optimizer="sgd", learning_rate=1e-2)
+            return [ctx.opt_epoch(data(ctx.n_ctx), val_split=0.2)["eval"]["loss"] for _ in range(2)]
+
+        cpu = losses(tiny_model(n_gpu_layers=0))
+        try:
+            ref = losses(tiny_model())
+        except ValueError as e:
+            assert "no device can run" in str(e)
+            assert cpu[1] < cpu[0]
+            return
+        assert cpu == pytest.approx(ref, rel=1e-4)
+
     def test_epoch_before_init(self):
         with pytest.raises(RuntimeError, match="opt_init first"):
             train_ctx(tiny_model()).opt_epoch([0] * 1000)
 
     def test_too_few_tokens(self):
-        ctx = train_ctx(tiny_model())
-        ctx.opt_init()
+        _, ctx = trainable()
         with pytest.raises(ValueError, match="at least"):
             ctx.opt_epoch([1] * ctx.n_ctx)
         # one window cannot be split into train and eval
@@ -193,14 +249,12 @@ class TestTrainingGuards:
             ctx.opt_epoch(data(ctx.n_ctx, windows=2), val_split=0.5)
 
     def test_token_outside_vocab(self):
-        ctx = train_ctx(tiny_model())
-        ctx.opt_init()
+        _, ctx = trainable()
         with pytest.raises(ValueError, match="outside the vocabulary"):
             ctx.opt_epoch(data(ctx.n_ctx)[:-1] + [N_VOCAB])
 
     @pytest.mark.parametrize("val_split", [-0.1, 1.0])
     def test_val_split_range(self, val_split):
-        ctx = train_ctx(tiny_model())
-        ctx.opt_init()
+        _, ctx = trainable()
         with pytest.raises(ValueError, match="val_split"):
             ctx.opt_epoch(data(ctx.n_ctx), val_split=val_split)

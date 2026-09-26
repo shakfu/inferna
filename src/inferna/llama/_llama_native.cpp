@@ -628,13 +628,110 @@ static void check_positions_shiftable(LlamaContextW& s) {
             "position shifting is not supported for multi-dimensional (M-RoPE) positions");
 }
 
+struct OptParamFilter {
+    nb::object fn;
+    ggml_opt_optimizer_type type;
+    std::string error;                    // first reason this model cannot train
+    const ggml_tensor* first = nullptr;   // first trained weight, for the AdamW device check
+};
+
+static ggml_backend_dev_t buffer_device(const ggml_tensor* t) {
+    return ggml_backend_buft_get_device(ggml_backend_buffer_get_type(t->buffer));
+}
+
+static bool on_host_device(const ggml_tensor* t) {
+    ggml_backend_dev_t dev = buffer_device(t);
+    if (!dev) return ggml_backend_buffer_is_host(t->buffer);
+    auto type = ggml_backend_dev_type(dev);
+    return type == GGML_BACKEND_DEVICE_TYPE_CPU || type == GGML_BACKEND_DEVICE_TYPE_ACCEL;
+}
+
+static bool gpu_registered() {
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto type = ggml_backend_dev_type(ggml_backend_dev_get(i));
+        if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) return true;
+    }
+    return false;
+}
+
+// ggml_opt allocates AdamW's m/v on the scheduler's first backend: the model's
+// first GPU when it has one. A step on another device writes to copies of m/v,
+// so momentum is silently dropped. Needs one device for all trained weights,
+// and not the CPU while a GPU is present.
+static std::string adamw_placement_error(OptParamFilter& f, const ggml_tensor* t) {
+    if (!f.first) {
+        f.first = t;
+        if (on_host_device(t) && gpu_registered())
+            return std::string("'") + t->name + "' is on the CPU while a GPU is present";
+        return {};
+    }
+    if (buffer_device(t) != buffer_device(f.first))
+        return std::string("'") + t->name + "' (" + ggml_backend_buffer_name(t->buffer) + ") and '" +
+            f.first->name + "' (" + ggml_backend_buffer_name(f.first->buffer) + ") are on different devices";
+    return {};
+}
+
+#define HIDE_GPU "hide the GPU (e.g. GGML_METAL_DEVICES=0) before importing inferna"
+
+// Mirrors ggml_backend_sched_backend_from_buffer: the optimizer step updates the
+// weight in place, so some device must support both its buffer and the op.
+// Otherwise the scheduler aborts in opt_epoch (e.g. Metal without simdgroup reduction).
+static bool opt_step_runnable(const ggml_tensor* t, ggml_opt_optimizer_type type) {
+    if (!t->buffer) return true;
+    ggml_init_params ip{ggml_tensor_overhead() * 8, nullptr, true};
+    std::unique_ptr<ggml_context, decltype(&ggml_free)> ctx(ggml_init(ip), ggml_free);
+    auto* a = const_cast<ggml_tensor*>(t);
+    ggml_tensor* node = ggml_view_tensor(ctx.get(), a);
+    node->src[0] = a;
+    node->src[1] = ggml_dup_tensor(ctx.get(), a);
+    if (type == GGML_OPT_OPTIMIZER_TYPE_ADAMW) {
+        node->op = GGML_OP_OPT_STEP_ADAMW;
+        node->src[2] = ggml_dup_tensor(ctx.get(), a);
+        node->src[3] = ggml_dup_tensor(ctx.get(), a);
+        node->src[4] = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 7);
+    } else {
+        node->op = GGML_OP_OPT_STEP_SGD;
+        node->src[2] = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 2);
+    }
+    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(t->buffer);
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_supports_buft(dev, buft) && ggml_backend_dev_supports_op(dev, node))
+            return true;
+    }
+    return false;
+}
+
 // Python param_filter for llama_opt_init; llama.cpp offers it only F32 tensors.
 static bool param_filter_cb(const ggml_tensor* t, void* ud) {
-    auto& fn = *static_cast<nb::object*>(ud);
-    if (PyErr_Occurred()) return false;
-    if (fn.is_none()) return llama_opt_param_filter_all(t, nullptr);
-    try { return nb::cast<bool>(fn(std::string(t->name))); }
-    catch (nb::python_error& e) { e.restore(); return false; }
+    auto& f = *static_cast<OptParamFilter*>(ud);
+    if (PyErr_Occurred() || !f.error.empty()) return false;
+    bool keep;
+    if (f.fn.is_none()) keep = llama_opt_param_filter_all(t, nullptr);
+    else {
+        try { keep = nb::cast<bool>(f.fn(std::string(t->name))); }
+        catch (nb::python_error& e) { e.restore(); return false; }
+    }
+    // llama_set_param skips these after asking the filter; they are never trained
+    if (!keep || !t->buffer || !strcmp(t->name, "token_embd.weight") || !strcmp(t->name, "rope_freqs.weight"))
+        return keep;
+    const bool adamw = f.type == GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    if (!opt_step_runnable(t, f.type)) {
+        f.error = std::string("cannot train '") + t->name + "': no device can run " +
+            (adamw ? "OPT_STEP_ADAMW" : "OPT_STEP_SGD") + " on its " + ggml_backend_buffer_name(t->buffer) +
+            " buffer; " + (adamw ? "use optimizer='sgd' with n_gpu_layers=0, or " HIDE_GPU
+                                 : "load the model with n_gpu_layers=0 to train on CPU");
+        return false;
+    }
+    if (adamw) {
+        std::string why = adamw_placement_error(f, t);
+        if (!why.empty()) {
+            f.error = "AdamW needs every trained weight on the model's first device, but " + why +
+                "; offload all layers, use optimizer='sgd', or " HIDE_GPU;
+            return false;
+        }
+    }
+    return keep;
 }
 
 void LlamaContextW::free_ctx() {
@@ -2229,22 +2326,25 @@ NB_MODULE(_llama_native, m) {
                 std::to_string(n_batch) + "), and n_batch of n_ubatch (" + std::to_string(n_ubatch) + ")");
             s.opt.lr = learning_rate;
             s.opt.wd = weight_decay;
+            OptParamFilter filter{param_filter, type, {}};
             llama_opt_params lp{};
             lp.n_ctx_train = n_ctx_train;
             lp.param_filter = param_filter_cb;
-            lp.param_filter_ud = &param_filter;
+            lp.param_filter_ud = &filter;
             lp.get_opt_pars = opt_pars_cb;
             lp.get_opt_pars_ud = &s.opt;
             lp.optimizer_type = type;
             s.opt_status = 2;
             llama_opt_init(s.ptr, const_cast<llama_model*>(llama_get_model(s.ptr)), lp);
             if (PyErr_Occurred()) throw nb::python_error();
+            if (!filter.error.empty()) throw std::invalid_argument(filter.error);
             s.opt_status = 1;
         }, "learning_rate"_a = 1e-5f, "weight_decay"_a = 0.0f, "optimizer"_a = "adamw",
            "n_ctx_train"_a = 0, "param_filter"_a = nb::none(),
            "Prepare this context for training. param_filter(name) -> bool selects "
            "trainable tensors among the F32 ones (default: all). Needs an F32 model and "
-           "an F32 KV cache. "
+           "an F32 KV cache, and a device that can run the optimizer step on the weights; "
+           "AdamW also needs every trained weight on the model's first device. "
            "Sets the model's n_ctx_train to n_ctx_train, or to n_ctx when 0.")
         .def("opt_epoch", [](LlamaContextW& s, const std::vector<llama_token>& tokens, float val_split,
                              std::optional<int64_t> stride, std::optional<float> learning_rate){
