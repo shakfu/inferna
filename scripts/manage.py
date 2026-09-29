@@ -2559,6 +2559,21 @@ class SqliteVectorBuilder(Builder):
             if old in content and new not in content:
                 distance_cpu_c.write_text(content.replace(old, new, 1))
 
+        # Patch distance-avx2.c: its scalar tail calls `__builtin_popcount`
+        # unguarded, which MSVC lacks (LNK2019). Map it to `__popcnt`; every
+        # AVX2 CPU has POPCNT. distance-avx512.c already guards its tail.
+        distance_avx2_c = dest / "distance-avx2.c"
+        if distance_avx2_c.exists():
+            content = distance_avx2_c.read_text()
+            if "INFERNA_MSVC_POPCOUNT_SHIM" not in content:
+                distance_avx2_c.write_text(
+                    "#if defined(_MSC_VER) && !defined(__clang__)\n"
+                    "#define INFERNA_MSVC_POPCOUNT_SHIM\n"
+                    "#include <intrin.h>\n"
+                    "#define __builtin_popcount(x) __popcnt(x)\n"
+                    "#endif\n" + content
+                )
+
 
 # ----------------------------------------------------------------------------
 # wheel_builder
