@@ -1,6 +1,6 @@
 # Inferna API Reference
 
-**Version**: 0.5.1 **Date**: September 2026
+**Version**: 0.6.0 **Date**: September 2026
 
 Complete API reference for inferna, a high-performance Python library for LLM inference built on llama.cpp.
 
@@ -2279,4 +2279,4 @@ for chunk in complete("Write a long essay", model_path="model.gguf",
 
 ---
 
-**Last Updated**: September 2026 **Inferna Version**: 0.5.1
+**Last Updated**: September 2026 **Inferna Version**: 0.6.0

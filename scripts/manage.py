@@ -210,7 +210,7 @@ LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html"
 # SD_USE_UPSTREAM_GGML, which compiles those calls out, and SD_GGML_SOURCE_DIR;
 # see StableDiffusionCppBuilder._ggml_options.
 SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-898-2bb7294")  # from master-816-487de75
-SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "1.0.0")
+SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "1.1.2")
 
 # glslc for the Linux Vulkan wheel, built from source by `_ci_build_shaderc()`
 # because manylinux_2_28 has no glslc package. Pinned, not tracking main:
@@ -848,6 +848,9 @@ class AbstractBuilder(ShellCmd):
     produces_static: bool = True
     produces_dynamic: bool = True
     depends_on: list[type["Builder"]]
+    # Licenses of code the wheel's binaries contain, relative to src_dir.
+    # Staged into <prefix>/licenses/ and shipped via wheel.license-files.
+    license_files: list[str] = []
 
     def __init__(self, version: Optional[str] = None, project: Optional[Project] = None):
         self.version = version or self.version
@@ -856,6 +859,16 @@ class AbstractBuilder(ShellCmd):
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} '{self.name}-{self.version}'>"
+
+    def _copy_licenses(self) -> None:
+        """Stage `license_files` into `<prefix>/licenses/`, keeping their relative paths."""
+        dest = self.prefix / "licenses"
+        for rel in self.license_files:
+            src = self.src_dir / rel
+            if not src.is_file():
+                self.fail(f"{self.name}: license file {rel} not found; review license_files for {self.version}")
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest / rel)
 
     # def __iter__(self):
     #     for dependency in self.depends_on:
@@ -1424,6 +1437,15 @@ class LlamaCppBuilder(GgmlBuilder):
     # corresponding `LIB_LLAMA_COMMON` archive, and grep finds no
     # `common_*` symbols referenced from the wrapper sources. Dropped.
     extra_libs: list[str] = ["llama", "mtmd"]
+    license_files: list[str] = [
+        "LICENSE",
+        # nlohmann/json; it is compiled into stable-diffusion.cpp, whose copy has no license file.
+        "licenses/LICENSE-jsonhpp",
+        # vendor-hash, linked for mtmd. Its sha1 is public domain with no license file.
+        "vendor/hash/rotate-bits/LICENSE.md",
+        "vendor/hash/sha256/LICENSE",
+        "vendor/hash/xxhash/LICENSE",
+    ]
 
     def get_backend_cmake_options(self) -> dict[str, Any]:
         """CMake options for llama.cpp (GGML_* flag names)."""
@@ -1503,6 +1525,7 @@ class LlamaCppBuilder(GgmlBuilder):
         self.glob_copy(self.src_dir / "vendor" / "nlohmann", nlohmann_include, patterns=["*.hpp"])
         # mtmd (multimodal) headers.
         self.glob_copy(self.src_dir / "tools" / "mtmd", self.include, patterns=["*.h"])
+        self._copy_licenses()
         # cpp-httplib sources, compiled into the embedded server extension.
         httplib_include = self.include / "cpp-httplib"
         httplib_include.mkdir(exist_ok=True)
@@ -2132,6 +2155,8 @@ class WhisperCppBuilder(GgmlBuilder):
     # whisper.cpp ships a single combined `ggml` lib (no split partials).
     base_libs: list[str] = ["ggml"]
     extra_libs: list[str] = ["whisper", "common"]
+    # libcommon's miniaudio and stb_vorbis are public domain (dual-licensed).
+    license_files: list[str] = ["LICENSE"]
 
     def get_backend_cmake_options(self) -> dict[str, Any]:
         """CMake options for whisper.cpp (GGML_* flag names, Darwin-gated Metal)."""
@@ -2179,6 +2204,7 @@ class WhisperCppBuilder(GgmlBuilder):
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
         self.glob_copy(self.src_dir / "examples", self.include, patterns=["*.h", "*.hpp"])
+        self._copy_licenses()
 
         # Get backend options
         backend_options = self.get_backend_cmake_options()
@@ -2224,6 +2250,25 @@ class StableDiffusionCppBuilder(GgmlBuilder):
     # SD_USE_VENDORED_GGML=0, otherwise from SD's vendored copy.
     base_libs: list[str] = ["stable-diffusion"]
     extra_libs: list[str] = []
+    # Vendored code compiled into libstable-diffusion.a. nlohmann/json is staged by
+    # LlamaCppBuilder; stb and kuba zip are public domain; miniz is handled in
+    # _copy_licenses because its MIT notice exists only inside miniz.h.
+    license_files: list[str] = [
+        "LICENSE",
+        "thirdparty/LICENSE.darts_clone.txt",
+        "thirdparty/oniguruma/COPYING",
+        "thirdparty/utf8proc/LICENSE.md",
+    ]
+
+    def _copy_licenses(self) -> None:
+        super()._copy_licenses()
+        text = (self.src_dir / "thirdparty" / "miniz.h").read_text(errors="replace")
+        end = text.find("Permission is hereby granted")
+        start = text.rfind("/*", 0, end)
+        stop = text.find("*/", end)
+        if min(end, start, stop) < 0:
+            self.fail(f"{self.name}: MIT notice not found in thirdparty/miniz.h")
+        (self.prefix / "licenses" / "thirdparty" / "miniz.LICENSE").write_text(text[start : stop + 2] + "\n")
 
     # stable-diffusion.cpp raises GGML_MAX_NAME (`add_definitions()` near the top
     # of its CMakeLists.txt) because its tensor names are long. llama.cpp
@@ -2393,6 +2438,7 @@ class StableDiffusionCppBuilder(GgmlBuilder):
         self.prefix.mkdir(exist_ok=True)
         self.include.mkdir(exist_ok=True)
         self.glob_copy(self.src_dir, self.include, patterns=["*.h", "*.hpp"])
+        self._copy_licenses()
         # Copy stb headers for zero-dependency image I/O
         stb_src = self.src_dir / "thirdparty"
         if stb_src.exists():
@@ -2469,6 +2515,8 @@ class SqliteVectorBuilder(Builder):
 
         # Core extension sources/headers live in upstream `src/`.
         self.glob_copy(self.src_dir / "src", dest, patterns=["*.c", "*.h"])
+        # Apache-2.0 requires the license to travel with redistributed code.
+        self.glob_copy(self.src_dir, dest, patterns=["LICENSE.md"])
 
         # SQLite amalgamation headers and fp16 helper live in upstream `libs/`.
         libs_src = self.src_dir / "libs"

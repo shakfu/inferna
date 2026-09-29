@@ -10,6 +10,7 @@ other RAG shared-vocabulary definitions; this module holds
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 import struct
@@ -754,11 +755,15 @@ class SqliteVectorStore(VectorStoreProtocol):
 
         # Use quantized search if available, otherwise full scan
         scan_fn = "vector_quantize_scan" if self._quantized else "vector_full_scan"
+        # A quantized scan reports dot products in quantized units, not the data's.
+        # Keep its ranking, but score the returned rows exactly.
+        rescore = self._quantized and self.metric == "dot"
+        query = self._decode_vector(query_blob) if rescore else []
 
         try:
             cursor = self.conn.execute(
                 f"""
-                SELECT e.id, e.text, e.metadata, v.distance
+                SELECT e.id, e.text, e.metadata, v.distance{", e.embedding" if rescore else ""}
                 FROM {self.table_name} AS e
                 JOIN {scan_fn}('{self.table_name}', 'embedding', ?, ?) AS v
                     ON e.id = v.rowid
@@ -770,10 +775,12 @@ class SqliteVectorStore(VectorStoreProtocol):
 
         results = []
         for row in cursor:
-            id_, text, meta_json, distance = row
+            id_, text, meta_json, distance = row[:4]
 
             # Convert distance to similarity score
-            if self.metric == "cosine":
+            if rescore:
+                score = math.sumprod(query, self._decode_vector(row[4]))
+            elif self.metric == "cosine":
                 # Cosine distance is 1 - similarity, so similarity = 1 - distance
                 score = 1.0 - distance
             elif self.metric == "dot":
@@ -795,6 +802,8 @@ class SqliteVectorStore(VectorStoreProtocol):
                 )
             )
 
+        if rescore:
+            results.sort(key=lambda r: r.score, reverse=True)
         return results
 
     def get(self, id: str | int) -> SearchResult | None:
@@ -928,9 +937,14 @@ class SqliteVectorStore(VectorStoreProtocol):
         """
         self._check_closed()
 
+        options = f"max_memory={max_memory}"
+        # For non-negative data the extension defaults to UINT8, which subtracts the
+        # dataset minimum. That shift cancels in L2/L1 but distorts cosine and dot.
+        if self.metric in ("cosine", "dot"):
+            options += ",qtype=INT8"
         try:
             cursor = self.conn.execute(f"""
-                SELECT vector_quantize('{self.table_name}', 'embedding', 'max_memory={max_memory}')
+                SELECT vector_quantize('{self.table_name}', 'embedding', '{options}')
             """)
             count: int = cursor.fetchone()[0]
             self._quantized = True

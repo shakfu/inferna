@@ -388,6 +388,50 @@ class TestVectorStoreQuantization:
         store.add([sample_embeddings[3]], [sample_texts[3]])
         assert not store.is_quantized
 
+    @pytest.mark.parametrize("metric", ["cosine", "dot", "l2"])
+    def test_quantized_recall_on_offset_data(self, metric):
+        """Non-negative data far from 0 makes the extension default to UINT8,
+        whose offset distorts cosine and dot (recall@10 ~0.84 and ~0.70)."""
+        import random
+
+        rng = random.Random(0)
+        dim, n, k = 64, 3000, 10
+        vecs = [[0.5 + rng.random() for _ in range(dim)] for _ in range(n)]
+        queries = [[0.5 + rng.random() for _ in range(dim)] for _ in range(20)]
+        with SqliteVectorStore(dimension=dim, metric=metric) as s:
+            s.add(vecs, [str(i) for i in range(n)])
+            exact = [{r.id for r in s.search(q, k=k)} for q in queries]
+            s.quantize()
+            approx = [{r.id for r in s.search(q, k=k)} for q in queries]
+        recall = sum(len(a & e) for a, e in zip(approx, exact)) / (k * len(queries))
+        assert recall >= 0.95, f"{metric} quantized recall@{k} = {recall:.2f}"
+
+    def test_quantized_dot_scores_match_exact(self):
+        """The quantized scan reports dot products in quantized units (off by ~1e4
+        here); search() must return, sort and threshold on the exact values."""
+        import random
+
+        rng = random.Random(0)
+        dim, n, k = 64, 2000, 10
+        vecs = [[rng.gauss(0, 1) for _ in range(dim)] for _ in range(n)]
+        queries = [[rng.gauss(0, 1) for _ in range(dim)] for _ in range(10)]
+        with SqliteVectorStore(dimension=dim, metric="dot") as s:
+            s.add(vecs, [str(i) for i in range(n)])
+            exact = [{r.id: r.score for r in s.search(q, k=k)} for q in queries]
+            s.quantize()
+            approx = [s.search(q, k=k) for q in queries]
+            cut = sorted(exact[0].values())[k // 2]
+            filtered = s.search(queries[0], k=k, threshold=cut)
+
+        for a, e in zip(approx, exact):
+            scores = [r.score for r in a]
+            assert scores == sorted(scores, reverse=True)
+            for r in a:
+                if r.id in e:
+                    assert r.score == pytest.approx(e[r.id], abs=1e-4)
+        assert filtered, "threshold on exact scores removed every result"
+        assert all(r.score >= cut for r in filtered)
+
 
 class TestVectorStorePersistence:
     """Test persistence to disk."""
@@ -1208,3 +1252,25 @@ class TestConcurrentAccess:
             assert errors == [], f"Concurrent reads failed: {errors}"
         finally:
             Path(db_path).unlink(missing_ok=True)
+
+
+def _linux_cpu_flags() -> set:
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("flags"):
+                    return set(line.split(":", 1)[1].split())
+    except OSError:
+        pass
+    return set()
+
+
+@pytest.mark.skipif(
+    not (sys.platform.startswith("linux") and "avx2" in _linux_cpu_flags()),
+    reason="needs Linux on an AVX2-capable x86 CPU",
+)
+def test_x86_build_selects_simd_kernels(store):
+    """The AVX2/AVX-512 kernels compile to nothing without per-file ISA flags
+    (see CMakeLists.txt), and search still works on the scalar fallback."""
+    backend = store.conn.execute("SELECT vector_backend()").fetchone()[0]
+    assert backend in ("AVX2", "AVX512"), f"sqlite-vector fell back to {backend}"

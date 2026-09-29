@@ -764,4 +764,6 @@ Contributions are welcome. See the [User Guide](docs/user_guide.md) for developm
 
 ## License
 
-MIT. The wrapped projects, [llama.cpp](https://github.com/ggml-org/llama.cpp), [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), are also MIT-licensed.
+MIT. The wrapped projects, [llama.cpp](https://github.com/ggml-org/llama.cpp), [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), are also MIT-licensed. [sqlite-vector](https://github.com/sqliteai/sqlite-vector) is Apache-2.0, and the embedded server's [cpp-httplib](https://github.com/yhirose/cpp-httplib) is MIT.
+
+Wheels carry the license of every third-party component compiled into them, under `inferna-<version>.dist-info/licenses/`.

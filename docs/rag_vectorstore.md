@@ -241,7 +241,7 @@ These power the dedup logic in `RAG.add_documents` / `RAG.add_texts` (see [RAG P
 
 ## Quantization for Large Datasets
 
-For datasets with >10k vectors, quantization provides 4-5x faster search:
+For datasets with >10k vectors, quantization trades a little recall for faster search. Measured on 20,000 vectors of dimension 384 with k=10: about 0.5 ms per query against 5 ms for the exact scan, with recall@10 of 0.94-0.97.
 
 ```python
 # Add many vectors
@@ -257,6 +257,8 @@ store.preload_quantization()
 # Search now uses quantized index
 results = store.search(query, k=10)
 ```
+
+The index stores one byte per dimension. `quantize()` requests signed (`INT8`) quantization for `cosine` and `dot`; for other metrics sqlite-vector picks the type. Cosine scores stay within about 0.001 of the exact values. For `dot`, the scan reports scores in quantized units, so `search()` recomputes the returned rows' scores exactly before applying `threshold`; this adds about 0.17 ms per query at k=10 and dimension 384. See [`docs/dev/sqlite-vector-quantization.md`](dev/sqlite-vector-quantization.md) for details.
 
 ## Context Manager
 

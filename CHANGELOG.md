@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.6.0]
+
 ### Changed
 
 - **`EmbeddedServer` uses cpp-httplib (MIT) instead of Mongoose (GPL-2.0-only or commercial).** The wheel declared MIT but linked GPL code. cpp-httplib is staged from llama.cpp's `vendor/` tree by `scripts/manage.py`, so it tracks the pinned llama.cpp version; this matches cyllama. An existing `thirdparty/` tree needs `scripts/manage.py build --llama-cpp --deps-only` once to stage it; otherwise CMake stops and names the missing directory. Behaviour changes:
@@ -34,6 +36,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - llama.cpp is built with `LLAMA_OPENSSL=OFF`, and `libllama-common` and `libcpp-httplib` are no longer built, copied or linked. Nothing referenced them, and they brought in OpenSSL.
 
+- **sqlite-vector 1.0.0 -> 1.1.2, which moves it from the Elastic License 2.0 to Apache-2.0.** ELv2 forbade offering it as a managed service and allowed commercial use only under a paid license, which the MIT wheel did not disclose. 1.1.0 also fixes two crashes, an SQL injection through table names and several out-of-bounds reads ([upstream changelog](https://github.com/sqliteai/sqlite-vector/blob/1.1.2/CHANGELOG.md)). Its AVX2 and AVX-512 kernels need per-file ISA flags, which CMake now passes as upstream's Makefile does. Without them every x86 build used the scalar fallback. An existing `build/sqlite-vector` clone is shallow at 1.0.0; delete it before `scripts/manage.py build --sqlite-vector`.
+
+- **The wheel ships the licenses of the code compiled into it.** It shipped only inferna's own `LICENSE`, although the MIT, BSD and Apache licenses of vendored code all require their notice in binary copies. Each builder in `scripts/manage.py` now declares `license_files`, staged into `thirdparty/<project>/licenses/`, and a missing file fails the build. The list comes from the symbols in the linked archives: llama.cpp, whisper.cpp, stable-diffusion.cpp, sqlite-vector, cpp-httplib, nlohmann/json, darts-clone, oniguruma, utf8proc, miniz, rotate-bits, xxhash and sha256. Public-domain code (stb, miniaudio, sha1, subprocess.h, kuba zip) needs none. miniz's MIT notice exists only inside `miniz.h` and is extracted from it.
+
 ### Removed
 
 - The server's `--log-level` flag, `MongooseLogLevel` and `EmbeddedServer.set_mongoose_log_level()`: httplib has no connection-level trace. Also `EmbeddedServer.get_available_slot()`, `MongooseConnection` (now `HttpResponse`), and the Mongoose C examples and debug scripts under `tests/`.
@@ -43,6 +49,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - **`EmbeddedServer` ignored `temperature`, `min_p` and `seed` on non-streamed chat**, and never read `min_p` or `seed` from the request on either path. Both paths now apply all three, as `PythonServer` does.
 
 - **Streamed chat sent the start of a stop string before matching it.** Output now passes through `stop_at`, which holds back text that may begin a stop string. Both servers also cut non-streamed output at the earliest match, not the first stop in list order, and treat a string `stop` as one stop instead of a set of characters. A stop string completed by the last allowed token now reports `finish_reason: "stop"`, not `"length"`.
+
+- **`SqliteVectorStore.quantize()` lost recall with cosine and dot on non-negative embeddings.** Without a `qtype`, sqlite-vector quantizes non-negative data as `UINT8`, which subtracts the dataset minimum. That shift cancels in L2 and L1 but not in cosine or dot. On vectors in `[0.5, 1.5)`, recall@10 was 0.84 for cosine and 0.70 for dot. `quantize()` now requests `INT8` for both, which gives 0.98 and 0.99. L2, squared L2 and L1 keep the extension's choice. See `docs/dev/sqlite-vector-quantization.md`.
+
+- **`SqliteVectorStore.search()` returned dot-product scores in quantized units after `quantize()`.** sqlite-vector's quantized scan does not convert them back, so scores were off by 10^4 or more and `threshold` filtered on them. Results keep the scan's ranking but are now scored exactly from the stored vectors and re-sorted. This costs about 0.17 ms per query at k=10 and dimension 384; the quantized scan is still about 10x faster than exact search. Cosine scores were already accurate, as cosine does not depend on the scale. See `docs/dev/sqlite-vector-quantization.md`.
 
 ## [0.5.1]
 

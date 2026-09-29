@@ -1016,6 +1016,34 @@ set(_VECTOR_SOURCES
 
 add_library(vector SHARED ${_VECTOR_SOURCES})
 target_include_directories(vector PRIVATE "${_VECTOR_SRC_DIR}")
+# The AVX2 and AVX-512 kernels compile to nothing unless their ISA is enabled.
+# Enable it for those two files only, as upstream's Makefile does; runtime
+# dispatch then picks the best kernel the CPU supports.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+    list(LENGTH CMAKE_OSX_ARCHITECTURES _VECTOR_N_ARCHS)
+    if(_VECTOR_N_ARCHS LESS_EQUAL 1)
+        include(CheckCCompilerFlag)
+        if(MSVC)
+            set(_VECTOR_AVX2_FLAGS /arch:AVX2)
+            set(_VECTOR_AVX512_FLAGS /arch:AVX512)
+        else()
+            set(_VECTOR_AVX2_FLAGS -mavx2 -mfma)
+            set(_VECTOR_AVX512_FLAGS -mavx512f -mavx512bw -mavx512vl -mavx512dq)
+        endif()
+        string(REPLACE ";" " " _VECTOR_AVX2_STR "${_VECTOR_AVX2_FLAGS}")
+        string(REPLACE ";" " " _VECTOR_AVX512_STR "${_VECTOR_AVX512_FLAGS}")
+        check_c_compiler_flag("${_VECTOR_AVX2_STR}" VECTOR_HAS_AVX2_FLAGS)
+        check_c_compiler_flag("${_VECTOR_AVX512_STR}" VECTOR_HAS_AVX512_FLAGS)
+        if(VECTOR_HAS_AVX2_FLAGS)
+            set_source_files_properties("${_VECTOR_SRC_DIR}/distance-avx2.c"
+                PROPERTIES COMPILE_OPTIONS "${_VECTOR_AVX2_FLAGS}")
+        endif()
+        if(VECTOR_HAS_AVX512_FLAGS)
+            set_source_files_properties("${_VECTOR_SRC_DIR}/distance-avx512.c"
+                PROPERTIES COMPILE_OPTIONS "${_VECTOR_AVX512_FLAGS}")
+        endif()
+    endif()
+endif()
 if(MSVC)
     target_compile_options(vector PRIVATE /O2 /W3)
 else()
