@@ -41,10 +41,6 @@
 
 - [ ] **ARM64 variants** -- growing relevance (Copilot+ PCs, Ampere/Graviton clouds, Apple Silicon KleidiAI). No CI job builds `ubuntu-24.04-arm` or `windows-11-arm` wheels; upstream ships `ubuntu-arm64`, `ubuntu-vulkan-arm64`, `win-cpu-arm64`, `macos-arm64-kleidiai`. Needs its own wheel variant names and separate investigation of build-time toolchain availability on ARM runners #wheel-coverage-additional-backend-variants
 
-- [ ] **`PyErr_WriteUnraisable` in `_mongoose.cpp` HTTP handler.** `server/_mongoose.cpp:73-78` catches all Python handler exceptions and replies 500 with no logging. Surface them via `PyErr_WriteUnraisable` (or `PyErr_Print`) before the reply so handler bugs are visible instead of silently re-coded. #hardening-small-bugs-ergonomic-gaps
-
-- [ ] **Document `Manager::send_reply` thread-affinity.** `server/_mongoose.cpp:114-131` walks `mgr.conns` while another thread may be inside GIL-released `poll`. `embedded.py` is single-threaded today but the constraint is undocumented. Add a docstring asserting "must be called from the same thread as `poll`", or guard with mongoose's wakeup primitive. #hardening-small-bugs-ergonomic-gaps
-
 - [ ] **Return `None` for failed slots in `generate_with_params`.** `_sd_native.cpp:825-844` wraps null-data results as stub `SDImage` objects mixed in with valid ones; only signal is a `warnings.warn`. Returning `None` for invalid slots makes `len(images) != batch` mean what it should. #hardening-small-bugs-ergonomic-gaps
 
 - [ ] **Bind the `whisper_*_with_state` family.** `_whisper_native.cpp:592-598` exposes `WhisperState` as a constructor-only stub. The whole point of `whisper_state` is concurrent decoding from one context; without methods (`whisper_full_with_state`, `whisper_encode_with_state`, etc.) the class is useless. #coverage-bindings-worth-filling-in
@@ -58,8 +54,6 @@
 - [ ] **Add `tests/test_llama_native.py`.** Direct-surface coverage for symbols the integration tests skip: `LlamaModelKvOverride`/`TensorBuftOverride`, `GgmlBackend*` info, threadpool `attach`/`detach`, `chat_builtin_templates`, TTS helpers, `set_log_callback`. #refactor-convention-drift
 
 - [ ] **Validate ggml header consistency across translation units.** `_whisper_native.cpp` and `_sd_native.cpp` forward-declare ggml backend APIs while `_llama_native.cpp` includes the full ggml headers. Currently consistent, but check for cross-TU ABI drift on each upstream ggml header bump. #pre-existing-tu-consolidation
-
-- [ ] **Investigate flaky `test_embedded_server_context_manager`.** One failure observed in a 1389-test run (`mg_listen` returned null on port 8097), passes cleanly on rerun. Root cause unverified — candidates include macOS TIME_WAIT residue, transient external interference, or an internal race across rapid `mg_mgr_init`/`mg_listen` cycles. Highest-value next move: log `errno`/`strerror(errno)` from the `_mongoose.cpp` listen path so the next flake produces a real signal instead of three guesses. #open-observation-not-yet-a-verified-bug
 
 - [ ] **Rebuild `cli.py` sampler chain.** `src/inferna/llama/cli.py` registers ~50 llama.cpp-compatible sampling flags (`--top-k`, `--top-p`, `--min-p`, `--repeat-penalty`, `--mirostat`/`--mirostat-ent`/`--mirostat-lr`, `--logit-bias`, `--temp`, `--seed`, …) and then ignores all of them at line 398 in favour of a hardcoded `self.sampler.add_greedy()` (the comment "start with greedy for simplicity" makes the gap explicit). Right fix: extract a shared `_internal/sampler_build.py::build_sampler(config, vocab)` helper that both `LLM._create_sampler` and the CLI consume, then replace the CLI's hardcoded greedy with a `build_sampler()` call driven from the parsed flags. Also decide `--logit-bias`'s string format (currently `type=str, default=""` and unparsed) — `id+bias,id+bias,...` per llama.cpp upstream, or JSON for OpenAI parity. Add CLI integration test per flag. Half-to-full day. #p2-useful-features-half-day-each
 
@@ -127,7 +121,7 @@
 
 - [ ] **Consolidate `LlamaBatch.set_batch` / `add_sequence` fill loops** in `src/inferna/llama/_llama_native.cpp`. Both methods duplicate the per-token `pos` / `seq_id` / `n_seq_id` / `logits` / `token` assignment; factor the inner loop into a single helper parameterized by starting offset and `seq_id`. #pre-existing-tu-consolidation
 
-- [ ] **Split `embedded.py` (~950 LOC).** Mongoose binding + routing + slot management + chat completion all in one file. Same shape of refactor as the recent `LLM` split. Suggested seams: `_mongoose.py`, `routes/`, `slots.py`, `chat_completion.py`. High leverage on continuous batching and vision-in-OpenAI-compat. #p3-polish-cleanup
+- [ ] **Split `embedded.py` (~720 LOC).** Routing + slot management + chat completion + SSE all in one file. Same shape of refactor as the recent `LLM` split. Suggested seams: `routes/`, `slots.py`, `chat_completion.py`. High leverage on continuous batching and vision-in-OpenAI-compat. #p3-polish-cleanup
 
 - [ ] **`__all__` everywhere.** Public modules (`inferna/__init__.py`, `api.py`, `llama/llama_cpp.py`, `whisper/whisper_cpp.py`, `sd/stable_diffusion.py`) lack `__all__`. Add it so the public/private boundary is explicit and `from inferna import *` is well-defined. #p3-polish-cleanup
 

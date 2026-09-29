@@ -221,8 +221,7 @@ inferna server -m models/llama.gguf --model-alias my-llama --n-parallel 4
 | `--gpu-layers` | int | -1 | GPU layers to offload (-1 = all) |
 | `--n-parallel` | int | 1 | Number of parallel processing slots |
 | `--model-alias` | string | (filename stem) | Identifier shown in `/v1/models[].id` (and the web UI's "Model" field when `-w` is set) |
-| `--log-level` | int | 1 | HTTP-layer log verbosity (0=none, 1=errors, 2=info, 3=debug, 4=verbose). Default silences routine I/O chatter; raise to 3 to debug HTTP-level issues |
-| `--server-type` | choice | embedded | Server implementation: `embedded` (in-process Mongoose, C) or `python` (pure-Python `http.server`). `python` never serves the webui regardless of `-w` |
+| `--server-type` | choice | embedded | Server implementation: `embedded` (in-process cpp-httplib) or `python` (pure-Python `http.server`). `python` never serves the webui regardless of `-w` |
 | `-w, --webui` | flag | off | Mount the browser webui at `/`, plus the supporting routes `/bundle.{css,js}`, `/loading.html`, `/props`, `/slots`, `/metrics`. Embedded backend only |
 
 See [Server Usage Examples](server_usage_examples.md) for the full endpoint surface and SSE streaming details.

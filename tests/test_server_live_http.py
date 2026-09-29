@@ -9,10 +9,8 @@ stream that opens and never delivers a token, or a shutdown that trips
 Metal's `[rsets count]==0` assertion all pass that suite.
 
 These tests run the shipped CLI (`python -m inferna.llama.server`) as a
-subprocess and talk to it over TCP, which is also the only way to cover the
-mongoose event loop: `wait_for_shutdown()` pumps `mg_mgr_poll` until a signal
-arrives, so an in-process test would have to reimplement the loop and would
-never touch the CLI's `try/finally: server.stop()` teardown.
+subprocess and talk to it over TCP. That is the only way to cover the CLI's
+`wait_for_shutdown()` signal wait and its `try/finally: server.stop()` teardown.
 
 Subprocess rather than a poll thread is deliberate for a second reason: the
 server holds a llama context and Metal state, and the project's cleanup rule
@@ -239,7 +237,7 @@ def auth_server(model_path, tmp_path_factory):
 
 
 class TestApiKeyOverTheWire:
-    """The Authorization header must survive the mongoose-to-Python bridge."""
+    """The Authorization header must survive the httplib-to-Python bridge."""
 
     @pytest.mark.parametrize("path", ["/v1/models", "/props"])
     def test_missing_key_is_401(self, auth_server, path):
@@ -338,11 +336,10 @@ class TestChatCompletions:
         assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]
 
     def test_streaming_completion_delivers_tokens_and_terminates(self, server):
-        """The regression this is really for: streaming runs generation on a
-        worker thread that queues SSE frames for the poll thread to flush
-        (see `_StreamingState`). If that handoff breaks, the response opens,
-        headers arrive, and the body never completes -- which every
-        in-process test still passes.
+        """httplib pulls SSE frames from the `_sse` generator through the native
+        chunked provider. If that bridge breaks, the response opens, headers
+        arrive, and the body never completes -- which every in-process test
+        still passes.
         """
         req = urllib.request.Request(
             f"{server}/v1/chat/completions",

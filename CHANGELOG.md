@@ -22,6 +22,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Changed
+
+- **`EmbeddedServer` uses cpp-httplib (MIT) instead of Mongoose (GPL-2.0-only or commercial).** The wheel declared MIT but linked GPL code. cpp-httplib is staged from llama.cpp's `vendor/` tree by `scripts/manage.py`, so it tracks the pinned llama.cpp version; this matches cyllama. An existing `thirdparty/` tree needs `scripts/manage.py build --llama-cpp --deps-only` once to stage it; otherwise CMake stops and names the missing directory. Behaviour changes:
+  - The server accepts requests from `start()`, not only during `wait_for_shutdown()`.
+  - Requests run on httplib's thread pool. Those beyond `n_parallel` wait for a free slot instead of failing with 500 or 503.
+  - SSE frames go to the socket from the generating thread. The worker-thread queue drained by the poll loop is gone.
+  - The listener sets `SO_REUSEADDR` instead of httplib's default `SO_REUSEPORT`, which would let another process bind the same port.
+  - httplib is configured as llama-server configures it: `TCP_NODELAY`, a listen backlog of 512, 3600 s read and write timeouts, and 32 KiB URIs.
+  - Request bodies over `ServerConfig.max_body_bytes` get 413 before they are read, in both servers. The default, 100 MB, is llama-server's. Mongoose capped them at 3 MiB; `PythonServer` had no cap.
+
+- llama.cpp is built with `LLAMA_OPENSSL=OFF`, and `libllama-common` and `libcpp-httplib` are no longer built, copied or linked. Nothing referenced them, and they brought in OpenSSL.
+
+### Removed
+
+- The server's `--log-level` flag, `MongooseLogLevel` and `EmbeddedServer.set_mongoose_log_level()`: httplib has no connection-level trace. Also `EmbeddedServer.get_available_slot()`, `MongooseConnection` (now `HttpResponse`), and the Mongoose C examples and debug scripts under `tests/`.
+
+### Fixed
+
+- **`EmbeddedServer` ignored `temperature`, `min_p` and `seed` on non-streamed chat**, and never read `min_p` or `seed` from the request on either path. Both paths now apply all three, as `PythonServer` does.
+
+- **Streamed chat sent the start of a stop string before matching it.** Output now passes through `stop_at`, which holds back text that may begin a stop string. Both servers also cut non-streamed output at the earliest match, not the first stop in list order, and treat a string `stop` as one stop instead of a set of characters. A stop string completed by the last allowed token now reports `finish_reason: "stop"`, not `"length"`.
+
 ## [0.5.1]
 
 ### Added

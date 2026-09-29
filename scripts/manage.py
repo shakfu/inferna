@@ -1503,6 +1503,12 @@ class LlamaCppBuilder(GgmlBuilder):
         self.glob_copy(self.src_dir / "vendor" / "nlohmann", nlohmann_include, patterns=["*.hpp"])
         # mtmd (multimodal) headers.
         self.glob_copy(self.src_dir / "tools" / "mtmd", self.include, patterns=["*.h"])
+        # cpp-httplib sources, compiled into the embedded server extension.
+        httplib_include = self.include / "cpp-httplib"
+        httplib_include.mkdir(exist_ok=True)
+        self.glob_copy(
+            self.src_dir / "vendor" / "cpp-httplib", httplib_include, patterns=["httplib.h", "httplib.cpp", "LICENSE"]
+        )
 
     @property
     def webui_assets_dir(self) -> Path:
@@ -1663,7 +1669,7 @@ class LlamaCppBuilder(GgmlBuilder):
             CMAKE_C_VISIBILITY_PRESET="hidden",
             CMAKE_VISIBILITY_INLINES_HIDDEN=True,
             LLAMA_CURL=False,
-            LLAMA_OPENSSL=True,  # Enable OpenSSL in cpp-httplib for HTTPS support
+            LLAMA_OPENSSL=False,  # the embedded server compiles cpp-httplib itself, without SSL
             LLAMA_BUILD_SERVER=False,  # Server requires httplib
             LLAMA_BUILD_TESTS=False,  # Tests require httplib
             LLAMA_BUILD_EXAMPLES=False,  # Don't need examples
@@ -1671,16 +1677,13 @@ class LlamaCppBuilder(GgmlBuilder):
             **backend_options,
         )
         # Build specific targets to avoid httplib-dependent tools like llama-run
-        # We need: llama, ggml, llama-common, mtmd
-        # (upstream b8833 renamed the `common` target -> `llama-common`)
-        self.cmake_build_targets(build_dir=self.build_dir, targets=["llama", "llama-common", "mtmd"], release=True)
+        # llama-common is not built: nothing links it, and it pulls in cpp-httplib.
+        self.cmake_build_targets(build_dir=self.build_dir, targets=["llama", "mtmd"], release=True)
 
         # Manually copy required libraries instead of cmake install (which tries to install all components)
         self.lib.mkdir(parents=True, exist_ok=True)
 
         # Copy core libraries from build directory (platform-aware)
-        self.copy_lib(self.build_dir, "common", "llama-common", self.lib)
-        self.copy_lib(self.build_dir, "vendor/cpp-httplib", "cpp-httplib", self.lib, required=False)
         # vendor-hash: mtmd calls hash_sha256_hex() from it as of v0.3.0.
         # Optional so older LLAMACPP_VERSION pins (no vendor/hash) still build.
         self.copy_lib(self.build_dir, "vendor/hash", "vendor-hash", self.lib, required=False)
@@ -1750,7 +1753,7 @@ class LlamaCppBuilder(GgmlBuilder):
             GGML_BACKEND_DL=use_backend_dl,
             CMAKE_POSITION_INDEPENDENT_CODE=True,
             LLAMA_CURL=False,
-            LLAMA_OPENSSL=True,
+            LLAMA_OPENSSL=False,
             LLAMA_BUILD_SERVER=False,
             LLAMA_BUILD_TESTS=False,
             LLAMA_BUILD_EXAMPLES=False,
@@ -1760,7 +1763,7 @@ class LlamaCppBuilder(GgmlBuilder):
         # With GGML_BACKEND_DL=True, backends are separate plugin targets
         # that are not transitive dependencies of llama.  Build them explicitly.
         # ggml-cpu is always needed; GPU backends are conditional.
-        targets = ["llama", "llama-common", "mtmd", "ggml-cpu"]
+        targets = ["llama", "mtmd", "ggml-cpu"]
         targets.extend(f"ggml-{short}" for short in self.enabled_backends_from_options(backend_options))
         self.cmake_build_targets(build_dir=self.build_dir, targets=targets, release=True)
 
@@ -1946,16 +1949,7 @@ class LlamaCppBuilder(GgmlBuilder):
             # Copy headers only (same as build() header section)
             self.prefix.mkdir(exist_ok=True)
             self.include.mkdir(exist_ok=True)
-            self.glob_copy(self.src_dir / "common", self.include, patterns=["*.h", "*.hpp"])
-            self.glob_copy(self.src_dir / "ggml" / "include", self.include, patterns=["*.h"])
-            self.glob_copy(self.src_dir / "include", self.include, patterns=["*.h"])
-            jinja_include = self.include / "jinja"
-            jinja_include.mkdir(exist_ok=True)
-            self.glob_copy(self.src_dir / "common" / "jinja", jinja_include, patterns=["*.h", "*.hpp"])
-            nlohmann_include = self.include / "nlohmann"
-            nlohmann_include.mkdir(exist_ok=True)
-            self.glob_copy(self.src_dir / "vendor" / "nlohmann", nlohmann_include, patterns=["*.hpp"])
-            self.glob_copy(self.src_dir / "tools" / "mtmd", self.include, patterns=["*.h"])
+            self._copy_headers()
 
         # Webui assets (independent of pre-built libs — they live in the source
         # tree). Ensure the source checkout exists so we can read them.
@@ -3913,6 +3907,12 @@ class Application(ShellCmd, metaclass=MetaCommander):
             (expected / "nlohmann").mkdir(exist_ok=True)
             builder.glob_copy(src / "vendor" / "nlohmann", expected / "nlohmann", patterns=["*.hpp"])
             builder.glob_copy(src / "tools" / "mtmd", expected, patterns=["*.h"])
+            (expected / "cpp-httplib").mkdir(exist_ok=True)
+            builder.glob_copy(
+                src / "vendor" / "cpp-httplib",
+                expected / "cpp-httplib",
+                patterns=["httplib.h", "httplib.cpp", "LICENSE"],
+            )
 
             committed = builder.include
             result = subprocess.run(

@@ -1,23 +1,20 @@
 """Embedded HTTP server for inferna.
 
-This module used to be ``embedded.pyx`` — a Cython file that mostly held
-Python code with a thin native shim around mongoose. The C++ side now lives
-in ``_mongoose.cpp`` and exposes only the mg_mgr lifecycle + HTTP reply
-primitives. Everything else (routing, request parsing, slot management,
-chat completion handling, signal wiring, and the EmbeddedServer class
-itself) stays Python.
+The native side (``_httplib.cpp``) wraps a cpp-httplib server that runs on
+its own thread pool and hands every request to :meth:`EmbeddedServer._dispatch`.
+Routing, request parsing, slot management and chat completion handling are
+Python.
 
-Public API (preserved for callers and tests):
+Public API:
     - ``EmbeddedServer(config)`` with ``start()``, ``stop()``,
       ``wait_for_shutdown()``, ``handle_http_request()``, context-manager
       support.
-    - ``MongooseConnection`` wrapper for per-request response writing.
+    - ``HttpResponse``, the per-request response a handler fills in.
     - ``start_embedded_server(model_path, **kwargs)`` convenience.
 """
 
 from __future__ import annotations
 
-import enum
 import json
 import logging
 import queue
@@ -25,12 +22,11 @@ import signal
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
 from importlib.resources import files as _resource_files
 from types import FrameType
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
-from . import _mongoose as _mg  # type: ignore[attr-defined]
+from . import _httplib  # type: ignore[attr-defined]
 from .python import (
     ChatChoice,
     ChatMessage,
@@ -40,6 +36,7 @@ from .python import (
     ServerConfig,
     ServerSlot,
     is_authorized,
+    stop_at,
     warn_if_not_loopback,
 )
 
@@ -85,21 +82,6 @@ def _load_webui_assets() -> dict[str, bytes]:
 
 _WEBUI_ASSETS: dict[str, bytes] = _load_webui_assets()
 
-
-class MongooseLogLevel(enum.IntEnum):
-    """Mongoose internal log verbosity — mirrors ``MG_LL_*`` in mongoose.h.
-
-    Pass to :meth:`EmbeddedServer.set_mongoose_log_level`. ``IntEnum`` so
-    plain integers from the CLI flag still work without coercion.
-    """
-
-    NONE = 0
-    ERROR = 1
-    INFO = 2
-    DEBUG = 3
-    VERBOSE = 4
-
-
 if TYPE_CHECKING:
     from ...rag.embedder import Embedder
     from ..llama_cpp import LlamaModel
@@ -109,40 +91,58 @@ if TYPE_CHECKING:
 # SIG_DFL), or a callable.
 _SignalHandler = Union[Callable[[int, Optional[FrameType]], Any], int, None]
 
+# (status, content_type, extra_headers, body); body is bytes or an iterator of bytes.
+_Reply = Tuple[int, str, Dict[str, str], Union[bytes, Iterator[bytes]]]
 
-# Module-level shutdown flag (matches pymongoose pattern from the old .pyx)
+_SSE_DONE = b"data: [DONE]\n\n"
+
+# Module-level shutdown flag, set by the signal handler.
 _shutdown_requested = False
 
 
-class MongooseConnection:
-    """Per-request response writer; wraps an opaque mongoose connection id.
+def _bind_address(host: str) -> Tuple[str, bool]:
+    """Return (host, is_ipv6): brackets stripped, family taken from the literal.
 
-    Tracks the response status and approximate body size so the dispatcher
-    can emit one access-log line per request without each handler having
-    to plumb those values back up.
+    A fixed family keeps "localhost" on 127.0.0.1, as PythonServer binds it.
+    """
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    return host, ":" in host
+
+
+class HttpResponse:
+    """The response to one request. The first ``send_*`` call wins.
+
+    ``status_code`` and ``body_size`` feed the dispatcher's access-log line.
     """
 
-    __slots__ = ("_conn_id", "_mgr", "status_code", "body_size")
+    __slots__ = ("status_code", "body_size", "content_type", "headers", "body")
 
-    def __init__(self, mgr: Optional[Any] = None, conn_id: int = 0) -> None:
-        self._mgr = mgr
-        self._conn_id = conn_id
-        self.status_code: int = 0  # 0 = no response sent yet
+    def __init__(self) -> None:
+        self.status_code: int = 0  # 0 = no response set yet
         self.body_size: int = 0
+        self.content_type = "text/plain"
+        self.headers: Dict[str, str] = {}
+        self.body: Union[bytes, Iterator[bytes]] = b""
 
-    @property
-    def is_valid(self) -> bool:
-        return self._conn_id != 0 and self._mgr is not None
+    def _set(
+        self,
+        status_code: int,
+        content_type: str,
+        body: Union[bytes, Iterator[bytes]],
+        headers: Optional[Dict[str, str]] = None,
+    ) -> bool:
+        if self.status_code:
+            return False
+        self.status_code = status_code
+        self.content_type = content_type
+        self.headers = headers or {}
+        self.body = body
+        self.body_size = len(body) if isinstance(body, bytes) else 0
+        return True
 
     def send_json(self, data: Any, status_code: int = 200) -> bool:
-        if not self.is_valid or self._mgr is None:
-            return False
-        body = json.dumps(data)
-        ok = self._mgr.send_reply(self._conn_id, status_code, "Content-Type: application/json\r\n", body)
-        if ok:
-            self.status_code = status_code
-            self.body_size = len(body)
-        return ok
+        return self._set(status_code, "application/json", json.dumps(data).encode("utf-8"))
 
     def send_error(self, status_code: int, message: str) -> bool:
         return self.send_json(
@@ -150,104 +150,48 @@ class MongooseConnection:
             status_code,
         )
 
+    def send_text(self, body: str, content_type: str = "text/plain", status_code: int = 200) -> bool:
+        return self._set(status_code, content_type, body.encode("utf-8"))
+
     def send_gzipped(self, body: bytes, content_type: str, status_code: int = 200) -> bool:
         """Send a precompressed (gzip) payload — used for the UI bundle.
 
-        We add ``Vary: Accept-Encoding`` for correctness even though every
-        modern browser accepts gzip; ``Cache-Control`` is short on the
-        HTML shell (so model/template changes show up on reload) and long
-        on the immutable CSS/JS bundles (content-hashed by the upstream
-        build).
+        ``Cache-Control`` is short on the HTML shell (so model/template
+        changes show up on reload) and long on the CSS/JS bundles.
         """
-        if not self.is_valid or self._mgr is None:
-            return False
         cache = "no-cache" if content_type.startswith("text/html") else "public, max-age=3600"
-        headers = (
-            f"Content-Type: {content_type}\r\n"
-            f"Content-Encoding: gzip\r\n"
-            f"Vary: Accept-Encoding\r\n"
-            f"Cache-Control: {cache}\r\n"
-        )
-        ok = self._mgr.send_bytes(self._conn_id, status_code, headers, body)
-        if ok:
-            self.status_code = status_code
-            self.body_size = len(body)
-        return ok
+        headers = {"Content-Encoding": "gzip", "Vary": "Accept-Encoding", "Cache-Control": cache}
+        return self._set(status_code, content_type, body, headers)
 
+    def send_stream(self, chunks: Iterator[bytes], content_type: str = "text/event-stream") -> bool:
+        """Send the bytes ``chunks`` yields, chunked. The server closes ``chunks`` when the response ends."""
+        return self._set(200, content_type, chunks, {"Cache-Control": "no-cache"})
 
-@dataclass
-class _StreamingState:
-    """Per-stream context shared between the main poll thread and a worker.
-
-    Mongoose is a single-threaded poll-based event loop: every ``Manager``
-    method (``send_chunk``, ``end_chunked``, ``is_connection_alive``) must
-    be called from the thread that drives ``mg_mgr_poll``. If we generated
-    tokens inline in the dispatch handler, every ``send_chunk`` call would
-    only queue bytes into the connection's send buffer — actual socket
-    writes only happen on the next poll cycle, which can't run until the
-    handler returns. Net result: the entire response flushes in one batch
-    at the end of generation, defeating the visible point of streaming.
-
-    The fix moves generation to a worker thread that pushes pre-formatted
-    SSE frames into a thread-safe queue. The main poll thread drains that
-    queue between polls and calls ``send_chunk`` itself, letting mongoose
-    flush each chunk to the wire as it lands.
-
-    Field ownership is single-writer: ``chunks`` is producer/consumer;
-    ``slot``, the llama context, and ``iter_tokens`` are touched only by
-    the worker; ``cancelled`` is set by the main thread when it observes
-    a closed connection and read by the worker between tokens.
-    """
-
-    conn_id: int
-    slot: "ServerSlot"
-    prompt: str
-    max_tokens: int
-    stop_words: List[str]
-    request: "ChatRequest"
-    chunk_id: str
-    created: int
-    model: str
-    # Worker → main: pre-formatted SSE frame bytes, terminated by None.
-    chunks: "queue.SimpleQueue[Optional[bytes]]" = field(default_factory=queue.SimpleQueue)
-    # Main → worker: tells the worker to stop generating early. Reads of
-    # bool are atomic in CPython (GIL); no lock needed.
-    cancelled: bool = False
-    # Bookkeeping for the per-stream access-log line emitted on completion.
-    started_at: float = 0.0
-    body_size: int = 0
-    thread: Optional[threading.Thread] = None
+    def reply(self) -> _Reply:
+        return self.status_code or 500, self.content_type, self.headers, self.body
 
 
 class EmbeddedServer:
-    """High-performance embedded HTTP server for LLM inference using Mongoose."""
+    """Embedded HTTP server for LLM inference using cpp-httplib."""
 
     def __init__(self, config: ServerConfig) -> None:
         self._config = config
         self._model: Optional["LlamaModel"] = None
         self._embedder: Optional["Embedder"] = None
         self._slots: List[ServerSlot] = []
+        self._free_slots: "queue.Queue[ServerSlot]" = queue.Queue()
         self._logger = logging.getLogger(__name__)
         self._access_logger = logging.getLogger(f"{__name__}.access")
-        # Silence mongoose's default DEBUG-level chatter (every
-        # accept/read/write/close, plus a startup `MG_IO_SIZE` banner from
-        # mg_mgr_init itself). Must run BEFORE Manager() so the banner
-        # printed inside mg_mgr_init is also suppressed. The Python
-        # access log below provides one clean line per HTTP request
-        # instead. Override via ``EmbeddedServer.set_mongoose_log_level()``
-        # if you need the raw mongoose trace back for debugging.
-        _mg.Manager.set_log_level(MongooseLogLevel.ERROR)
-        self._mgr = _mg.Manager()
+        self._srv = _httplib.Server(config.max_body_bytes)
+        self._listen_thread: Optional[threading.Thread] = None
         self._running = False
+        # Set by stop(); open streams and slot waits end on it.
+        self._stopping = False
         self._signal_received = 0
-        # Active streaming-completion state, keyed by mongoose conn_id.
-        # Only the main poll thread mutates this dict; workers are
-        # producers on their state's queue and never touch the registry.
-        self._streams: dict[int, _StreamingState] = {}
         # Saved by _setup_signal_handlers, restored by stop(). Without
         # this, the bound `self._signal_handler` method registered with
         # signal.signal() retains a strong reference to `self`, which in
-        # turn pins _model / _mgr / _slots[*].sampler past stop() —
+        # turn pins _model / _srv / _slots[*].sampler past stop() —
         # leaking those native objects all the way to interpreter
         # shutdown and tripping a Metal GGML_ASSERT (rsets not empty).
         self._prev_sigint: _SignalHandler = None
@@ -309,17 +253,10 @@ class EmbeddedServer:
                     normalize=self._config.embedding_normalize,
                 )
                 self._logger.info(f"Embedder loaded: dim={self._embedder.dimension}, pooling={self._embedder.pooling}")
-            self._logger.info("About to return True from load_model()")
             return True
         except Exception as e:
             self._logger.error(f"Failed to load model: {e}")
             return False
-
-    def get_available_slot(self) -> Optional[ServerSlot]:
-        for slot in self._slots:
-            if not slot.is_processing:
-                return slot
-        return None
 
     # ----------------------------------------------------------- signal API
 
@@ -333,7 +270,7 @@ class EmbeddedServer:
         # Save the previous handlers so stop() can restore them. If we
         # didn't restore, the signal module would keep our bound
         # `self._signal_handler` alive — and through it, the entire
-        # EmbeddedServer instance + Manager + LlamaModel + every slot's
+        # EmbeddedServer instance + LlamaModel + every slot's
         # LlamaContext + LlamaSampler — until interpreter shutdown.
         self._prev_sigint = signal.signal(signal.SIGINT, self._signal_handler)
         self._prev_sigterm = signal.signal(signal.SIGTERM, self._signal_handler)
@@ -380,8 +317,12 @@ class EmbeddedServer:
     # ------------------------------------------------------------- start/stop
 
     def start(self) -> bool:
+        """Load the model, bind, and serve on a background thread."""
         global _shutdown_requested
+        if self._running:
+            return True
         _shutdown_requested = False
+        self._stopping = False
 
         success = False
         try:
@@ -390,21 +331,22 @@ class EmbeddedServer:
 
             self._setup_signal_handlers()
 
-            listen_addr = f"http://{self._config.host}:{self._config.port}"
             warn_if_not_loopback(self._config.host, self._logger, self._config.api_key)
-            self._logger.info(f"Attempting to bind to: {listen_addr}")
-
-            # Wire the request dispatcher before listening.
-            self._mgr.set_handler(self._dispatch)
-            self._logger.info("Calling inferna_mg_http_listen...")
-            ok = self._mgr.listen(listen_addr)
-            self._logger.info(f"inferna_mg_http_listen ok={ok}")
-            if not ok:
-                self._logger.error("Failed to create HTTP listener")
+            host, ipv6 = _bind_address(self._config.host)
+            self._srv.set_handler(self._dispatch)
+            if not self._srv.bind(host, self._config.port, ipv6):
+                self._logger.error(f"Failed to bind {self._config.host}:{self._config.port}")
                 return False
+
+            self._free_slots = queue.Queue()
+            for slot in self._slots:
+                self._free_slots.put(slot)
+
+            self._listen_thread = threading.Thread(target=self._srv.listen, name="inferna-http", daemon=True)
+            self._listen_thread.start()
             self._running = True
             success = True
-            self._logger.info(f"Embedded server started on {listen_addr}")
+            self._logger.info(f"Embedded server started on {self._config.host}:{self._config.port}")
             return True
         except Exception as e:
             self._logger.error(f"Failed to start server: {e}")
@@ -415,22 +357,28 @@ class EmbeddedServer:
                 # failed bring-up does not pin native state to interpreter
                 # shutdown — leaked LlamaContext + Metal teardown order
                 # trips a [rsets count]==0 assertion.
-                self._mgr.set_handler(None)
+                self._srv.set_handler(None)
                 self._restore_signal_handlers()
                 self._model = None
                 self._slots = []
                 self._embedder = None
 
     def stop(self) -> None:
+        """Stop serving. Waits for in-flight requests; open streams end at their next token."""
         self._logger.info("Stop method called")
         if self._running:
             self._logger.info("Stopping embedded server...")
-            self._running = False
+            self._stopping = True
             if self._signal_received == 0:
                 self._signal_received = signal.SIGTERM
-            self._close_all_connections_from_main_thread()
-            self._mgr.set_handler(None)
+            self._srv.stop()
+            if self._listen_thread is not None:
+                self._listen_thread.join()
+                self._listen_thread = None
+            self._running = False
             self._logger.info("Embedded server stopped")
+        # The handler is a bound method: the native server would pin self.
+        self._srv.set_handler(None)
         # Always restore signal handlers, even if stop() is called twice
         # or before a successful start. The bound-method handler is the
         # main retention path keeping the server (and its native
@@ -438,94 +386,45 @@ class EmbeddedServer:
         self._restore_signal_handlers()
 
     def wait_for_shutdown(self) -> None:
-        """Pump the event loop until SIGINT/SIGTERM is delivered.
-
-        Tighter poll interval (50ms) than the original 100ms because each
-        poll cycle is also when streamed SSE chunks queued by worker
-        threads get flushed to the wire — too long here means tokens
-        visibly batch in the browser.
-        """
-        global _shutdown_requested
-        self._logger.info("Starting embedded server event loop...")
-        while not _shutdown_requested:
-            self._mgr.poll(50)
-            if self._streams:
-                self._drain_streams()
+        """Block until SIGINT/SIGTERM is delivered or stop() is called."""
+        self._logger.info("Waiting for shutdown signal...")
+        while not _shutdown_requested and self._running:
+            time.sleep(0.1)
         self._logger.info(f"Exiting on signal {self._signal_received}")
-        self._close_all_connections_from_main_thread()
-
-    def _close_all_connections_from_main_thread(self) -> None:
-        self._logger.info("Closing all Mongoose connections from main thread...")
-        n = self._mgr.close_all_connections()
-        self._logger.info(f"Set closing flag on {n} connections")
 
     # --------------------------------------------------------- HTTP dispatch
 
-    @staticmethod
-    def set_mongoose_log_level(level: Union[int, MongooseLogLevel]) -> None:
-        """Adjust mongoose's internal log verbosity.
+    def _dispatch(self, method: str, path: str, headers: dict[str, str], body: bytes) -> _Reply:
+        """Answer one request. Runs on an httplib worker thread.
 
-        Accepts a :class:`MongooseLogLevel` member or its integer value
-        (0..4). inferna defaults to ``ERROR``; raise to ``DEBUG`` to see
-        every accept/read/write/close from the underlying mongoose poll
-        loop. Affects all ``mg_mgr`` instances in the process.
-        """
-        _mg.Manager.set_log_level(int(level))
-
-    def _dispatch(self, conn_id: int, method: str, uri: str, headers: dict[str, str], body: str) -> None:
-        """Bridge from the C event handler into our Python routing.
-
-        Wraps the handler in start/end timing and emits one access-log
-        line per request once a response has been written. Replaces
-        mongoose's per-I/O-event chatter with a higher-signal view:
+        Emits one access-log line per request:
 
             GET /props 200 285B 0.4ms
         """
-        # Single outer try/except so that any failure on this path —
-        # construction, routing, handler, or post-handler bookkeeping —
-        # still lands in our Python logger and still emits an access-log
-        # line. The C++ trampoline in _mongoose.cpp also catches and
-        # 500s, but that path bypasses our logging entirely; we want the
-        # diagnostics here.
         start = time.monotonic()
-        conn: Optional[MongooseConnection] = None
-        status = 0
-        body_size = 0
+        conn = HttpResponse()
         try:
-            conn = MongooseConnection(self._mgr, conn_id)
-            self.handle_http_request(conn, method, uri, headers=headers, body=body)
-            status = conn.status_code
-            body_size = conn.body_size
+            try:
+                text = body.decode("utf-8")
+            except UnicodeDecodeError:
+                conn.send_error(400, "Request body is not valid UTF-8")
+            else:
+                self.handle_http_request(conn, method, path, headers=headers, body=text)
         except Exception as e:
             self._logger.exception(f"Event handler error: {e}")
-            try:
-                self._mgr.send_reply(conn_id, 500, "Content-Type: text/plain\r\n", "Internal Server Error")
-            except Exception:
-                # send_reply itself shouldn't be able to raise, but if it
-                # does we don't want to lose the access log on top of it.
-                pass
-            status = 500
-            body_size = len("Internal Server Error")
+            conn = HttpResponse()
+            conn.send_text("Internal Server Error", status_code=500)
         elapsed_ms = (time.monotonic() - start) * 1000.0
-        # Path-only (strip query) for cleaner logs.
-        path = uri.split("?", 1)[0]
-        self._access_logger.info(
-            "%s %s %d %dB %.1fms",
-            method,
-            path,
-            status,
-            body_size,
-            elapsed_ms,
-        )
+        self._access_logger.info("%s %s %d %dB %.1fms", method, path, conn.status_code, conn.body_size, elapsed_ms)
+        return conn.reply()
 
     def handle_http_request(
-        self, conn: MongooseConnection, method: str, uri: str, headers: dict[str, str], body: str
+        self, conn: HttpResponse, method: str, uri: str, headers: dict[str, str], body: str
     ) -> None:
-        # Strip query string — mongoose hands us the raw URI. We don't act
-        # on query params yet, but we don't want them to defeat path matching.
+        # Match on the path alone; the webui requests assets with a cache-busting query.
         path = uri.split("?", 1)[0]
         try:
-            # ``headers`` keys are lowercase; see _mongoose.cpp.
+            # ``headers`` keys are lowercase; see _httplib.cpp.
             if not is_authorized(self._config.api_key, path, headers.get("authorization")):
                 conn.send_json({"error": {"type": "authentication_error", "message": "Invalid API Key"}}, 401)
                 return
@@ -551,8 +450,7 @@ class EmbeddedServer:
                     # Prometheus scrape endpoint. The webui calls this but
                     # tolerates an empty exposition; we return 200 with no
                     # series rather than a 404 (which would log noise).
-                    if conn._mgr is not None:
-                        conn._mgr.send_reply(conn._conn_id, 200, "Content-Type: text/plain; version=0.0.4\r\n", "")
+                    conn.send_text("", content_type="text/plain; version=0.0.4")
                 else:
                     conn.send_error(404, "Not Found")
             elif method == "POST":
@@ -568,14 +466,14 @@ class EmbeddedServer:
             self._logger.error(f"Request handling error: {e}")
             conn.send_error(500, "Internal Server Error")
 
-    def _handle_webui_asset(self, conn: MongooseConnection, name: str) -> None:
+    def _handle_webui_asset(self, conn: HttpResponse, name: str) -> None:
         body = _WEBUI_ASSETS.get(name)
         if body is None:
             conn.send_error(404, f"UI asset {name} not bundled — rebuild with 'make'")
             return
         conn.send_gzipped(body, _WEBUI_ASSET_TYPES[name])
 
-    def _handle_props(self, conn: MongooseConnection) -> None:
+    def _handle_props(self, conn: HttpResponse) -> None:
         """Bootstrap payload consumed by the upstream webui at load time."""
         n_ctx = self._config.n_ctx
         gen_defaults = {
@@ -597,7 +495,7 @@ class EmbeddedServer:
             }
         )
 
-    def _handle_slots(self, conn: MongooseConnection) -> None:
+    def _handle_slots(self, conn: HttpResponse) -> None:
         conn.send_json(
             [
                 {
@@ -609,7 +507,7 @@ class EmbeddedServer:
             ]
         )
 
-    def _handle_models(self, conn: MongooseConnection) -> None:
+    def _handle_models(self, conn: HttpResponse) -> None:
         models_data = {
             "object": "list",
             "data": [
@@ -623,7 +521,7 @@ class EmbeddedServer:
         }
         conn.send_json(models_data)
 
-    def _handle_chat_completions(self, conn: MongooseConnection, body: str) -> None:
+    def _handle_chat_completions(self, conn: HttpResponse, body: str) -> None:
         try:
             if not body.strip():
                 conn.send_error(400, "Empty request body")
@@ -637,11 +535,13 @@ class EmbeddedServer:
                 max_tokens=data.get("max_tokens"),
                 temperature=data.get("temperature", 0.8),
                 top_p=data.get("top_p", 0.9),
+                min_p=data.get("min_p", 0.05),
                 stream=data.get("stream", False),
                 stop=data.get("stop"),
+                seed=data.get("seed"),
             )
             if request.stream:
-                self._stream_chat_completion(conn, request)
+                conn.send_stream(self._sse(request))
                 return
             response = self._process_chat_completion(request)
             response_data = {
@@ -668,7 +568,7 @@ class EmbeddedServer:
             self._logger.error(f"Chat completion error: {e}")
             conn.send_error(500, "Internal Server Error")
 
-    def _handle_embeddings(self, conn: MongooseConnection, body: str) -> None:
+    def _handle_embeddings(self, conn: HttpResponse, body: str) -> None:
         if not self._config.embedding or self._embedder is None:
             conn.send_error(400, "Embeddings not enabled")
             return
@@ -724,214 +624,113 @@ class EmbeddedServer:
             return self._config.n_ctx
         return n
 
-    def _stream_chat_completion(self, conn: MongooseConnection, request: ChatRequest) -> None:
-        """SSE streaming branch for ``POST /v1/chat/completions``.
-
-        Opens the chunked response on the main poll thread, sends the
-        role-only opener synchronously, then hands off generation to a
-        worker thread. The worker pushes pre-formatted SSE frames into a
-        per-stream queue; ``_drain_streams()`` (called from the poll
-        loop) sends them on the wire. This is the only way to get
-        token-by-token visible streaming on a single-threaded mongoose
-        poll loop — see :class:`_StreamingState` for the rationale.
-
-        Returns as soon as the worker is launched. The dispatcher's
-        access-log line will only see the opener bytes; a separate
-        completion log entry is emitted when the stream finishes.
-        """
-        slot = self.get_available_slot()
-        if slot is None:
-            # No chunked-stream framing yet — return a regular JSON error.
-            conn.send_error(503, "No available slots")
-            return
-
-        task_id = str(uuid.uuid4())
-        slot.task_id = task_id
-        slot.is_processing = True
-
-        chunk_id = f"chatcmpl-{task_id}"
-        created = int(time.time())
-        mgr = conn._mgr
-        conn_id = conn._conn_id
-        assert mgr is not None
-
-        if not mgr.begin_chunked(
-            conn_id,
-            200,
-            "Content-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n",
-        ):
-            slot.reset()
-            return  # connection already gone
-        conn.status_code = 200
-
-        # Send the role-only opener synchronously so the browser sees
-        # the response start before any generation latency.
-        opener_payload = {
-            "id": chunk_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": request.model,
-            "choices": [{"index": 0, "delta": {"role": ChatRole.ASSISTANT}, "finish_reason": None}],
-        }
-        opener_bytes = b"data: " + json.dumps(opener_payload).encode() + b"\n\n"
-        if mgr.send_chunk(conn_id, opener_bytes):
-            conn.body_size += len(opener_bytes)
-
-        # Stand up the worker. The dispatcher returns immediately; the
-        # poll loop drains queued chunks via _drain_streams().
-        state = _StreamingState(
-            conn_id=conn_id,
-            slot=slot,
-            prompt=self._messages_to_prompt(request.messages),
-            max_tokens=self._resolve_max_tokens(request),
-            stop_words=list(request.stop or []),
-            request=request,
-            chunk_id=chunk_id,
-            created=created,
-            model=request.model,
-            started_at=time.monotonic(),
-            body_size=len(opener_bytes),
-        )
-        self._streams[conn_id] = state
-        state.thread = threading.Thread(
-            target=self._stream_worker,
-            args=(state,),
-            daemon=True,
-            name=f"inferna-stream-{conn_id:x}",
-        )
-        state.thread.start()
-
-    def _stream_worker(self, state: _StreamingState) -> None:
-        """Run on a worker thread. Generates tokens and queues SSE frames.
-
-        Touches only ``state.slot`` (and through it the llama context /
-        sampler), the local frame helper, and ``state.chunks`` (push-only).
-        Never calls any ``Manager`` method — the main thread does all
-        socket-side work via :meth:`_drain_streams`.
-        """
-
-        def _frame(delta: dict[str, Any], finish: Optional[str] = None) -> bytes:
-            payload = {
-                "id": state.chunk_id,
-                "object": "chat.completion.chunk",
-                "created": state.created,
-                "model": state.model,
-                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-            }
-            return b"data: " + json.dumps(payload).encode() + b"\n\n"
-
-        stop_hit = False
-        buffered = ""  # accumulated to detect stop sequences across token boundaries
-        finish_reason = "stop"
-        generated_count = 0
-        try:
-            for piece in state.slot.iter_tokens(state.prompt, state.max_tokens, state.request):
-                if state.cancelled or _shutdown_requested:
-                    break
-
-                if state.stop_words:
-                    buffered += piece
-                    matched_at = -1
-                    for sw in state.stop_words:
-                        idx = buffered.find(sw)
-                        if idx != -1 and (matched_at == -1 or idx < matched_at):
-                            matched_at = idx
-                    if matched_at != -1:
-                        stop_hit = True
-                        break
-
-                state.chunks.put(_frame({"content": piece}))
-                generated_count += 1
-
-            if not stop_hit and generated_count >= state.max_tokens:
-                finish_reason = "length"
-
-            if not state.cancelled:
-                state.chunks.put(_frame({}, finish=finish_reason))
-                state.chunks.put(b"data: [DONE]\n\n")
-        except Exception as e:
-            self._logger.exception(f"Streaming worker error: {e}")
-            if not state.cancelled:
-                err = {"error": {"type": "internal_error", "message": "Internal Server Error"}}
-                try:
-                    state.chunks.put(b"data: " + json.dumps(err).encode() + b"\n\n")
-                except Exception:
-                    pass
-        finally:
-            # Sentinel: tell the main thread no more chunks are coming so
-            # it can finalize the response and reclaim the slot.
-            state.chunks.put(None)
-
-    def _drain_streams(self) -> None:
-        """Flush any queued SSE chunks for active streams (main thread).
-
-        Called every poll tick when at least one stream is active. For
-        each stream, pulls everything currently queued, sends it on the
-        wire, and on the ``None`` sentinel finalizes the chunked transfer
-        and releases the slot. Detects client disconnect proactively so
-        the worker can stop generating at the next token boundary.
-        """
-        finished: list[int] = []
-        for conn_id, state in self._streams.items():
-            if not state.cancelled and not self._mgr.is_connection_alive(conn_id):
-                state.cancelled = True
+    def _acquire_slot(self) -> ServerSlot:
+        """Wait for a free slot. Raises RuntimeError if the server stops first."""
+        while True:
             try:
-                while True:
-                    chunk = state.chunks.get_nowait()
-                    if chunk is None:
-                        # Worker exited. Close the response cleanly unless
-                        # the client is gone (in which case mongoose has
-                        # already torn the connection down).
-                        if not state.cancelled:
-                            self._mgr.end_chunked(conn_id)
-                        finished.append(conn_id)
-                        break
-                    if state.cancelled:
-                        # Client disconnected partway through; drop the
-                        # rest of the stream's frames on the floor.
-                        continue
-                    if self._mgr.send_chunk(conn_id, chunk):
-                        state.body_size += len(chunk)
-                    else:
-                        state.cancelled = True
+                return self._free_slots.get(timeout=0.1)
             except queue.Empty:
-                # No more chunks ready this tick.
-                pass
+                if self._stopping:
+                    raise RuntimeError("Server is stopping")
 
-        for conn_id in finished:
-            state = self._streams.pop(conn_id)
-            state.slot.reset()
-            elapsed_ms = (time.monotonic() - state.started_at) * 1000.0
-            verb = "stream-cancel" if state.cancelled else "stream-done"
+    def _release_slot(self, slot: ServerSlot) -> None:
+        slot.reset()
+        self._free_slots.put(slot)
+
+    def _sse(self, request: ChatRequest) -> Iterator[bytes]:
+        """Yield an OpenAI ``chat.completion.chunk`` event stream.
+
+        Runs as the response body, one chunk per ``next()`` on an httplib
+        worker thread. The slot is taken on the first token, so a stream the
+        server never starts holds none; closing the generator releases it.
+        """
+        chunk_id = f"chatcmpl-{uuid.uuid4()}"
+        created = int(time.time())
+        started_at = time.monotonic()
+        body_size = 0
+        cancelled = False
+
+        def frame(payload: dict[str, Any]) -> bytes:
+            nonlocal body_size
+            data = b"data: " + json.dumps(payload).encode() + b"\n\n"
+            body_size += len(data)
+            return data
+
+        def event(delta: dict[str, Any], finish: Optional[str] = None) -> bytes:
+            return frame(
+                {
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": request.model,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                }
+            )
+
+        max_tokens = self._resolve_max_tokens(request)
+        slot: Optional[ServerSlot] = None
+        try:
+            yield event({"role": ChatRole.ASSISTANT})
+            try:
+                slot = self._acquire_slot()
+                slot.task_id = chunk_id
+                slot.is_processing = True
+                prompt = self._messages_to_prompt(request.messages)
+                stop_hit = False
+                generated = 0
+
+                def counted() -> Iterator[str]:
+                    nonlocal generated
+                    for piece in tokens:
+                        generated += 1
+                        yield piece
+
+                def content() -> Iterator[str]:
+                    nonlocal stop_hit
+                    stop_hit = yield from stop_at(counted(), request.stop)
+
+                tokens = slot.iter_tokens(prompt, max_tokens, request)
+                try:
+                    for piece in content():
+                        if self._stopping or _shutdown_requested:
+                            break
+                        yield event({"content": piece})
+                finally:
+                    tokens.close()
+                finish = "length" if not stop_hit and generated >= max_tokens else "stop"
+                yield event({}, finish)
+                body_size += len(_SSE_DONE)
+                yield _SSE_DONE
+            except GeneratorExit:
+                cancelled = True
+                raise
+            except Exception as e:
+                self._logger.exception(f"Streaming error: {e}")
+                yield frame({"error": {"type": "internal_error", "message": "Internal Server Error"}})
+        finally:
+            if slot is not None:
+                self._release_slot(slot)
+            elapsed_ms = (time.monotonic() - started_at) * 1000.0
             self._access_logger.info(
-                "%s conn=%x model=%s bytes=%d elapsed=%.1fms",
-                verb,
-                conn_id,
-                state.model,
-                state.body_size,
+                "%s %s model=%s bytes=%d elapsed=%.1fms",
+                "stream-cancel" if cancelled else "stream-done",
+                chunk_id,
+                request.model,
+                body_size,
                 elapsed_ms,
             )
 
     def _process_chat_completion(self, request: ChatRequest) -> ChatResponse:
-        slot = self.get_available_slot()
-        if slot is None:
-            raise RuntimeError("No available slots")
+        slot = self._acquire_slot()
         try:
-            import uuid
-
             task_id = str(uuid.uuid4())
             slot.task_id = task_id
             slot.is_processing = True
 
             prompt = self._messages_to_prompt(request.messages)
             max_tokens = self._resolve_max_tokens(request)
-            generated_text = slot.process_and_generate(prompt, max_tokens)
-
-            if request.stop and generated_text:
-                for stop_word in request.stop:
-                    if stop_word in generated_text:
-                        generated_text = generated_text.split(stop_word)[0]
-                        break
+            generated_text = slot.process_and_generate(prompt, max_tokens, request)
+            generated_text = "".join(stop_at([generated_text], request.stop))
 
             assert self._model is not None  # _generate_chat_response is only entered after load_model succeeded
             vocab = self._model.get_vocab()
@@ -954,7 +753,7 @@ class EmbeddedServer:
                 },
             )
         finally:
-            slot.reset()
+            self._release_slot(slot)
 
     def _messages_to_prompt(self, messages: List[ChatMessage]) -> str:
         parts = []

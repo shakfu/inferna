@@ -17,7 +17,7 @@ import json
 import time
 import threading
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Generator, Iterable, List, Optional, Union
 
 if TYPE_CHECKING:
     from ...rag.embedder import Embedder
@@ -66,6 +66,33 @@ def is_authorized(api_key: Optional[str], path: str, authorization: Optional[str
     if scheme.lower() != "bearer":
         return False
     return hmac.compare_digest(token.strip().encode(), api_key.encode())
+
+
+def stop_at(pieces: Iterable[str], stop: Union[str, List[str], None]) -> Generator[str, None, bool]:
+    """Yield ``pieces`` up to the earliest stop string, holding back text that may begin one.
+
+    Returns True if a stop string matched.
+    """
+    stops = [s for s in ([stop] if isinstance(stop, str) else stop or []) if s]
+    if not stops:
+        yield from pieces
+        return False
+    buf = ""
+    for piece in pieces:
+        buf += piece
+        hits = [i for i in (buf.find(s) for s in stops) if i >= 0]
+        if hits:
+            if min(hits):
+                yield buf[: min(hits)]
+            return True
+        # Longest suffix of buf that is a proper prefix of some stop string.
+        hold = max((k for s in stops for k in range(1, min(len(s), len(buf) + 1)) if buf.endswith(s[:k])), default=0)
+        if len(buf) > hold:
+            yield buf[: len(buf) - hold]
+            buf = buf[len(buf) - hold :]
+    if buf:
+        yield buf
+    return False
 
 
 class ChatRole(str, enum.Enum):
@@ -126,6 +153,10 @@ class ServerConfig:
     # ``Authorization: Bearer <api_key>``.
     api_key: Optional[str] = None
 
+    # Larger request bodies get 413 before they are read. The default is
+    # httplib's, which llama-server also uses.
+    max_body_bytes: int = 100 * 1024 * 1024
+
 
 @dataclass
 class ChatMessage:
@@ -146,7 +177,7 @@ class ChatRequest:
     top_p: float = 0.9
     min_p: float = 0.05
     stream: bool = False
-    stop: Optional[List[str]] = None
+    stop: Union[str, List[str], None] = None
     seed: Optional[int] = None
 
 
@@ -231,7 +262,9 @@ class ServerSlot:
         self.context.kv_cache_clear()
         self.context.n_tokens = 0
 
-    def iter_tokens(self, prompt: str, max_tokens: int = 100, request: Optional["ChatRequest"] = None) -> Iterator[str]:
+    def iter_tokens(
+        self, prompt: str, max_tokens: int = 100, request: Optional["ChatRequest"] = None
+    ) -> Generator[str, None, None]:
         """Yield generated token pieces (str) one at a time.
 
         Caller is responsible for slot lifecycle (``is_processing`` flag,
@@ -402,13 +435,7 @@ class PythonServer:
             max_tokens = request.max_tokens or 100
             generated_text = slot.process_and_generate(prompt, max_tokens, request=request)
 
-            # Check stop words
-            if request.stop and generated_text:
-                for stop_word in request.stop:
-                    if stop_word in generated_text:
-                        # Truncate at stop word
-                        generated_text = generated_text.split(stop_word)[0]
-                        break
+            generated_text = "".join(stop_at([generated_text], request.stop))
 
             # Estimate token counts (simplified)
             assert self.model is not None
@@ -537,6 +564,11 @@ class PythonServer:
                 try:
                     # Read request body
                     content_length = int(self.headers.get("Content-Length", 0))
+                    if content_length > server_instance.config.max_body_bytes:
+                        # The body is left unread, so the connection cannot be reused.
+                        self.close_connection = True
+                        self._send_error(413, "Payload Too Large")
+                        return
                     if content_length > 0:
                         body = self.rfile.read(content_length).decode("utf-8")
                         data = json.loads(body)

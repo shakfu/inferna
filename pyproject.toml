@@ -119,7 +119,7 @@ module = ["inferna.agents.constrained", "inferna.integrations.langchain"]
 disallow_subclassing_any = false
 
 # Modules that subclass nanobind-bound classes (e.g. SDImage extends
-# _sd_native.SDImage, EmbeddedServer constructs _mongoose.Manager).
+# _sd_native.SDImage, EmbeddedServer constructs _httplib.Server).
 # nanobind extensions don't ship .pyi stubs, so mypy sees them as Any
 # and the subclasses + every method call against them lights up under
 # strict mode. Relax the four strict-mode checks that fire purely

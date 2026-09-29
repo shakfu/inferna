@@ -32,7 +32,7 @@ Accelerate itself is system-provided and not bundled.
 
 ## `libllama-common`
 
-Upstream's `libllama-common` links against Homebrew's OpenSSL, whose deployment target can clash with our `MACOSX_DEPLOYMENT_TARGET=11.0`. No inferna extension references `libllama-common`, so it's not a concern unless it ends up on the filesystem in a location `delocate` walks into. Under the current canonical pattern nothing pulls it in, so no exclusion is needed — the extension's rpath drives what gets bundled.
+Not built. No inferna extension references it, and it pulled in cpp-httplib and, with `LLAMA_OPENSSL`, Homebrew's OpenSSL.
 
 ## Wheel repair command
 
@@ -49,7 +49,7 @@ delocate-wheel --require-archs <arch> -w <out-dir> -v <wheel.whl>
 Builds use `GGML_BACKEND_DL=ON`, so GPU backends (`ggml-cuda`, `ggml-vulkan`) are compiled as **plugin DLLs loaded at runtime via `LoadLibrary`**, not linked into `llama.dll`. `scripts/manage.py` builds them explicitly as separate targets and copies them into `thirdparty/llama.cpp/dynamic/`:
 
 ```python
-targets = ["llama", "llama-common", "mtmd", "ggml-cpu"]
+targets = ["llama", "mtmd", "ggml-cpu"]
 if backend_options.get("GGML_VULKAN") == "ON":
     targets.append("ggml-vulkan")
 if backend_options.get("GGML_CUDA") == "ON":

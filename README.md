@@ -48,7 +48,7 @@ Inferna publishes fewer wheels than cyllama, and a release may not include every
 
 - Image and video generation -- stable-diffusion.cpp image, image-edit, and video models
 
-- OpenAI-compatible servers -- EmbeddedServer (C/Mongoose) with SSE streaming and the opt-in web UI, plus a pure-Python PythonServer; both expose chat-completions and embeddings endpoints
+- OpenAI-compatible servers -- EmbeddedServer (cpp-httplib) with SSE streaming and the opt-in web UI, plus a pure-Python PythonServer; both expose chat-completions and embeddings endpoints
 
 - Framework integrations -- OpenAI-style client, LangChain LLM interface
 

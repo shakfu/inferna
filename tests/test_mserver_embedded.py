@@ -40,6 +40,8 @@ class TestServerConfig:
         assert config.embedding is False
         assert config.n_parallel == 1
         assert config.model_alias == "gpt-3.5-turbo"
+        # llama-server's limit: httplib's default, which it does not override.
+        assert config.max_body_bytes == 100 * 1024 * 1024
 
         # Embedding defaults
         assert config.embedding_model_path is None
@@ -895,7 +897,7 @@ class TestPythonServerIntegration:
 
 
 # =============================================================================
-# EmbeddedServer Tests (Mongoose-based server)
+# EmbeddedServer Tests (cpp-httplib server)
 # =============================================================================
 
 
@@ -934,26 +936,27 @@ class TestEmbeddedServerLifecycle:
         config = ServerConfig(model_path=model_path, host="127.0.0.1", port=8099, n_ctx=256)
         server = EmbeddedServer(config)
 
-        # Replace the native Manager with a fake whose listen() returns
-        # False — exercises the post-load_model cleanup path without
-        # relying on a real port conflict (and avoids native-class
-        # attribute-override restrictions).
-        class _FakeMgr:
+        # Replace the native server with a fake whose bind() fails:
+        # exercises the post-load_model cleanup path without relying on a
+        # real port conflict.
+        class _FakeSrv:
             def __init__(self):
                 self.handler = None
 
             def set_handler(self, h):
                 self.handler = h
 
-            def listen(self, _addr):
+            def bind(self, host, port, ipv6):
                 return False
 
-            def close_all_connections(self):
-                return 0
+            def stop(self):
+                pass
 
-        server._mgr = _FakeMgr()
+        server._srv = _FakeSrv()
 
         assert server.start() is False
+        # The native server must not keep the bound _dispatch, which pins the instance.
+        assert server._srv.handler is None
         # The cleanup path must drop refs to every loaded native object.
         assert server._model is None, "LlamaModel retained after failed start"
         assert server._slots == [], "ServerSlots retained after failed start"
@@ -988,31 +991,43 @@ class TestEmbeddedServerBind:
     the default ``inferna server`` on every interface.
     """
 
-    @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "0.0.0.0"])
-    def test_listen_url_uses_config_host(self, host, monkeypatch):
+    @pytest.mark.parametrize(
+        "host, bound",
+        [
+            ("127.0.0.1", ("127.0.0.1", 8123, False)),
+            ("localhost", ("localhost", 8123, False)),
+            ("0.0.0.0", ("0.0.0.0", 8123, False)),
+            ("::1", ("::1", 8123, True)),
+            ("[::1]", ("::1", 8123, True)),
+        ],
+    )
+    def test_bind_uses_config_host(self, host, bound, monkeypatch):
         from inferna.llama.server.embedded import EmbeddedServer
 
         server = EmbeddedServer(ServerConfig(model_path="unused.gguf", host=host, port=8123))
         monkeypatch.setattr(server, "load_model", lambda: True)
-        addrs = []
+        binds = []
 
-        class _FakeMgr:
+        class _FakeSrv:
             def set_handler(self, h):
                 pass
 
-            def listen(self, addr):
-                addrs.append(addr)
+            def bind(self, host, port, ipv6):
+                binds.append((host, port, ipv6))
                 return True
 
-            def close_all_connections(self):
-                return 0
+            def listen(self):
+                return True
 
-        server._mgr = _FakeMgr()
+            def stop(self):
+                pass
+
+        server._srv = _FakeSrv()
         try:
             assert server.start() is True
         finally:
             server.stop()
-        assert addrs == [f"http://{host}:8123"]
+        assert binds == [bound]
 
     @pytest.mark.parametrize(
         "host, warns",
@@ -1228,31 +1243,292 @@ class TestServerErrorsDoNotLeak:
     def test_embedded_stream_error_frame_is_generic(self):
         import json
 
-        from inferna.llama.server.embedded import _StreamingState
-
-        server = self._embedded_server()
-        slot = Mock()
+        server = _streaming_server()
+        server._logger = Mock()
+        slot = server._free_slots.get()
         slot.iter_tokens.side_effect = RuntimeError(self.SECRET)
-        state = _StreamingState(
-            conn_id=1,
-            slot=slot,
-            prompt="p",
-            max_tokens=4,
-            stop_words=[],
-            request=Mock(),
-            chunk_id="c",
-            created=0,
-            model="m",
-        )
-        server._stream_worker(state)
+        server._free_slots.put(slot)
 
-        frames = []
-        while True:
-            frame = state.chunks.get_nowait()
-            if frame is None:
-                break
-            frames.append(frame)
-        assert len(frames) == 1
-        payload = json.loads(frames[0][len(b"data: ") :])
+        frames = list(server._sse(_chat_request()))
+
+        # The role opener, then the error frame, and no [DONE].
+        assert len(frames) == 2
+        payload = json.loads(frames[1][len(b"data: ") :])
         assert payload == {"error": {"type": "internal_error", "message": "Internal Server Error"}}
         assert self.SECRET in str(server._logger.exception.call_args)
+        assert server._free_slots.qsize() == 1, "slot not returned after a stream error"
+
+
+def _chat_request(**kwargs):
+    return ChatRequest(messages=[ChatMessage(role="user", content="hi")], model="m", **kwargs)
+
+
+def _streaming_server(pieces=("a", "b", "c"), n_slots=1):
+    """An EmbeddedServer with mock slots that yield `pieces`, and no model or socket."""
+    import logging
+    import queue
+
+    from inferna.llama.server.embedded import EmbeddedServer
+
+    server = EmbeddedServer.__new__(EmbeddedServer)
+    server._config = ServerConfig(model_path="unused.gguf", n_ctx=64)
+    server._logger = logging.getLogger("test_embedded")
+    server._access_logger = logging.getLogger("test_embedded.access")
+    server._stopping = False
+    server._free_slots = queue.Queue()
+    for i in range(n_slots):
+        slot = Mock()
+        slot.id = i
+        # A generator, like ServerSlot.iter_tokens: _sse closes it.
+        slot.iter_tokens.side_effect = lambda *a, **k: (p for p in pieces)
+        server._free_slots.put(slot)
+    return server
+
+
+def _sse_payloads(frames):
+    import json
+
+    assert frames[-1] == b"data: [DONE]\n\n"
+    return [json.loads(f[len(b"data: ") :]) for f in frames[:-1]]
+
+
+class TestEmbeddedStreaming:
+    """The SSE generator that httplib pulls one chunk at a time."""
+
+    def test_stream_frames_and_slot_release(self):
+        server = _streaming_server()
+        payloads = _sse_payloads(list(server._sse(_chat_request())))
+
+        assert payloads[0]["choices"][0]["delta"] == {"role": "assistant"}
+        assert [p["choices"][0]["delta"]["content"] for p in payloads[1:-1]] == ["a", "b", "c"]
+        assert payloads[-1]["choices"][0]["finish_reason"] == "stop"
+        slot = server._free_slots.get_nowait()
+        slot.reset.assert_called_once()
+
+    def test_unstarted_stream_holds_no_slot(self):
+        """httplib may drop a response before pulling a chunk; nothing may leak."""
+        server = _streaming_server()
+        server._sse(_chat_request()).close()
+        assert server._free_slots.qsize() == 1
+
+    def test_client_disconnect_releases_slot(self):
+        """A failed write makes httplib drop the stream, which closes the generator."""
+        server = _streaming_server()
+        stream = server._sse(_chat_request())
+        next(stream)  # role opener
+        next(stream)  # first token; the slot is now held
+        assert server._free_slots.qsize() == 0
+        stream.close()
+        assert server._free_slots.qsize() == 1
+
+    def test_stop_word_ends_stream(self):
+        server = _streaming_server(pieces=("a", "b", "STOP", "c"))
+        payloads = _sse_payloads(list(server._sse(_chat_request(stop=["STOP"]))))
+        assert [p["choices"][0]["delta"].get("content") for p in payloads[1:-1]] == ["a", "b"]
+
+    def test_stopping_server_ends_stream_cleanly(self):
+        server = _streaming_server()
+        stream = server._sse(_chat_request())
+        next(stream)
+        next(stream)
+        server._stopping = True
+        payloads = _sse_payloads(list(stream))
+        assert payloads[-1]["choices"][0]["finish_reason"] == "stop"
+        assert server._free_slots.qsize() == 1
+
+
+class TestEmbeddedSlotQueue:
+    """httplib serves requests on a thread pool, so requests contend for slots."""
+
+    def test_request_waits_for_a_busy_slot(self):
+        import threading
+
+        server = _streaming_server()
+        held = server._acquire_slot()
+        got = []
+        t = threading.Thread(target=lambda: got.append(server._acquire_slot()))
+        t.start()
+        time.sleep(0.3)
+        assert got == [], "acquired a slot that was in use"
+        server._release_slot(held)
+        t.join(timeout=5)
+        assert got == [held]
+
+    def test_waiting_request_fails_when_server_stops(self):
+        server = _streaming_server()
+        server._acquire_slot()
+        server._stopping = True
+        with pytest.raises(RuntimeError):
+            server._acquire_slot()
+
+
+class TestEmbeddedHttpNoModel:
+    """The native httplib layer over a real socket, without loading a model."""
+
+    MAX_BODY = 64 * 1024
+
+    @pytest.fixture
+    def running(self, monkeypatch):
+        from inferna.llama.server.embedded import EmbeddedServer
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        config = ServerConfig(model_path="unused.gguf", host="127.0.0.1", port=port, max_body_bytes=self.MAX_BODY)
+        server = EmbeddedServer(config)
+        monkeypatch.setattr(server, "load_model", lambda: True)
+        assert server.start() is True
+        try:
+            yield server, f"http://127.0.0.1:{port}"
+        finally:
+            server.stop()
+
+    def test_health(self, running):
+        import urllib.request
+
+        _, base = running
+        with urllib.request.urlopen(f"{base}/health", timeout=10) as r:
+            assert r.status == 200
+            assert r.read() == b'{"status": "ok"}'
+
+    def test_oversized_body_is_413(self, running):
+        import urllib.error
+        import urllib.request
+
+        _, base = running
+        req = urllib.request.Request(f"{base}/v1/chat/completions", data=b"x" * (self.MAX_BODY + 1))
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=10)
+        assert exc.value.code == 413
+
+    def test_iterator_body_is_sent_chunked_and_closed(self, running, monkeypatch):
+        import urllib.request
+
+        server, base = running
+        closed = []
+
+        def chunks():
+            try:
+                yield b"one,"
+                yield b"two"
+            finally:
+                closed.append(True)
+
+        monkeypatch.setattr(
+            server, "handle_http_request", lambda conn, *a, **k: conn.send_stream(chunks(), "text/plain")
+        )
+        with urllib.request.urlopen(f"{base}/anything", timeout=10) as r:
+            assert r.headers["Transfer-Encoding"] == "chunked"
+            assert r.read() == b"one,two"
+        assert closed == [True]
+
+    def test_second_server_cannot_bind_the_same_port(self, running, monkeypatch):
+        """httplib's default socket option is SO_REUSEPORT, which would let a
+        second process bind the port and take a share of its connections."""
+        from inferna.llama.server.embedded import EmbeddedServer
+
+        server, _ = running
+        other = EmbeddedServer(ServerConfig(model_path="unused.gguf", host="127.0.0.1", port=server._config.port))
+        monkeypatch.setattr(other, "load_model", lambda: True)
+        try:
+            assert other.start() is False
+        finally:
+            other.stop()
+
+
+def test_python_server_rejects_oversized_body(monkeypatch):
+    """PythonServer applies max_body_bytes from Content-Length, before reading the body."""
+    import http.client
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = PythonServer(ServerConfig(model_path="unused.gguf", host="127.0.0.1", port=port, max_body_bytes=1024))
+    monkeypatch.setattr(server, "load_model", lambda: True)
+    assert server.start() is True
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        # Declared length only: a server that read the body would block here.
+        conn.putrequest("POST", "/v1/chat/completions")
+        conn.putheader("Content-Length", "1025")
+        conn.endheaders()
+        resp = conn.getresponse()
+        assert resp.status == 413
+        assert resp.will_close, "an unread body must not be parsed as the next request"
+        conn.close()
+    finally:
+        server.stop()
+
+
+class TestStopAt:
+    """stop_at ends output at the earliest stop string without leaking its prefix."""
+
+    @staticmethod
+    def _run(pieces, stop):
+        from inferna.llama.server.python import stop_at
+
+        gen = stop_at(pieces, stop)
+        out = []
+        while True:
+            try:
+                out.append(next(gen))
+            except StopIteration as e:
+                return "".join(out), out, e.value
+
+    def test_no_stops_passes_through(self):
+        assert self._run(["a", "b"], None) == ("ab", ["a", "b"], False)
+
+    def test_prefix_split_across_pieces_is_never_emitted(self):
+        text, pieces, hit = self._run(["Hi ", "ST", "OP", " more"], ["STOP"])
+        assert (text, hit) == ("Hi ", True)
+        assert all("S" not in p for p in pieces)
+
+    def test_held_text_is_released_when_it_is_not_a_stop(self):
+        text, _, hit = self._run(["a S", "TX", "b"], ["STOP"])
+        assert (text, hit) == ("a STXb", False)
+
+    def test_held_text_is_flushed_at_end(self):
+        assert self._run(["a", "ST"], ["STOP"])[0::2] == ("aST", False)
+
+    def test_earliest_match_wins_over_list_order(self):
+        assert self._run(["x B y A z"], ["A", "B"])[0::2] == ("x ", True)
+
+    def test_string_stop_is_one_stop_not_characters(self):
+        """OpenAI accepts `stop` as a string; iterating it would stop at any character."""
+        assert self._run(["one two"], "two")[0::2] == ("one ", True)
+
+
+class TestEmbeddedPerRequestSampling:
+    """temperature, min_p and seed reach the slot on both response paths."""
+
+    def test_request_fields_are_parsed(self):
+        server = _streaming_server()
+        server._process_chat_completion = Mock(side_effect=RuntimeError("stop here"))
+        body = '{"messages": [{"role": "user", "content": "hi"}], "temperature": 0.1, "min_p": 0.2, "seed": 7}'
+        server._handle_chat_completions(Mock(), body)
+        request = server._process_chat_completion.call_args.args[0]
+        assert (request.temperature, request.min_p, request.seed) == (0.1, 0.2, 7)
+
+    def test_non_streaming_passes_request_to_slot(self):
+        server = _streaming_server()
+        server._model = Mock()
+        server._model.get_vocab.return_value.tokenize.return_value = [1]
+        slot = server._free_slots.queue[0]
+        slot.process_and_generate.return_value = "one STOP two"
+        request = _chat_request(temperature=0.1, stop="STOP")
+
+        response = server._process_chat_completion(request)
+
+        assert slot.process_and_generate.call_args.args[2] is request
+        assert response.choices[0].message.content == "one "
+
+    def test_stream_stop_hit_on_last_token_reports_stop(self):
+        """A stop string completed by the max_tokens-th piece is a stop, not a length cut."""
+        server = _streaming_server(pieces=("a", "STOP"))
+        payloads = _sse_payloads(list(server._sse(_chat_request(max_tokens=2, stop=["STOP"]))))
+        assert payloads[-1]["choices"][0]["finish_reason"] == "stop"
+
+    def test_stream_length_cut_reports_length(self):
+        server = _streaming_server(pieces=("a", "b"))
+        payloads = _sse_payloads(list(server._sse(_chat_request(max_tokens=2))))
+        assert payloads[-1]["choices"][0]["finish_reason"] == "length"

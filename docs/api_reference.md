@@ -1482,9 +1482,9 @@ spec.print_stats()
 
 Three OpenAI-compatible server implementations.
 
-### Embedded Server (C/Mongoose) — recommended
+### Embedded Server (cpp-httplib) — recommended
 
-Mongoose-backed HTTP server with SSE streaming. Uses Python worker threads for token generation so streamed tokens flush to the wire as they're produced. Configured via `ServerConfig`. The browser webui is **opt-in** via `serve_webui=True` (default `False`); without it, only the OpenAI-compatible API and `/health` are served.
+cpp-httplib HTTP server with SSE streaming. Requests run on httplib's thread pool; a request beyond `n_parallel` waits for a free slot. Configured via `ServerConfig`. The browser webui is **opt-in** via `serve_webui=True` (default `False`); without it, only the OpenAI-compatible API and `/health` are served.
 
 ```python
 from inferna.llama.server.python import ServerConfig

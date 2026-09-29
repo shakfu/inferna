@@ -1,6 +1,6 @@
 # Inferna Server Usage Examples
 
-Inferna ships an embedded OpenAI-compatible HTTP server with an optional built-in chat web UI (a vendored snapshot of llama.cpp's reference webui), plus a pure-Python fallback for environments without the compiled mongoose extension.
+Inferna ships an embedded OpenAI-compatible HTTP server with an optional built-in chat web UI (a vendored snapshot of llama.cpp's reference webui), plus a pure-Python fallback for environments without the compiled `_httplib` extension.
 
 A single subcommand, `inferna server`, drives all three configurations:
 
@@ -16,9 +16,9 @@ The webui is opt-in. Library callers control it via `ServerConfig(serve_webui=Tr
 
 ### 1. Embedded Server (`EmbeddedServer`)
 
-- C networking via the [Mongoose](https://mongoose.ws/) library, bound to Python through nanobind
+- C++ networking via [cpp-httplib](https://github.com/yhirose/cpp-httplib) (MIT), bound to Python through nanobind
 
-- Single-threaded poll loop on the main thread; per-stream worker threads for concurrent token generation
+- Requests run on httplib's thread pool; a request beyond `--n-parallel` waits for a free slot
 
 - Mounts the upstream [llama.cpp](https://github.com/ggml-org/llama.cpp/tree/master/tools/ui) web UI at `GET /` when `serve_webui=True` (a gzipped snapshot vendored in the package, served with `Content-Encoding: gzip`)
 
@@ -30,7 +30,7 @@ The webui is opt-in. Library callers control it via `ServerConfig(serve_webui=Tr
 
 - Pure Python HTTP server (stdlib `http.server`)
 
-- No compiled mongoose dependency
+- No compiled extension
 
 - Never serves the webui (the static asset routes simply do not exist in this backend)
 
@@ -71,7 +71,6 @@ inferna server -m models/Llama-3.2-1B-Instruct-Q8_0.gguf --server-type python
 | `--gpu-layers` | `-1` | GPU layers to offload (-1 = all) |
 | `--n-parallel` | `1` | Number of concurrent processing slots |
 | `--model-alias` | (filename stem) | Identifier shown in the UI's "Model" field and `/v1/models[].id`. Defaults to the model filename without extension. |
-| `--log-level` | `1` (errors only) | HTTP-layer log verbosity. `0`=none, `1`=errors only (default), `2`=info, `3`=debug (every accept/read/write/close — useful for HTTP-level debugging), `4`=verbose |
 | `--server-type` | `embedded` | `embedded` or `python` |
 | `-w, --webui` | off | Mount the browser webui on the embedded backend. No effect on `--server-type=python` |
 
@@ -101,12 +100,6 @@ python -m inferna.llama.server \
     --model-alias my-llama
 ```
 
-### Verbose HTTP-layer tracing for debugging
-
-```bash
-python -m inferna.llama.server -m models/llama.gguf --log-level 3
-```
-
 ## Logging
 
 By default the server emits one access-log line per HTTP request on the `inferna.llama.server.embedded.access` stdlib logger:
@@ -114,12 +107,10 @@ By default the server emits one access-log line per HTTP request on the `inferna
 ```text
 INFO:inferna.llama.server.embedded.access:GET /props 200 285B 0.1ms
 INFO:inferna.llama.server.embedded.access:POST /v1/chat/completions 200 242B 0.4ms
-INFO:inferna.llama.server.embedded.access:stream-done conn=14a82e4f0 model=Llama-3.2-1B-Instruct-Q8_0 bytes=8563 elapsed=917.2ms
+INFO:inferna.llama.server.embedded.access:stream-done chatcmpl-3f0c9a1e-6d2b-4b7e-9a51-2c8e0f4d7b19 model=Llama-3.2-1B-Instruct-Q8_0 bytes=8563 elapsed=917.2ms
 ```
 
-Streaming chat completions emit two lines: one when the dispatcher returns (covers headers + the role-only opener), and a second `stream-done` (or `stream-cancel` if the client dropped) when the SSE stream finishes, with the cumulative byte count and end-to-end timing.
-
-The HTTP-layer tracer is silenced by default — raise it with `--log-level 3` if you need to see the underlying connection events.
+Streaming chat completions emit two lines: one when the handler returns (its size is `0B`, as the body is not yet generated), and a second `stream-done` (or `stream-cancel` if the client dropped) when the SSE stream finishes, with the cumulative byte count and end-to-end timing.
 
 ## Web UI
 
@@ -225,7 +216,7 @@ data: {"id":"chatcmpl-...","choices":[{"index":0,"delta":{},"finish_reason":"sto
 data: [DONE]
 ```
 
-Tokens arrive on the wire as they're generated (worker-thread + main-poll-loop drain), so SSE clients see real-time streaming.
+httplib sends each SSE frame as a chunk as soon as it is generated. A client disconnect stops generation at the next token and frees the slot.
 
 `max_tokens` defaults to "until EOS or context limit" when omitted, `null`, `0`, or any negative value (the upstream webui's `-1` "unlimited" convention is honored). Pass a positive integer to cap.
 
@@ -322,7 +313,7 @@ with PythonServer(config) as server:
 
 ### Use `PythonServer` when
 
-- The compiled mongoose extension isn't available (sdist install on a platform without a wheel, etc.)
+- The compiled `_httplib` extension isn't available (sdist install on a platform without a wheel, etc.)
 
 - Debugging the HTTP layer with stdlib tooling
 

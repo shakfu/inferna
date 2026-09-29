@@ -33,19 +33,10 @@ def main() -> int:
         help="Read the API key from a file, keeping it out of the process list.",
     )
     parser.add_argument(
-        "--log-level",
-        type=int,
-        default=None,
-        choices=[0, 1, 2, 3, 4],
-        help="HTTP-layer log verbosity. 0=none, 1=errors only (default), "
-        "2=info, 3=debug (every accept/read/write/close), 4=verbose. "
-        "Most users want this off; set to 3 to debug HTTP-level issues.",
-    )
-    parser.add_argument(
         "--server-type",
         choices=["python", "embedded"],
         default="embedded",
-        help="Server implementation to use: python (pure Python) or embedded (high-performance C). Default: embedded",
+        help="Server implementation to use: python (stdlib http.server) or embedded (cpp-httplib). Default: embedded",
     )
     parser.add_argument(
         "-w",
@@ -85,11 +76,9 @@ def main() -> int:
         try:
             from .embedded import EmbeddedServer
 
-            print("Starting embedded server (high-performance C implementation)")
+            print("Starting embedded server (cpp-httplib)")
 
             server = EmbeddedServer(config)
-            if args.log_level is not None:
-                server.set_mongoose_log_level(args.log_level)
 
             if not server.start():
                 print("Failed to start embedded server")
@@ -99,7 +88,7 @@ def main() -> int:
                 print(f"Embedded server running at http://{args.host}:{args.port}")
                 print("Press Ctrl+C to stop...")
 
-                # Run the Mongoose event loop - this blocks until signal received
+                # Blocks until SIGINT/SIGTERM
                 server.wait_for_shutdown()
                 print("\nShutting down embedded server...")
 
@@ -110,7 +99,7 @@ def main() -> int:
             print("\nReceived KeyboardInterrupt, shutting down...")
 
         except ImportError:
-            print("Embedded server not available. Install with 'make build' to compile Mongoose support.")
+            print("Embedded server not available. Build it with 'make build'.")
             print("Falling back to Python server...")
             args.server_type = "python"
 

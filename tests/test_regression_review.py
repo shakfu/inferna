@@ -5,7 +5,6 @@ re-introduce the bug. Test IDs map back to the review:
 
   A1  — LlamaVocab.tokenize retries on undersized buffer.
   A2  — WhisperContext methods raise after close().
-  A3  — Mongoose Manager.send_reply rejects stale conn_id.
   A4  — _llama_progress_cb returns False (aborts) on handler exception/False.
   A7  — MtmdContext methods raise after close() (where exercisable).
   A12 — LlamaSampler.add_grammar with invalid grammar raises ValueError.
