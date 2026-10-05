@@ -2000,7 +2000,13 @@ NB_MODULE(_llama_native, m) {
                 nb::gil_scoped_release rel;
                 rc = llama_encode(ctx, b);
             }
-            if (rc < 0) throw std::runtime_error("error encoding batch");
+            // A positive code is a failure too: 2 means the compute was aborted,
+            // and the output buffer then holds whatever it held before.
+            if (rc == 2) {
+                PyErr_SetString(PyExc_InterruptedError, "llama_encode aborted by abort_callback");
+                throw nb::python_error();
+            }
+            if (rc != 0) throw std::runtime_error("llama_encode failed with code " + std::to_string(rc));
         })
         .def("decode", [](LlamaContextW& s, LlamaBatchW& batch){
             s.ensure_valid();

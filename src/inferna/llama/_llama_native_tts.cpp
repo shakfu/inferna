@@ -8,6 +8,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -42,12 +43,21 @@ void register_tts(nb::module_& m) {
         return nb::make_tuple(real, imag);
     }, "real"_a, "imag"_a, "k"_a, "N"_a);
 
-    m.def("irfft", [](std::vector<float> inp_cplx) {
-        int n = (int) inp_cplx.size();
+    // Inverse real DFT of length n from the first n / 2 + 1 complex bins of
+    // inp_cplx (interleaved real, imaginary); returns n samples. n is explicit:
+    // the input row can be wider than the bins the transform reads.
+    m.def("irfft", [](std::vector<float> inp_cplx, int n) {
+        if (n <= 0) throw std::invalid_argument("irfft length must be positive, got " + std::to_string(n));
+        const size_t n_in = 2 * (size_t) (n / 2 + 1);
+        if (inp_cplx.size() < n_in) {
+            throw std::invalid_argument("irfft of length " + std::to_string(n) + " reads " +
+                                        std::to_string(n_in) + " floats; got " +
+                                        std::to_string(inp_cplx.size()));
+        }
         std::vector<float> out(n);
         irfft(n, inp_cplx.data(), out.data());
         return out;
-    }, "inp_cplx"_a);
+    }, "inp_cplx"_a, "n"_a);
 
     m.def("fold", [](std::vector<float> data, int64_t n_out, int64_t n_win,
                        int64_t n_hop, int64_t n_pad) {
