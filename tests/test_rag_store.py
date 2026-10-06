@@ -918,112 +918,6 @@ class TestVectorEncoding:
         # Just verify it doesn't crash - exact values may differ due to float precision
 
 
-class TestConcurrentAccess:
-    """Test VectorStore concurrent access from multiple threads.
-
-    SQLite does not allow sharing a connection across threads by default.
-    These tests use a file-based database with separate VectorStore instances
-    per thread (the correct usage pattern for concurrent access).
-    """
-
-    def test_shared_instance_rejects_cross_thread_use(self):
-        """Test that a single VectorStore instance raises on cross-thread use."""
-        import sqlite3
-        import threading
-
-        with SqliteVectorStore(dimension=4) as store:
-            store.add([[1.0, 0.0, 0.0, 0.0]], ["seed"])
-            error_holder: list[Exception] = []
-
-            def reader():
-                try:
-                    store.search([1.0, 0.0, 0.0, 0.0], k=1)
-                except sqlite3.ProgrammingError as e:
-                    error_holder.append(e)
-
-            t = threading.Thread(target=reader)
-            t.start()
-            t.join()
-
-            assert len(error_holder) == 1
-            assert "thread" in str(error_holder[0]).lower()
-
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="Windows mandatory file locking causes SQLite 'database is locked' under heavy concurrent writes",
-    )
-    def test_concurrent_writes_separate_instances(self):
-        """Test concurrent writes via separate store instances on same file."""
-        import threading
-
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-
-        try:
-            # Create the store and seed schema
-            with SqliteVectorStore(dimension=4, db_path=db_path) as store:
-                store.add([[0.0, 0.0, 0.0, 0.0]], ["seed"])
-
-            errors: list[Exception] = []
-
-            def writer(thread_idx: int):
-                try:
-                    with SqliteVectorStore.open(db_path) as s:
-                        for i in range(10):
-                            emb = [float(thread_idx), float(i), 0.0, 0.0]
-                            s.add([emb], [f"t{thread_idx}-{i}"])
-                except Exception as e:
-                    errors.append(e)
-
-            threads = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            assert errors == [], f"Concurrent writes failed: {errors}"
-
-            with SqliteVectorStore.open(db_path) as s:
-                # 1 seed + 4 threads * 10 docs = 41
-                assert len(s) == 41
-        finally:
-            Path(db_path).unlink(missing_ok=True)
-
-    def test_concurrent_reads_separate_instances(self):
-        """Test concurrent reads via separate store instances on same file."""
-        import threading
-
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-
-        try:
-            with SqliteVectorStore(dimension=4, db_path=db_path) as store:
-                embeddings = [[float(i), 0.0, 0.0, 0.0] for i in range(20)]
-                texts = [f"doc-{i}" for i in range(20)]
-                store.add(embeddings, texts)
-
-            errors: list[Exception] = []
-
-            def reader(query: list[float]):
-                try:
-                    with SqliteVectorStore.open(db_path) as s:
-                        for _ in range(20):
-                            results = s.search(query, k=5)
-                            assert len(results) <= 5
-                except Exception as e:
-                    errors.append(e)
-
-            threads = [threading.Thread(target=reader, args=([float(i), 0.0, 0.0, 0.0],)) for i in range(4)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            assert errors == [], f"Concurrent reads failed: {errors}"
-        finally:
-            Path(db_path).unlink(missing_ok=True)
-
-
 class TestVectorTypeEncoding:
     """The blob written must match the element type declared to
     ``vector_init``. The extension reads ``dimension * sizeof(element)``
@@ -1218,6 +1112,21 @@ class TestConcurrentAccess:
                 assert len(s) == 41
         finally:
             Path(db_path).unlink(missing_ok=True)
+
+    def test_reopen_with_unchanged_metadata_writes_nothing(self):
+        # concurrent readers each wrote the metadata on open and failed with "database is locked"
+        import os
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+        try:
+            with SqliteVectorStore(dimension=4, db_path=db_path) as store:
+                store.add([[1.0, 0.0, 0.0, 0.0]], ["doc"])
+            with SqliteVectorStore.open(db_path) as store:
+                assert store.conn.total_changes == 0
+                assert len(store.search([1.0, 0.0, 0.0, 0.0], k=1)) == 1
+        finally:
+            os.unlink(db_path)
 
     def test_concurrent_reads_separate_instances(self):
         """Test concurrent reads via separate store instances on same file."""

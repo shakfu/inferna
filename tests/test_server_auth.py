@@ -49,6 +49,7 @@ class TestEmbeddedServerAuth:
         server = EmbeddedServer.__new__(EmbeddedServer)
         server._config = ServerConfig(model_path="unused.gguf", model_alias="m", api_key=api_key)
         server._logger = Mock()
+        server._decision = None  # read by /v1/models; __init__ sets it
         return server
 
     def test_missing_key_is_401_before_routing(self):

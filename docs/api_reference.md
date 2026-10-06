@@ -1581,6 +1581,36 @@ server.stop()
 
 ---
 
+### Decision Models
+
+A decision model answers typed questions about a `state` in one forward pass, without generating text. `DecisionModel` takes the request body of llama.cpp's `/v1/systemone` endpoint (TypeSafe System One API) and returns the same answers. Question types: `choice` (pick an option), `score` (expected level of 2 to 10), `noul` (probability of true).
+
+```python
+from inferna.llama.decision import DecisionModel, get_decision_type
+
+dm = DecisionModel("models/Laya-Q8_0.gguf", n_ctx=2048)
+result = dm.answer({
+    "state": "Customer message: I was charged twice for my order last week and nobody has replied.",
+    "questions": {
+        "route": {"type": "choice", "instructions": "Which team should handle this?",
+                  "criteria": {"technical": None, "billing": None, "shipping": None}},
+        "angry": {"type": "noul", "instructions": "Is the customer angry?"},
+        "urgency": {"type": "score", "instructions": "How urgent is this?",
+                    "criteria": ["can wait", "this week", "today", "right now"]},
+    },
+})
+result["answers"]["route"]["choice"]   # "billing"
+result["answers"]["angry"]["noul"]     # 0.79
+```
+
+- Supported types: `laya` (including Julia-1), `lev` and `kev`. `get_decision_type(model)` reads the `<arch>.decision.type` metadata and returns `None` for other models.
+- Not supported yet: `openjev` and `nimble`, which raise `NotImplementedError`. `clef` needs a batch API that is not in `llama.h`; use `LlamaServer` (an upstream `llama-server` process) for it.
+- `make llama-server` builds upstream `llama-server` from the same llama.cpp tree, then checks that `DecisionModel` answers match it for every decision model present in `models/`. `make download-test-models` fetches Laya, lev and Kev-4B.
+- The whole prompt of a question is evaluated in one batch, so it must fit in `n_ctx`. An invalid request raises `ValueError`.
+- `PythonServer` and `EmbeddedServer` serve `POST /v1/systemone` when their model is a supported decision model. They return 400 for an invalid request and 501 for other models, as `llama-server` does. `/v1/models` then reports `architecture.output_modalities: ["decisions"]`.
+
+---
+
 ## Multimodal Support
 
 Vision and audio input through llama.cpp's mtmd library: a model plus its multimodal projector (mmproj).

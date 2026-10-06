@@ -1401,6 +1401,16 @@ NB_MODULE(_sd_native, m) {
                                        weak, strong, inverse);
     });
 
+    // A callback left installed at exit would be released by this module's
+    // static destructors after interpreter shutdown, which segfaults.
+    nb::module_::import_("atexit").attr("register")(nb::cpp_function([](){
+        sd_set_log_callback(nullptr, nullptr);
+        sd_set_progress_callback(nullptr, nullptr);
+        sd_set_preview_callback(nullptr, PREVIEW_NONE, 1, false, false, nullptr);
+        g_log_cb = nb::object();
+        g_progress_cb = nb::object();
+        g_preview_cb = nb::object();
+    }));
     m.def("set_log_callback", [](nb::object cb){
         g_log_cb = cb;
         if (cb.is_none()) sd_set_log_callback(nullptr, nullptr);

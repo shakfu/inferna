@@ -10,9 +10,7 @@
 
 - [ ] **Ctrl-C does not interrupt `inferna.sd` generation** ([#8](https://github.com/shakfu/inferna/issues/8)) -- `generate_image()` is a single blocking C call with no abort path; the LLM cancellation work in `0.2.14` does not transfer (separate compute graph). Fix is gated on upstream PR [leejet/stable-diffusion.cpp#1124](https://github.com/leejet/stable-diffusion.cpp/pull/1124) which adds `sd_cancel_generation(sd_ctx, sd_cancel_mode_t)`. Once that merges and `--sd-version` bumps to a release containing it: extend `stable_diffusion.pxd` with the enum + extern, add `SDContext.cancel(mode)` and `SDContext.install_sigint_handler()` mirroring the LLM helpers (`src/inferna/api.py` `_SigintHandle`), wire into the inferna-desktop sidecar's `asyncio.CancelledError` path. Tests in `tests/test_sd_cancel.py` modeled on `tests/test_cancel.py`. #bugs
 
-- [ ] **Add `BusyGuard` on `SDContext.close`** (or document "do not close while generating"). Currently `_sd_native.cpp:789-791` calls `free_sd_ctx` with no `busy_lock` — concurrent `generate_image` (GIL released) races against the free. `WhisperContextW::close` has the same shape; check both. #hardening-small-bugs-ergonomic-gaps
-
-- [ ] **Make `WhisperContext.close` idempotent.** `_whisper_native.cpp:463-466` calls `s.ensure_valid()` before the null check, so a second close raises `RuntimeError` instead of being a no-op. Drop the `ensure_valid()` and gate cleanup on `s.ctx != nullptr`. #hardening-small-bugs-ergonomic-gaps
+- [ ] **Make `WhisperContext.close` idempotent.** `_whisper_native.cpp:772` calls `s.ensure_valid()` before the null check, so a second close raises `RuntimeError` instead of being a no-op. Drop the `ensure_valid()` and gate cleanup on `s.ctx != nullptr`; keep the busy guard and the open-`WhisperState` check that follow it. #hardening-small-bugs-ergonomic-gaps
 
 - [ ] **Continuous batching in `EmbeddedServer`.** Multi-day. Today's slot decode loop is sequential per request; a real per-slot continuous batching loop (one sampler per slot, ragged decode, true concurrent users) is the largest perf upgrade and the reason vLLM/llama-cpp-server outpace ad-hoc loops. Touches `src/inferna/llama/server/embedded.py`, `python.py:ServerSlot`, the streaming SSE path. Probably needs the `embedded.py` (~950 LOC) split first (see P3). #p1-high-impact
 
@@ -21,6 +19,16 @@
 - [ ] **Expose KV-cache control on `LLM`.** Half-day. Native bindings exist (`memory_seq_rm`, `memory_seq_pos_max`, `memory_seq_cp`, `memory_seq_keep`, `memory_seq_add`); `LLM` only uses them internally for the prompt-cache layer. Public surface (`LLM.kv.drop`, `LLM.kv.copy`, `LLM.kv.pos_max`) unblocks user-built prompt caches, multi-conversation slot reuse, and the next round of agent-style work. #p1-high-impact
 
 ## Medium
+
+- [ ] **File the upstream issue drafts.** 13 drafts in `docs/dev/issues/` (index: `README.md`), each checked against the upstream default branch on 2026-10-06. Search for duplicates first; file `whisper-decode-unchecked-n-tokens` (heap overflow) and `sd-convert-null-tensor-type-rules` (segfault) first. inferna guards every one in its bindings except the imatrix `exit(1)`. #upstream
+
+- [ ] **Untested success paths.** Two bindings have never run against a real model. (1) `ADetailer.detail()`: needs a YOLOv8 detector converted with stable-diffusion.cpp's `scripts/convert_yolov8_to_safetensors.py` (requires `ultralytics` and `torch` once); the test skips without `models/face_yolov8n.safetensors`. (2) The non-causal media-chunk check in `MtmdContext.eval_chunks`: needs gemma3, or gemma4 other than E2B/E4B (E4B is causal on images). #testing
+
+- [ ] **imatrix collection can `exit(1)` the process.** stable-diffusion.cpp calls `exit(1)` when collected activation sizes disagree with stored ones (collecting for SD 1.5 after SDXL in one process, or after loading another model's imatrix); the binding cannot intercept it. Documented in `docs/stable_diffusion.md`; upstream draft `docs/dev/issues/sd-imatrix-exit-in-library.md`. If upstream declines, add `collect_imatrix(model_path, prompts, out_path)` that collects in a subprocess. #hardening-small-bugs-ergonomic-gaps
+
+- [ ] **Unbound mtmd and gguf API.** `tests/test_llama_api_coverage.py` lists each with a reason: 42 mtmd functions in five groups (batch encoding, audio generation, video input, chunk copy/serialization, image-token introspection), 12 gguf functions (raw-pointer access, tensor writing). Each group needs its own API design; audio generation is the largest. #coverage-bindings-worth-filling-in
+
+- [ ] **Unbound llama params fields.** `KNOWN_UNBOUND_FIELDS` in `tests/test_llama_api_coverage.py`: `llama_context_params.ctx_other` (second context for MTP drafting; needs a lifetime design), `llama_model_params.devices`, `llama_model_quantize_params.tt_overrides` / `prune_layers`, and the `cb_eval` graph callbacks. #coverage-bindings-worth-filling-in
 
 - [ ] Performance regression detection -- CI-integrated baseline capture/comparison to catch speed or memory regressions across commits #medium-priority
 
@@ -43,8 +51,6 @@
 
 - [ ] **Return `None` for failed slots in `generate_with_params`.** `_sd_native.cpp:825-844` wraps null-data results as stub `SDImage` objects mixed in with valid ones; only signal is a `warnings.warn`. Returning `None` for invalid slots makes `len(images) != batch` mean what it should. #hardening-small-bugs-ergonomic-gaps
 
-- [ ] **Bind the `whisper_*_with_state` family.** `_whisper_native.cpp:592-598` exposes `WhisperState` as a constructor-only stub. The whole point of `whisper_state` is concurrent decoding from one context; without methods (`whisper_full_with_state`, `whisper_encode_with_state`, etc.) the class is useless. #coverage-bindings-worth-filling-in
-
 - [ ] **Bind whisper callbacks.** `whisper_full_params` exposes `new_segment_callback`, `progress_callback`, `encoder_begin_callback`, `abort_callback` — none are bound. SD module already has the analogous pattern; mirror it. #coverage-bindings-worth-filling-in
 
 - [ ] **Decide composition-vs-subclass for SD wrappers.** `SDImage` uses composition citing nanobind dealloc constraints (`stable_diffusion.py:156-158`); `SDContext`, `SDContextParams`, `SDSampleParams`, `SDImageGenParams` subclass the native types. Either the SDImage rationale applies to all of them or none. Pick one and apply uniformly. #refactor-convention-drift
@@ -59,7 +65,7 @@
 
 - [ ] **Speculative decoding ergonomics.** `_speculative.py` exists and is functional but agents/users have to hand-wire it. Add `LLM.enable_speculative(draft_model_path, n_draft=8)` convenience. Optional sibling-finder helper that resolves a smaller HF variant for a given main model. Print acceptance-rate stats on close so users can tune `n_draft`. #p2-useful-features-half-day-each
 
-- [ ] **Whisper VAD convenience.** `WhisperVadParams` is bound but no Python helper for "transcribe-with-VAD-segmentation". Build `transcribe_with_vad(audio, ...)` that pre-segments via VAD and stitches segment outputs. Sits next to `WhisperStreamer` in `whisper/streaming.py` (or sibling `vad.py`). #p2-useful-features-half-day-each
+- [ ] **Whisper VAD convenience.** `WhisperVadContext` (standalone Silero VAD) is bound but no Python helper for "transcribe-with-VAD-segmentation". Build `transcribe_with_vad(audio, ...)` that pre-segments via VAD and stitches segment outputs. Sits next to `WhisperStreamer` in `whisper/streaming.py` (or sibling `vad.py`). #p2-useful-features-half-day-each
 
 - [ ] **`logprobs` in OpenAI-compat.** Now that `LLM(..., logprobs=True)` populates `Response.logprobs`, surface this through `integrations/openai_compat.py` so `client.chat.completions.create(logprobs=True, top_logprobs=K)` round-trips. #p2-useful-features-half-day-each
 

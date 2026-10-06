@@ -231,6 +231,23 @@ clean:
 reset:
 	@$(SYSTEM_PYTHON) scripts/manage.py clean --reset
 
+# Upstream llama-server, built from the llama.cpp tree inferna compiles, then
+# used as the reference for the decision-model parity tests. Both run only when
+# the binary is (re)built; a llama.cpp upgrade rebuilds $(LIBLAMMA) and so this.
+LLAMA_SERVER := build/llama-server/bin/llama-server
+
+.PHONY: llama-server
+
+llama-server: $(LLAMA_SERVER)
+
+$(LLAMA_SERVER): $(LIBLAMMA)
+	@cmake -S build/llama.cpp -B build/llama-server -DCMAKE_BUILD_TYPE=Release \
+		-DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_TESTS=OFF \
+		-DLLAMA_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=OFF -DLLAMA_CURL=OFF
+	@cmake --build build/llama-server --target llama-server -j
+	@INFERNA_UPSTREAM_SERVER=$@ uv run pytest tests/test_decision.py -k parity -v || { rm -f $@; exit 1; }
+	@touch $@
+
 # =============================================================================
 # Model downloads
 # =============================================================================
@@ -255,20 +272,52 @@ download: $(MODEL)
 download-all: $(MODEL) $(MODEL_RAG) $(MODEL_LLAVA)
 	@echo "All models downloaded"
 
-# Optional models; the tests that need them skip when absent. ControlNet's
-# test also needs models/v1-5-pruned-emaonly.q8_0.gguf.
+# Models the tests use beyond $(MODEL); each test skips when its model is absent.
 HF := https://huggingface.co
+MODEL_WHISPER    := models/ggml-base.en.bin
+MODEL_VAD        := models/ggml-silero-v5.1.2.bin
+MODEL_SDXL       := models/sd_xl_turbo_1.0.q8_0.gguf
+MODEL_FLUX_VAE   := models/ae.safetensors
+MODEL_SD15       := models/v1-5-pruned-emaonly.q8_0.gguf
+MODEL_LAYA       := models/Laya-Q8_0.gguf
+MODEL_LEV        := models/lev-Q8_0.gguf
+MODEL_KEV        := models/Kev-4B-Q8_0.gguf
 MODEL_WHISPER_ML := models/ggml-tiny.bin
 MODEL_CONTROLNET := models/control_v11p_sd15_canny_fp16.safetensors
 MODEL_VLM        := models/gemma-4-E4B-it-Q4_K_M.gguf
 MODEL_VLM_MMPROJ := models/mmproj-gemma-4-E4B-it-BF16.gguf
 MODEL_TTS        := models/Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf
 MODEL_TTS_MMPROJ := models/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf
-TEST_MODELS := $(MODEL_WHISPER_ML) $(MODEL_CONTROLNET) $(MODEL_VLM) $(MODEL_VLM_MMPROJ) $(MODEL_TTS) $(MODEL_TTS_MMPROJ)
+TEST_MODELS := $(MODEL_WHISPER) $(MODEL_VAD) $(MODEL_SDXL) $(MODEL_FLUX_VAE) $(MODEL_SD15) $(MODEL_WHISPER_ML) $(MODEL_CONTROLNET) $(MODEL_VLM) $(MODEL_VLM_MMPROJ) $(MODEL_TTS) $(MODEL_TTS_MMPROJ) \
+	$(MODEL_LAYA) $(MODEL_LEV) $(MODEL_KEV)
 
 # Download to .part first so an interrupted download does not satisfy the target.
 fetch = @mkdir -p models && wget -O $@.part $(1) && mv $@.part $@
 
+$(MODEL_WHISPER):
+	$(call fetch,$(HF)/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin)
+$(MODEL_VAD):
+	$(call fetch,$(HF)/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin)
+$(MODEL_SDXL):
+	$(call fetch,$(HF)/OlegSkutte/sdxl-turbo-GGUF/resolve/main/sd_xl_turbo_1.0.q8_0.gguf)
+$(MODEL_FLUX_VAE):
+	$(call fetch,$(HF)/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors)
+# No published Q8_0 GGUF matches; convert the original checkpoint, then drop it.
+# The source is not a prerequisite: it is deleted afterwards and would re-trigger the download.
+SD15_SRC := models/v1-5-pruned-emaonly.safetensors
+$(MODEL_SD15):
+	@mkdir -p models && [ -f $(SD15_SRC) ] || { wget -O $(SD15_SRC).part \
+		$(HF)/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors \
+		&& mv $(SD15_SRC).part $(SD15_SRC); }
+	@uv run python -c "from inferna.sd import SDType, convert_model; \
+		convert_model('$(SD15_SRC)', output_path='$@.part', output_type=SDType.Q8_0)"
+	@mv $@.part $@ && rm $(SD15_SRC)
+$(MODEL_LAYA):
+	$(call fetch,$(HF)/ggml-org/Laya-GGUF/resolve/main/Laya-Q8_0.gguf)
+$(MODEL_LEV):
+	$(call fetch,$(HF)/ggml-org/lev-GGUF/resolve/main/lev-Q8_0.gguf)
+$(MODEL_KEV):
+	$(call fetch,$(HF)/ggml-org/Kev-4B-GGUF/resolve/main/Kev-4B-Q8_0.gguf)
 $(MODEL_WHISPER_ML):
 	$(call fetch,$(HF)/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin)
 $(MODEL_CONTROLNET):
@@ -284,7 +333,7 @@ $(MODEL_TTS_MMPROJ):
 
 .PHONY: download-test-models
 download-test-models: $(TEST_MODELS)
-	@echo "Optional test models downloaded (about 9.4 GB)"
+	@echo "Test models downloaded (about 27 GB; the SD 1.5 conversion needs 4.3 GB more while it runs)"
 
 # =============================================================================
 # Backend-specific builds

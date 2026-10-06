@@ -63,6 +63,7 @@ import argparse
 import os
 import sys
 import time
+from enum import IntEnum
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple
 
 if TYPE_CHECKING:
@@ -268,7 +269,7 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
     return params
 
 
-def _parse_enum(value: str, enum: type, from_str: Callable[[str], Any], to_str: Callable[[Any], str], label: str) -> Any:
+def _parse_enum(value: str, enum: type[IntEnum], from_str: Callable[[str], Any], to_str: Callable[[Any], str], label: str) -> Any:
     """Accept an enum member name (``DPMPP2M``) or the stable-diffusion.cpp name (``dpm++2m``)."""
     try:
         return enum[value.upper()]

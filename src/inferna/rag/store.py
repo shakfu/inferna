@@ -345,12 +345,20 @@ class SqliteVectorStore(VectorStoreProtocol):
         if "created_at" not in stored:
             meta_to_write["created_at"] = datetime.now(timezone.utc).isoformat()
 
-        for key, value in meta_to_write.items():
-            self.conn.execute(
-                f"INSERT OR REPLACE INTO {meta_table} (key, value) VALUES (?, ?)",
-                (key, value),
-            )
-        self.conn.commit()
+        # A reopen with unchanged metadata writes nothing, so concurrent
+        # readers do not contend for the write lock.
+        changed = {k: v for k, v in meta_to_write.items() if stored.get(k) != v}
+        if changed:
+            # Take the write lock up front: upgrading a deferred transaction
+            # fails at once with SQLITE_BUSY, without waiting for the timeout.
+            if not self.conn.in_transaction:
+                self.conn.execute("BEGIN IMMEDIATE")
+            for key, value in changed.items():
+                self.conn.execute(
+                    f"INSERT OR REPLACE INTO {meta_table} (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+            self.conn.commit()
 
         # Map metric names to sqlite-vector distance names
         distance_map = {

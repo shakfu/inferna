@@ -555,6 +555,22 @@ class TestSDImageGenParams:
 class TestCallbacks:
     """Test callback functions."""
 
+    @pytest.mark.parametrize(
+        "setter",
+        [
+            "set_log_callback(lambda level, text: None)",
+            "set_progress_callback(lambda step, steps, time: None)",
+            "set_preview_callback(lambda step, frames, noisy: None)",
+        ],
+    )
+    def test_callback_left_installed_at_exit(self, setter):
+        # the static holding the callback was released after interpreter shutdown: SIGSEGV
+        import subprocess
+        import sys
+
+        code = f"from inferna.sd import *; {setter}"
+        assert subprocess.run([sys.executable, "-c", code], timeout=120).returncode == 0
+
     def test_set_log_callback(self):
         logs = []
 

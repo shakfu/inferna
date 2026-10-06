@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Generator, Iterable, List, Optional
 
 if TYPE_CHECKING:
     from ...rag.embedder import Embedder
+    from ..decision import DecisionModel
 from dataclasses import dataclass, field
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
@@ -359,6 +360,7 @@ class PythonServer:
         self.model: Optional[LlamaModel] = None
         self.slots: List[ServerSlot] = []
         self.embedder: Optional["Embedder"] = None  # Initialized when config.embedding is True
+        self.decision: Optional["DecisionModel"] = None  # set when the model is a supported decision model
 
         # HTTP server
         self.httpd: Optional[HTTPServer] = None
@@ -376,6 +378,10 @@ class PythonServer:
             # Load model. Backends live in separate shared objects in the published wheels; see Embedder.__init__.
             ggml_backend_load_all()
             self.model = LlamaModel(path_model=self.config.model_path)
+
+            from ..decision import load_decision_model
+
+            self.decision = load_decision_model(self.model, self.config.n_ctx, self.logger)
 
             # Create slots
             self.slots = []
@@ -579,6 +585,13 @@ class PythonServer:
                         self._handle_chat_completions(data)
                     elif path == "/v1/embeddings":
                         self._handle_embeddings(data)
+                    elif path == "/v1/systemone":
+                        from ..decision import systemone_response
+
+                        status, payload = systemone_response(
+                            server_instance.decision, data, server_instance.config.model_alias
+                        )
+                        self._send_json_response(payload, status)
                     else:
                         self._send_error(404, "Not Found")
 
@@ -604,7 +617,7 @@ class PythonServer:
 
             def _handle_models(self) -> None:
                 """Handle /v1/models endpoint."""
-                models_data = {
+                models_data: Dict[str, Any] = {
                     "object": "list",
                     "data": [
                         {
@@ -615,6 +628,9 @@ class PythonServer:
                         }
                     ],
                 }
+                if server_instance.decision is not None:
+                    # clients detect decision models this way, as with llama-server
+                    models_data["data"][0]["architecture"] = {"output_modalities": ["decisions"]}
                 self._send_json_response(models_data)
 
             def _handle_chat_completions(self, data: Dict[str, Any]) -> None:

@@ -24,6 +24,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **Decision models (`inferna.llama.decision`)** answer llama.cpp's `/v1/systemone` requests in-process: typed `choice`, `score` and `noul` questions, each scored in one forward pass. `DecisionModel(path).answer(request)` supports `laya` (also Julia-1), `lev` and `kev`; `PythonServer` and `EmbeddedServer` serve `POST /v1/systemone` for such models. Ported from cyllama. Answers match upstream `llama-server` b11429 on the same machine to 1e-5 for all three types.
+
+  ```python
+  DecisionModel("models/Laya-Q8_0.gguf").answer({"state": "...", "questions": {...}})
+  ```
+
+  `make llama-server` builds upstream `llama-server` and runs the parity tests against it. The pinned reference answers allow 0.05: they depend on the machine's kernels, and an Apple M1 drifts from them by up to 0.039 (laya). cyllama's tighter 2e-3 fails on this machine.
+
 - **`rwt.py` records every `test` run in a SQLite database shared with cyllama's `rwt.py` and chimera's `rat.py`.** The default path is `~/config/runs/db.sqlite`; `$RUNS_DB` overrides it and `--no-record` turns it off. Each run stores target, backend, version, the sha256 of the installed wheel's `RECORD` (it tells two builds of one version apart; an editable install's `RECORD` does not change on rebuild, so the git commit and dirty flag identify those), git commit, host, wall time and exit code. Each case stores its status (pass, fail, timeout or skip) and seconds; a gen case also stores the numbers from its `--stats` table (token counts, prompt and generation time, tokens/s), parsed from a copy of its stderr. Each image an sd case writes stores its size and sha256; the seed is fixed, so an unchanged hash means an identical image. Rows are written as each case ends, so an interrupted run keeps its finished cases. `runs diff` compares two runs case by case, including tokens/s:
 
   ```sh
@@ -45,7 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **`test_llama_api_coverage.py` covers `mtmd.h`, `mtmd-helper.h`, `gguf.h` and struct fields.** It previously checked only `llama.h` functions and enums. Fields of every struct the bindings use, and the enumerators of the three new headers, must also be bound or listed with a reason. Names inside string literals no longer count as bound, which exposed two reimplemented functions, `llama_batch_get_one` and `llama_load_mode_from_str`. Ported from cyllama's `test_api_coverage.py`. 42 mtmd, 12 gguf and 5 llama.h functions remain listed, with 19 struct fields and 7 enumerators.
 
-- **`make download-test-models`** fetches the optional models those tests need, about 9.4 GB: `ggml-tiny.bin`, the SD 1.5 canny ControlNet, Gemma 4 E4B with its mmproj, and Qwen3-TTS with its mmproj. Each file downloads to `.part` first, so an interrupted download does not count as done.
+- **`make download-test-models`** fetches every model the tests use beyond `make download`, about 27 GB: the whisper, VAD, SDXL Turbo, SD 1.5, Flux VAE, ControlNet, Gemma 4 E4B, Qwen3-TTS and decision (Laya, lev, Kev-4B) models. Each file downloads to `.part` first, so an interrupted download does not count as done. No published SD 1.5 Q8_0 GGUF matches the one the tests ran on, so that target downloads the original checkpoint and converts it with `convert_model()`.
 
 - **Success-path tests for bindings that need optional models.** Each skips when its model is absent from `models/`:
   - `test_lang_auto_detect` (context and state) needs a multilingual whisper model (`ggml-tiny.bin`, `ggml-base.bin` or `ggml-small.bin`). It checks that `jfk.wav` is detected as English.
@@ -76,6 +84,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - **sd CLI: `--sampler` and `--scheduler` accept stable-diffusion.cpp names** such as `dpm++2m` and `dpm++2m_sde`, as well as the enum member names.
 
 ### Fixed
+
+- **Concurrent opens of one `SqliteVectorStore` failed with "database is locked".** Every open rewrote all metadata rows, so concurrent readers were concurrent writers, and SQLite fails a deferred transaction's upgrade to a write lock at once instead of waiting. A reopen now writes only changed metadata, under `BEGIN IMMEDIATE`. A 16-thread stress test failed in 2 of 20 trials before and in 0 of 90 after. `tests/test_rag_store.py` also defined `TestConcurrentAccess` twice; the identical first copy is removed.
+
+- **`make typecheck` passes.** `scripts/rwt.py` reused variable names across types in its report code; they are renamed.
+
+- **Exiting with an sd callback installed segfaulted.** `set_log_callback`, `set_progress_callback` and `set_preview_callback` keep the Python callable in a C++ static, which was released after interpreter shutdown. An `atexit` hook now clears them, as the llama module already did.
 
 - **Stale docs and example.** The API reference's multimodal section used three functions that do not exist (`load_mmproj`, `process_image`, `LlavaImageEmbed`); it now documents `MtmdContext`. The sd enum tables listed nonexistent `Prediction` values (`DEFAULT`, `SD3_FLOW`, `FLUX2_FLOW`) and omitted real ones: 39 in `stable_diffusion.md`, 32 in `api_reference.md`. `tests/examples/multimodal_example.py` called `inferna.LlamaModel` and passed a removed `verbosity` argument; it runs again.
 

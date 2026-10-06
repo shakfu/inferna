@@ -84,6 +84,7 @@ _WEBUI_ASSETS: dict[str, bytes] = _load_webui_assets()
 
 if TYPE_CHECKING:
     from ...rag.embedder import Embedder
+    from ..decision import DecisionModel
     from ..llama_cpp import LlamaModel
 
 # Signal handler return type — accept any of the three forms Python's
@@ -178,6 +179,7 @@ class EmbeddedServer:
         self._config = config
         self._model: Optional["LlamaModel"] = None
         self._embedder: Optional["Embedder"] = None
+        self._decision: Optional["DecisionModel"] = None  # set when the model is a supported decision model
         self._slots: List[ServerSlot] = []
         self._free_slots: "queue.Queue[ServerSlot]" = queue.Queue()
         self._logger = logging.getLogger(__name__)
@@ -237,6 +239,10 @@ class EmbeddedServer:
             # Backends live in separate shared objects in the published wheels; see Embedder.__init__.
             ggml_backend_load_all()
             self._model = LlamaModel(path_model=self._config.model_path)
+
+            from ..decision import load_decision_model
+
+            self._decision = load_decision_model(self._model, self._config.n_ctx, self._logger)
             self._slots = [ServerSlot(i, self._model, self._config) for i in range(self._config.n_parallel)]
             self._logger.info(f"Model loaded successfully with {len(self._slots)} slots")
 
@@ -458,6 +464,8 @@ class EmbeddedServer:
                     self._handle_chat_completions(conn, body)
                 elif path == "/v1/embeddings":
                     self._handle_embeddings(conn, body)
+                elif path == "/v1/systemone":
+                    self._handle_systemone(conn, body)
                 else:
                     conn.send_error(404, "Not Found")
             else:
@@ -508,7 +516,7 @@ class EmbeddedServer:
         )
 
     def _handle_models(self, conn: HttpResponse) -> None:
-        models_data = {
+        models_data: Dict[str, Any] = {
             "object": "list",
             "data": [
                 {
@@ -519,7 +527,22 @@ class EmbeddedServer:
                 }
             ],
         }
+        if self._decision is not None:
+            # clients detect decision models this way, as with llama-server
+            models_data["data"][0]["architecture"] = {"output_modalities": ["decisions"]}
         conn.send_json(models_data)
+
+    def _handle_systemone(self, conn: HttpResponse, body: str) -> None:
+        """Handle /v1/systemone (decision models)."""
+        from ..decision import systemone_response
+
+        try:
+            data = json.loads(body) if body.strip() else None
+        except json.JSONDecodeError:
+            conn.send_error(400, "Invalid JSON")
+            return
+        status, payload = systemone_response(self._decision, data, self._config.model_alias)
+        conn.send_json(payload, status)
 
     def _handle_chat_completions(self, conn: HttpResponse, body: str) -> None:
         try:
