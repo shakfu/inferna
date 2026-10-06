@@ -63,7 +63,7 @@ import argparse
 import os
 import sys
 import time
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from .stable_diffusion import (
@@ -268,29 +268,40 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
     return params
 
 
+def _parse_enum(value: str, enum: type, from_str: Callable[[str], Any], to_str: Callable[[Any], str], label: str) -> Any:
+    """Accept an enum member name (``DPMPP2M``) or the stable-diffusion.cpp name (``dpm++2m``)."""
+    try:
+        return enum[value.upper()]
+    except KeyError:
+        pass
+    try:
+        return from_str(value)
+    except ValueError:
+        print(f"Unknown {label}: {value}", file=sys.stderr)
+        print(f"Available: {[to_str(m) for m in enum if m.name != 'COUNT']}")
+        sys.exit(1)
+
+
 def parse_sampler_scheduler(
     args: argparse.Namespace,
 ) -> Tuple[Optional["SampleMethod"], Optional["Scheduler"]]:
     """Parse sampler and scheduler from args."""
-    from .stable_diffusion import SampleMethod, Scheduler
+    from .stable_diffusion import (
+        SampleMethod,
+        Scheduler,
+        sample_method_from_str,
+        sample_method_name,
+        scheduler_from_str,
+        scheduler_name,
+    )
 
     sample_method = None
-    if hasattr(args, "sampler") and args.sampler:
-        try:
-            sample_method = SampleMethod[args.sampler.upper()]
-        except KeyError:
-            print(f"Unknown sampler: {args.sampler}", file=sys.stderr)
-            print(f"Available: {[m.name.lower() for m in SampleMethod]}")
-            sys.exit(1)
+    if getattr(args, "sampler", None):
+        sample_method = _parse_enum(args.sampler, SampleMethod, sample_method_from_str, sample_method_name, "sampler")
 
     scheduler = None
-    if hasattr(args, "scheduler") and args.scheduler:
-        try:
-            scheduler = Scheduler[args.scheduler.upper()]
-        except KeyError:
-            print(f"Unknown scheduler: {args.scheduler}", file=sys.stderr)
-            print(f"Available: {[s.name.lower() for s in Scheduler]}")
-            sys.exit(1)
+    if getattr(args, "scheduler", None):
+        scheduler = _parse_enum(args.scheduler, Scheduler, scheduler_from_str, scheduler_name, "scheduler")
 
     return sample_method, scheduler
 
@@ -883,8 +894,8 @@ def add_common_gen_args(parser: argparse.ArgumentParser) -> None:
 
 def add_common_sampler_args(parser: argparse.ArgumentParser) -> None:
     """Add sampler/scheduler arguments."""
-    parser.add_argument("--sampler", help="Sampling method (euler, euler_a, heun, dpm2, etc.)")
-    parser.add_argument("--scheduler", help="Scheduler (discrete, karras, exponential, ays, etc.)")
+    parser.add_argument("--sampler", help="Sampling method (euler, euler_a, dpm++2m, lms, etc.)")
+    parser.add_argument("--scheduler", help="Scheduler (discrete, karras, exponential, beta, etc.)")
     parser.add_argument(
         "--eta", type=float, default=float("inf"), help="Eta for samplers (default: auto-resolve per method)"
     )

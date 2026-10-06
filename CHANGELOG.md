@@ -37,7 +37,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 - **`rwt.py install --version X` / `run --version X`** installs release X of the backend's distribution (`--cuda --version 0.5.1` -> `inferna-cuda12==0.5.1`). It records a baseline for the version comparison; `--wheel` could pin a version too, but needs the backend's distribution name spelled out, which differs per backend.
 
+- **`LlamaBatchExt` and `LlamaContext.process()` wrap llama.h's extended batch API (b11429).** Also added: `LlamaContext.get_causal_attn()` and `LLAMA_PROCESS_TYPE_ENCODE`/`DECODE`. `add_*` raise on error instead of returning a negative index, so a bad index never reaches the setters. `add_token` checks the id before calling llama.cpp, which appends the entry before it rejects the id; a rejected `add_embd` leaves the batch unusable until `clear()`, for the same reason. `n_pos_per_embd` (4 under M-RoPE, from `llama_model_rope_type()`) is exposed, and `set_pos` accepts 1 or `n_pos_per_embd` positions.
+
+- **Drift tests for whisper.h and stable-diffusion.h.** `test_whisper_api_coverage.py` and `test_sd_api_coverage.py` fail when a header adds a function or enum value that the bindings neither wrap nor list in `KNOWN_UNWRAPPED` with a reason. They cover the same checks as `test_llama_api_coverage.py`. 16 whisper and 4 sd functions remain listed.
+
+- **`MtmdContext.media_marker`, `MtmdContext.model_can_chat(llama_ctx)`, `gguf_type_name()` and the `GGUF_TYPE_*` constants**, which name the value types `GGUFContext.get_kv_type()` returns. `model_can_chat` is false for a TTS-only model, one that generates audio and has no chat template (Qwen3-TTS).
+
+- **`test_llama_api_coverage.py` covers `mtmd.h`, `mtmd-helper.h`, `gguf.h` and struct fields.** It previously checked only `llama.h` functions and enums. Fields of every struct the bindings use, and the enumerators of the three new headers, must also be bound or listed with a reason. Names inside string literals no longer count as bound, which exposed two reimplemented functions, `llama_batch_get_one` and `llama_load_mode_from_str`. Ported from cyllama's `test_api_coverage.py`. 42 mtmd, 12 gguf and 5 llama.h functions remain listed, with 19 struct fields and 7 enumerators.
+
+- **`make download-test-models`** fetches the optional models those tests need, about 9.4 GB: `ggml-tiny.bin`, the SD 1.5 canny ControlNet, Gemma 4 E4B with its mmproj, and Qwen3-TTS with its mmproj. Each file downloads to `.part` first, so an interrupted download does not count as done.
+
+- **Success-path tests for bindings that need optional models.** Each skips when its model is absent from `models/`:
+  - `test_lang_auto_detect` (context and state) needs a multilingual whisper model (`ggml-tiny.bin`, `ggml-base.bin` or `ggml-small.bin`). It checks that `jfk.wav` is detected as English.
+  - `TestRuntimeControlNet::test_load_generate_unload` needs `control_v11p_sd15_canny*` and `v1-5-pruned-emaonly.q8_0.gguf`. It checks that a same-seed generation changes with the ControlNet loaded (mean 41/255) and returns to the original after unloading.
+  - `TestADetailer::test_detail` needs `face_yolov8n.safetensors`, converted with stable-diffusion.cpp's `scripts/convert_yolov8_to_safetensors.py`.
+
+- **sd: missing enum values and the name/parse functions.** Added `SampleMethod.DPMPP2M_SDE`/`DPMPP2M_SDE_BT`/`LMS`, `Scheduler.FLUX`/`FLUX2`/`BETA` and `VaeFormat.WAN`, which could not be selected before. Each enum gets `<enum>_name()` and `<enum>_from_str()`; `version()`, `commit()`, `list_devices()` and `SDContext.model_version` are also new. The `*_name` functions, including the existing `type_name`, `sample_method_name` and `scheduler_name`, now raise `ValueError` outside `[0, COUNT)` instead of returning `"NONE"`: sd.cpp checks only the upper bound, so a negative value indexed before its name table.
+
+- **whisper: token times, speaker turns, VAD segments and timings.** `WhisperContext` gains `full_get_token_t0/t1`, `full_get_segment_speaker_turn_next`, `full_n_vad_segments`, `full_get_vad_segment_t0/t1` and `get_timings()`.
+
+- **`WhisperState` runs transcriptions.** It gains `full()`, `close()`, `is_valid`, `ctx` and the same `full_*` result getters as `WhisperContext`. Each state keeps its own results, so separate states can transcribe concurrently on one loaded model: two states on `jfk.wav` take 0.33 s together against 0.46 s in sequence (base.en, M1). Also added: `WhisperContext.full_parallel()`. `WhisperContext.close()` now raises while any of its states is open, because each state calls into the context's model.
+
+- **whisper: the step-by-step pipeline.** `WhisperContext` and `WhisperState` gain `pcm_to_mel()`, `set_mel()`, `n_len()`, `decode()`, `get_logits()` and `lang_auto_detect()`; `WhisperState` also gains `encode()`. `get_logits()` returns only the last token's row, because whisper.cpp computes no other row and leaves stale data there. The binding validates what whisper.cpp does not check:
+  - `decode()`: `n_past + len(tokens) <= n_text_ctx`, since the batch and positional embedding have that many entries.
+  - `decode()`: token ids, since out-of-range ids index past the embedding.
+  - `encode()`: `offset >= 0`, since a negative offset read before the mel buffer. This also fixes the existing `WhisperContext.encode`.
+
+- **whisper: `WhisperVadContext`, standalone Silero VAD.** It runs `detect_speech()` (with `reset=False` for streaming), `probs()`, `segments_from_probs()` and `segments_from_samples()` without a whisper model; on `jfk.wav` its segments match those `full()` reports with `params.vad = True`. `WhisperVadContextParams` sets threads and GPU. A whisper model passed as the VAD model raises `ValueError`: the VAD loader reads whisper's `n_vocab` as its model-type length, then allocates from garbage layer counts.
+
+- **sd: runtime ControlNet, imatrix and component conversion.** `SDContext` gains `load_control_net()`, `unload_control_net()` and `has_control_net`. `convert_model()` takes `clip_l_path`, `clip_g_path`, `t5xxl_path`, `diffusion_model_path` and `n_threads`, and `input_path` is now optional. `enable_imatrix_collection()`, `disable_imatrix_collection()`, `save_imatrix()` and `load_imatrix()` drive the importance matrix that quantizing conversions use. `load_imatrix()` validates the file first, because sd.cpp trusts its lengths: a name length of -1 writes before its buffer. The imatrix is process-wide, and sd.cpp calls `exit(1)` when collected activation sizes disagree with stored ones, e.g. collecting for SD 1.5 after SDXL.
+
+- **sd: `ADetailer`.** It runs a YOLOv8 detector and re-inpaints each detected region with an `SDContext`: `ADetailer(path).detail(ctx, image, params, prompt=..., extra_args={...})`. `detail()` holds both the detector's and the context's busy lock. `sd_set_backend_eval_callback` stays unwrapped: it fires per graph node on ggml worker threads with raw tensors, and imatrix collection, its practical use, is wrapped.
+
+### Changed
+
+- **llama.cpp `b11146` -> `b11429`.** The new extended batch API (`llama_batch_ext_*`, `llama_process`), `llama_get_causal_attn` and `llama_process_type` are bound; see Added. Session files are now `LLAMA_SESSION_VERSION` 11 (was 10) and sequence state files `LLAMA_STATE_SEQ_VERSION` 4 (was 3); files saved before fail to load with `RuntimeError`. New params fields are bound: `LlamaModelParams.load_mtp` and `LlamaContextParams.n_outputs_max` / `n_outputs_max_per_seq`. `ctx_other`, a pointer to a second context for MTP drafting, is not.
+
+- **sd CLI: `--sampler` and `--scheduler` accept stable-diffusion.cpp names** such as `dpm++2m` and `dpm++2m_sde`, as well as the enum member names.
+
 ### Fixed
+
+- **Stale docs and example.** The API reference's multimodal section used three functions that do not exist (`load_mmproj`, `process_image`, `LlavaImageEmbed`); it now documents `MtmdContext`. The sd enum tables listed nonexistent `Prediction` values (`DEFAULT`, `SD3_FLOW`, `FLUX2_FLOW`) and omitted real ones: 39 in `stable_diffusion.md`, 32 in `api_reference.md`. `tests/examples/multimodal_example.py` called `inferna.LlamaModel` and passed a removed `verbosity` argument; it runs again.
+
+- **Images for non-causal multimodal models were decoded in 32-token pieces.** For gemma3, and gemma4 apart from E2B/E4B, image tokens must attend to each other in one ubatch. `MtmdContext.eval_chunks` defaulted to `n_batch=32`, so early pieces could not see later ones. `n_batch` now defaults to the context's `n_batch`. A non-causal media chunk larger than `n_batch` or `n_ubatch` raises `ValueError`, because llama.cpp aborts the process on one. Ported from cyllama.
+
+- **`close()` could free a model in use on another thread.** `WhisperContext.close()`, `WhisperState.close()` and `SDContext.close()` did not take the busy lock that `full()` and `generate()` hold. They now raise `RuntimeError` while it is held.
+
+- **whisper result reads raced `full()` on another thread.** `full()` clears and rebuilds the results with the GIL released, so a getter on another thread could read freed memory. The `full_*` getters, `n_len()` and `get_logits()` now take the context's or state's busy lock and raise `RuntimeError` while it is held.
+
+- **`convert_model()` segfaulted without `tensor_type_rules`.** The binding passed a null C string, which sd.cpp turns into a `std::string`. It now passes an empty string.
+
+- **whisper segment and token getters raise `IndexError` on a bad index.** whisper.cpp indexes its result vectors unchecked, so `full_get_segment_text(n_segments)` read out of bounds.
+
+- **`test_whisper.py` transcription tests ran.** `sample_audio_path` pointed at `samples/jfk.wav` instead of `tests/samples/jfk.wav`, so every test using it was skipped.
+
+- **`llama_load_mode_from_str` raises `ValueError` on an unknown name.** Since b11429, llama.cpp aborts the process on one.
 
 - **TTS vocoder output could contain values near 1e18.** `irfft` took its transform length from its input. A WavTokenizer row is 1282 floats, so it ran a 1282-point transform that read 1284 floats, two past the end of the buffer. Whatever lay there entered every frame: usually a denormal, once about 1e18, which failed `test_tts_vocoder.py` only on some heap layouts. Frames were also 1282 samples instead of `n_fft = 1280`. `irfft(inp_cplx, n)` now takes the length explicitly and raises `ValueError` on an input shorter than the `2 * (n // 2 + 1)` floats it reads. Direct callers of `irfft` must pass `n`.
 

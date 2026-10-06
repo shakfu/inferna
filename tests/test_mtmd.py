@@ -549,5 +549,72 @@ class TestMtmdIntegration:
             ctx.tokenize(text, [bitmap])
 
 
+
+VLM_PATH = Path("models/gemma-4-E4B-it-Q4_K_M.gguf")
+VLM_MMPROJ = Path("models/mmproj-gemma-4-E4B-it-BF16.gguf")
+DICE = Path(__file__).parent / "media" / "dice.jpg"
+
+
+@pytest.mark.skipif(not (VLM_PATH.exists() and VLM_MMPROJ.exists()), reason=f"needs {VLM_PATH} and {VLM_MMPROJ}")
+def test_eval_chunks_defaults_to_context_n_batch():
+    # the old default of 32 split image chunks across decode calls
+    import gc
+
+    import inferna.llama.llama_cpp as cy
+    from inferna.llama.mtmd import MtmdBitmap, MtmdContext, MtmdContextParams, get_default_media_marker
+
+    model = cy.LlamaModel(str(VLM_PATH), verbose=False)
+    params = cy.LlamaContextParams()
+    params.n_ctx = params.n_batch = params.n_ubatch = 2048
+    ctx = cy.LlamaContext(model, params, verbose=False)
+    mtmd = MtmdContext(str(VLM_MMPROJ), model, MtmdContextParams(n_threads=4))
+    chunks = mtmd.tokenize(f"Describe: {get_default_media_marker()}", [MtmdBitmap.from_file(mtmd, str(DICE))])
+    with pytest.raises(ValueError, match="n_batch must be positive"):
+        mtmd.eval_chunks(ctx, chunks, n_batch=0)
+    assert mtmd.eval_chunks(ctx, chunks) == chunks.total_tokens
+    del chunks, mtmd, ctx, model
+    gc.collect()
+
+
+@pytest.mark.skipif(not (VLM_PATH.exists() and VLM_MMPROJ.exists()), reason=f"needs {VLM_PATH} and {VLM_MMPROJ}")
+def test_media_marker_and_model_can_chat():
+    import gc
+
+    import inferna.llama.llama_cpp as cy
+    from inferna.llama.mtmd import MtmdContext, MtmdContextParams, get_default_media_marker
+
+    model = cy.LlamaModel(str(VLM_PATH), verbose=False)
+    ctx = cy.LlamaContext(model, cy.LlamaContextParams(), verbose=False)
+    default = MtmdContext(str(VLM_MMPROJ), model, MtmdContextParams(n_threads=4))
+    assert default.media_marker == get_default_media_marker()
+    assert default.model_can_chat(ctx)  # has a chat template and no audio generator
+    custom = MtmdContext(str(VLM_MMPROJ), model, MtmdContextParams(n_threads=4, media_marker="<pic>"))
+    assert custom.media_marker == "<pic>"
+    del custom, default, ctx, model
+    gc.collect()
+
+
+
+
+TTS_PATH = Path("models/Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf")
+TTS_MMPROJ = Path("models/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf")
+
+
+@pytest.mark.skipif(not (TTS_PATH.exists() and TTS_MMPROJ.exists()), reason=f"needs {TTS_PATH} and {TTS_MMPROJ}")
+def test_tts_only_model_cannot_chat():
+    # an audio generator with no chat template
+    import gc
+
+    import inferna.llama.llama_cpp as cy
+    from inferna.llama.mtmd import MtmdContext, MtmdContextParams
+
+    model = cy.LlamaModel(str(TTS_PATH), verbose=False)
+    ctx = cy.LlamaContext(model, cy.LlamaContextParams(), verbose=False)
+    mtmd = MtmdContext(str(TTS_MMPROJ), model, MtmdContextParams(n_threads=4))
+    assert not mtmd.model_can_chat(ctx)
+    del mtmd, ctx, model
+    gc.collect()
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

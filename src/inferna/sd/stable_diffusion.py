@@ -86,6 +86,9 @@ class SampleMethod(IntEnum):
     EULER_CFG_PP = _E["EULER_CFG_PP_SAMPLE_METHOD"]
     EULER_A_CFG_PP = _E["EULER_A_CFG_PP_SAMPLE_METHOD"]
     EULER_GE = _E["EULER_GE_SAMPLE_METHOD"]
+    DPMPP2M_SDE = _E["DPMPP2M_SDE_SAMPLE_METHOD"]
+    DPMPP2M_SDE_BT = _E["DPMPP2M_SDE_BT_SAMPLE_METHOD"]
+    LMS = _E["LMS_SAMPLE_METHOD"]
     COUNT = _E["SAMPLE_METHOD_COUNT"]
 
 
@@ -103,6 +106,9 @@ class Scheduler(IntEnum):
     BONG_TANGENT = _E["BONG_TANGENT_SCHEDULER"]
     LTX2 = _E["LTX2_SCHEDULER"]
     LOGIT_NORMAL = _E["LOGIT_NORMAL_SCHEDULER"]
+    FLUX2 = _E["FLUX2_SCHEDULER"]
+    FLUX = _E["FLUX_SCHEDULER"]
+    BETA = _E["BETA_SCHEDULER"]
     LLADA_IMAGE = _E["LLADA_IMAGE_SCHEDULER"]
     COUNT = _E["SCHEDULER_COUNT"]
 
@@ -165,6 +171,7 @@ class VaeFormat(IntEnum):
     FLUX = _E["SD_VAE_FORMAT_FLUX"]
     SD3 = _E["SD_VAE_FORMAT_SD3"]
     FLUX2 = _E["SD_VAE_FORMAT_FLUX2"]
+    WAN = _E["SD_VAE_FORMAT_WAN"]
     COUNT = _E["SD_VAE_FORMAT_COUNT"]
 
 
@@ -712,6 +719,11 @@ class SDContext(_n.SDContext):
         # working-set pressure across consecutive contexts.
         self.close()
 
+    @property
+    def model_version(self) -> str:
+        """Detected model family, e.g. 'SD 1.x' or 'Flux'."""
+        return str(super().get_model_version_name())
+
     def get_default_sample_method(self) -> SampleMethod:
         return SampleMethod(super().get_default_sample_method())
 
@@ -875,6 +887,67 @@ class Upscaler:
         return None
 
 
+def _ad_args(extra: Optional[Union[str, dict[str, Any]]]) -> Optional[str]:
+    """``{"confidence": 0.3, "merge_masks": True}`` -> ``"confidence=0.3,merge_masks=true"``."""
+    if not isinstance(extra, dict):
+        return extra
+    return ",".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in extra.items())
+
+
+class ADetailer:
+    """YOLOv8 detector that re-inpaints each detected region (e.g. faces) with an SDContext.
+
+    ``extra_args`` tunes detection and inpainting, as a dict or a
+    ``"key=value,..."`` string: ``confidence``, ``max_detections``,
+    ``mask_blur``, ``inpaint_padding``, ``denoising_strength``, ``steps``,
+    ``sort_by``, ... (see stable-diffusion.cpp's ``--extra-ad-args``).
+    ``prompt`` defaults to ``params.prompt``; ``[SEP]`` separates per-region
+    prompts, ``[PROMPT]`` inserts ``params.prompt`` and ``[SKIP]`` skips a region.
+    """
+
+    def __init__(
+        self,
+        detector_path: str,
+        n_threads: int = -1,
+        backend: Optional[str] = None,
+        params_backend: Optional[str] = None,
+    ):
+        self._native = _n.ADetailer(detector_path, n_threads, backend, params_backend)
+
+    @property
+    def is_valid(self) -> bool:
+        return bool(self._native.is_valid)
+
+    def close(self) -> None:
+        self._native.close()
+
+    def detail(
+        self,
+        ctx: "SDContext",
+        image: SDImage,
+        params: Optional[SDImageGenParams] = None,
+        *,
+        prompt: Optional[str] = None,
+        negative_prompt: Optional[str] = None,
+        extra_args: Optional[Union[str, dict[str, Any]]] = None,
+    ) -> SDImage:
+        """Return ``image`` with every detected region re-inpainted by ``ctx``."""
+        params = params if params is not None else SDImageGenParams()
+        args = _ad_args(extra_args)
+        return SDImage(self._native.detail(ctx, image._native, params, prompt, negative_prompt, args))
+
+    def __enter__(self) -> "ADetailer":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[Any],
+    ) -> None:
+        self.close()
+
+
 def get_num_cores() -> int:
     return _n.get_num_cores()
 
@@ -895,6 +968,74 @@ def scheduler_name(s: Scheduler) -> str:
     return _n.scheduler_name(int(s))
 
 
+def rng_type_name(t: RngType) -> str:
+    return _n.rng_type_name(int(t))
+
+
+def prediction_name(p: Prediction) -> str:
+    return _n.prediction_name(int(p))
+
+
+def preview_name(p: PreviewMode) -> str:
+    return _n.preview_name(int(p))
+
+
+def lora_apply_mode_name(m: LoraApplyMode) -> str:
+    return _n.lora_apply_mode_name(int(m))
+
+
+def hires_upscaler_name(u: HiresUpscaler) -> str:
+    return _n.hires_upscaler_name(int(u))
+
+
+# Inverse of the *_name functions; raise ValueError on an unknown name.
+def type_from_str(name: str) -> SDType:
+    return SDType(_n.type_from_str(name))
+
+
+def rng_type_from_str(name: str) -> RngType:
+    return RngType(_n.rng_type_from_str(name))
+
+
+def sample_method_from_str(name: str) -> SampleMethod:
+    return SampleMethod(_n.sample_method_from_str(name))
+
+
+def scheduler_from_str(name: str) -> Scheduler:
+    return Scheduler(_n.scheduler_from_str(name))
+
+
+def prediction_from_str(name: str) -> Prediction:
+    return Prediction(_n.prediction_from_str(name))
+
+
+def preview_from_str(name: str) -> PreviewMode:
+    return PreviewMode(_n.preview_from_str(name))
+
+
+def lora_apply_mode_from_str(name: str) -> LoraApplyMode:
+    return LoraApplyMode(_n.lora_apply_mode_from_str(name))
+
+
+def hires_upscaler_from_str(name: str) -> HiresUpscaler:
+    return HiresUpscaler(_n.hires_upscaler_from_str(name))
+
+
+def version() -> str:
+    """stable-diffusion.cpp version string of the linked library."""
+    return _n.version()
+
+
+def commit() -> str:
+    """stable-diffusion.cpp build commit of the linked library."""
+    return _n.commit()
+
+
+def list_devices() -> list[tuple[str, str]]:
+    """(name, description) of each ggml backend device."""
+    return [tuple(line.split("\t", 1)) for line in _n.list_devices().splitlines()]
+
+
 def ggml_backend_load_all() -> None:
     _n.ggml_backend_load_all()
 
@@ -911,26 +1052,87 @@ def canny_preprocess(
 
 
 def convert_model(
-    input_path: str,
-    output_path: str,
+    input_path: Optional[str] = None,
+    output_path: str = "",
     output_type: SDType = SDType.F16,
     vae_path: Optional[str] = None,
     tensor_type_rules: Optional[str] = None,
     convert_name: bool = False,
+    *,
+    clip_l_path: Optional[str] = None,
+    clip_g_path: Optional[str] = None,
+    t5xxl_path: Optional[str] = None,
+    diffusion_model_path: Optional[str] = None,
+    n_threads: int = 0,
 ) -> bool:
-    if not os.path.exists(input_path):
-        raise FileNotFoundError(f"Input model not found: {input_path}")
+    """Convert a model, or separate component files merged into one, to GGUF.
+
+    Quantized output uses the imatrix loaded with ``load_imatrix()`` or
+    collected since ``enable_imatrix_collection()``. ``n_threads=0`` lets
+    stable-diffusion.cpp choose.
+    """
+    from ..utils.validation import validate_model_file
+
+    paths = {
+        "model": input_path,
+        "CLIP-L": clip_l_path,
+        "CLIP-G": clip_g_path,
+        "T5-XXL": t5xxl_path,
+        "diffusion model": diffusion_model_path,
+        "VAE": vae_path,
+    }
+    if all(path is None for path in paths.values()):
+        raise ValueError("convert_model needs at least one input path")
+    if not output_path:
+        raise ValueError("convert_model needs output_path")
+    for kind, path in paths.items():
+        if path is not None:
+            validate_model_file(path, kind=kind)
     success = _n.convert_native(
         input_path,
+        clip_l_path,
+        clip_g_path,
+        t5xxl_path,
+        diffusion_model_path,
+        vae_path,
         output_path,
         int(output_type),
-        vae_path,
         tensor_type_rules,
         convert_name,
+        n_threads,
     )
     if not success:
-        raise RuntimeError(f"Model conversion failed: {input_path} -> {output_path}")
+        given = ", ".join(path for path in paths.values() if path)
+        raise RuntimeError(f"Model conversion failed: {given} -> {output_path}")
     return True
+
+
+# ---- imatrix ------------------------------------------------------------------
+# One process-wide importance matrix. stable-diffusion.cpp calls exit(1) when
+# collected activations disagree in size with stored ones, so collect for one
+# model per process and do not mix in an imatrix from another model.
+
+
+def enable_imatrix_collection() -> None:
+    """Accumulate activation statistics over every following generation."""
+    _n.enable_imatrix_collection()
+
+
+def disable_imatrix_collection() -> None:
+    _n.disable_imatrix_collection()
+
+
+def load_imatrix(path: str) -> None:
+    """Add the statistics in ``path`` to the process-wide imatrix."""
+    _n.load_imatrix(path)
+
+
+def save_imatrix(path: str) -> None:
+    """Write the process-wide imatrix; entries with incomplete data are skipped."""
+    # sd.cpp ignores write errors; opening first surfaces them
+    with open(path, "ab"):
+        pass
+    _n.save_imatrix(path)
 
 
 # ---- callbacks --------------------------------------------------------------

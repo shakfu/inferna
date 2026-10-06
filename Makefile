@@ -255,6 +255,37 @@ download: $(MODEL)
 download-all: $(MODEL) $(MODEL_RAG) $(MODEL_LLAVA)
 	@echo "All models downloaded"
 
+# Optional models; the tests that need them skip when absent. ControlNet's
+# test also needs models/v1-5-pruned-emaonly.q8_0.gguf.
+HF := https://huggingface.co
+MODEL_WHISPER_ML := models/ggml-tiny.bin
+MODEL_CONTROLNET := models/control_v11p_sd15_canny_fp16.safetensors
+MODEL_VLM        := models/gemma-4-E4B-it-Q4_K_M.gguf
+MODEL_VLM_MMPROJ := models/mmproj-gemma-4-E4B-it-BF16.gguf
+MODEL_TTS        := models/Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf
+MODEL_TTS_MMPROJ := models/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf
+TEST_MODELS := $(MODEL_WHISPER_ML) $(MODEL_CONTROLNET) $(MODEL_VLM) $(MODEL_VLM_MMPROJ) $(MODEL_TTS) $(MODEL_TTS_MMPROJ)
+
+# Download to .part first so an interrupted download does not satisfy the target.
+fetch = @mkdir -p models && wget -O $@.part $(1) && mv $@.part $@
+
+$(MODEL_WHISPER_ML):
+	$(call fetch,$(HF)/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin)
+$(MODEL_CONTROLNET):
+	$(call fetch,$(HF)/comfyanonymous/ControlNet-v1-1_fp16_safetensors/resolve/main/control_v11p_sd15_canny_fp16.safetensors)
+$(MODEL_VLM):
+	$(call fetch,$(HF)/lmstudio-community/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf)
+$(MODEL_VLM_MMPROJ):
+	$(call fetch,$(HF)/lmstudio-community/gemma-4-E4B-it-GGUF/resolve/main/mmproj-gemma-4-E4B-it-BF16.gguf)
+$(MODEL_TTS):
+	$(call fetch,$(HF)/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf)
+$(MODEL_TTS_MMPROJ):
+	$(call fetch,$(HF)/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf)
+
+.PHONY: download-test-models
+download-test-models: $(TEST_MODELS)
+	@echo "Optional test models downloaded (about 9.4 GB)"
+
 # =============================================================================
 # Backend-specific builds
 # =============================================================================

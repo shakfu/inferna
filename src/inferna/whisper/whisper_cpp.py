@@ -16,6 +16,8 @@ WhisperFullParams = _N.WhisperFullParams
 WhisperVadParams = _N.WhisperVadParams
 WhisperTokenData = _N.WhisperTokenData
 WhisperState = _N.WhisperState
+WhisperVadContext = _N.WhisperVadContext
+WhisperVadContextParams = _N.WhisperVadContextParams
 
 # Constant containers
 WHISPER = _N.WHISPER

@@ -11,6 +11,7 @@
 #include "llama.h"
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "gguf.h"
 
 namespace nb = nanobind;
 
@@ -125,6 +126,22 @@ void register_enums(nb::module_& m) {
     EXPORT(GGML_BACKEND_DEVICE_TYPE_ACCEL);
     EXPORT(GGML_BACKEND_DEVICE_TYPE_META);
 
+    // -------- gguf value type (GGUFContext.get_kv_type / get_arr_type) --------
+    EXPORT(GGUF_TYPE_UINT8);
+    EXPORT(GGUF_TYPE_INT8);
+    EXPORT(GGUF_TYPE_UINT16);
+    EXPORT(GGUF_TYPE_INT16);
+    EXPORT(GGUF_TYPE_UINT32);
+    EXPORT(GGUF_TYPE_INT32);
+    EXPORT(GGUF_TYPE_FLOAT32);
+    EXPORT(GGUF_TYPE_BOOL);
+    EXPORT(GGUF_TYPE_STRING);
+    EXPORT(GGUF_TYPE_ARRAY);
+    EXPORT(GGUF_TYPE_UINT64);
+    EXPORT(GGUF_TYPE_INT64);
+    EXPORT(GGUF_TYPE_FLOAT64);
+    EXPORT(GGUF_TYPE_COUNT);
+
     // -------- llama vocab type --------
     EXPORT(LLAMA_VOCAB_TYPE_NONE);
     EXPORT(LLAMA_VOCAB_TYPE_SPM);
@@ -224,6 +241,10 @@ void register_enums(nb::module_& m) {
     EXPORT(LLAMA_ATTENTION_TYPE_UNSPECIFIED);
     EXPORT(LLAMA_ATTENTION_TYPE_CAUSAL);
     EXPORT(LLAMA_ATTENTION_TYPE_NON_CAUSAL);
+
+    // -------- llama process --------
+    EXPORT(LLAMA_PROCESS_TYPE_ENCODE);
+    EXPORT(LLAMA_PROCESS_TYPE_DECODE);
 
     // -------- llama flash attn --------
     EXPORT(LLAMA_FLASH_ATTN_TYPE_AUTO);

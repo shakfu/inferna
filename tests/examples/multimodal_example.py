@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 try:
-    import inferna
+    import inferna.llama.llama_cpp as cy
     from inferna.llama.mtmd import (
         MultimodalProcessor,
         VisionLanguageChat,
@@ -38,7 +38,7 @@ def vision_example(model_path: str, mmproj_path: str, image_path: str):
     try:
         # Load model
         print(f"Loading model: {model_path}")
-        model = inferna.LlamaModel(model_path)
+        model = cy.LlamaModel(model_path)
 
         # Create multimodal processor
         print(f"Loading multimodal projector: {mmproj_path}")
@@ -82,7 +82,7 @@ def analyzer_example(model_path: str, mmproj_path: str, image_path: str):
 
     try:
         # Load model
-        model = inferna.LlamaModel(model_path)
+        model = cy.LlamaModel(model_path)
 
         # Create image analyzer
         analyzer = ImageAnalyzer(mmproj_path, model)
@@ -113,8 +113,8 @@ def chat_example(model_path: str, mmproj_path: str, image_path: str):
 
     try:
         # Load model and context
-        model = inferna.LlamaModel(model_path)
-        context = inferna.LlamaContext(model)
+        model = cy.LlamaModel(model_path)
+        context = cy.LlamaContext(model)
 
         # Create chat interface
         chat = VisionLanguageChat(mmproj_path, model, context)
@@ -145,7 +145,7 @@ def audio_example(model_path: str, mmproj_path: str, audio_path: str):
 
     try:
         # Load model
-        model = inferna.LlamaModel(model_path)
+        model = cy.LlamaModel(model_path)
 
         # Create multimodal processor
         processor = MultimodalProcessor(mmproj_path, model)
@@ -184,10 +184,10 @@ def low_level_example(model_path: str, mmproj_path: str, image_path: str):
         )
 
         # Load model
-        model = inferna.LlamaModel(model_path)
+        model = cy.LlamaModel(model_path)
 
         # Create context with custom parameters
-        params = MtmdContextParams(use_gpu=True, n_threads=4, verbosity=2)
+        params = MtmdContextParams(use_gpu=True, n_threads=4)
         mtmd_ctx = MtmdContext(mmproj_path, model, params)
 
         print("Context capabilities:")

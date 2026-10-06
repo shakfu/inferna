@@ -353,6 +353,31 @@ struct SDContextW {
 // Upscaler
 // =============================================================================
 
+// A YOLOv8 detector that finds regions (e.g. faces) for adetail_image() to
+// re-inpaint with an SDContext.
+struct ADetailerW {
+    adetailer_ctx_t* ctx = nullptr;
+    nb::object busy_lock;
+
+    static constexpr const char* kBusyMsg =
+        "ADetailer is currently being used by another thread. "
+        "Create one ADetailer per thread.";
+
+    ADetailerW(const std::string& path, int n_threads,
+               std::optional<std::string> backend, std::optional<std::string> params_backend) {
+        nb::module_::import_("inferna.utils.validation").attr("validate_model_file")(
+            path, "kind"_a = "ADetailer detector");
+        if (n_threads < 0) n_threads = sd_get_num_physical_cores();
+        auto c = [](const std::optional<std::string>& v){ return v && !v->empty() ? v->c_str() : nullptr; };
+        ctx = new_adetailer_ctx(path.c_str(), n_threads, c(backend), c(params_backend));
+        if (!ctx) throw std::runtime_error("Failed to load ADetailer detector: " + path);
+        busy_lock = nb::module_::import_("threading").attr("Lock")();
+    }
+    ~ADetailerW() { free_adetailer_ctx(ctx); }
+    ADetailerW(const ADetailerW&) = delete;
+    ADetailerW& operator=(const ADetailerW&) = delete;
+};
+
 struct UpscalerW {
     upscaler_ctx_t* ctx = nullptr;
     UpscalerW(const std::string& model_path, bool direct,
@@ -468,6 +493,9 @@ static nb::dict make_enum_dict() {
     add("EULER_CFG_PP_SAMPLE_METHOD", EULER_CFG_PP_SAMPLE_METHOD);
     add("EULER_A_CFG_PP_SAMPLE_METHOD", EULER_A_CFG_PP_SAMPLE_METHOD);
     add("EULER_GE_SAMPLE_METHOD", EULER_GE_SAMPLE_METHOD);
+    add("DPMPP2M_SDE_SAMPLE_METHOD", DPMPP2M_SDE_SAMPLE_METHOD);
+    add("DPMPP2M_SDE_BT_SAMPLE_METHOD", DPMPP2M_SDE_BT_SAMPLE_METHOD);
+    add("LMS_SAMPLE_METHOD", LMS_SAMPLE_METHOD);
     add("SAMPLE_METHOD_COUNT", SAMPLE_METHOD_COUNT);
 
     add("DISCRETE_SCHEDULER", DISCRETE_SCHEDULER);
@@ -483,6 +511,9 @@ static nb::dict make_enum_dict() {
     add("BONG_TANGENT_SCHEDULER", BONG_TANGENT_SCHEDULER);
     add("LTX2_SCHEDULER", LTX2_SCHEDULER);
     add("LOGIT_NORMAL_SCHEDULER", LOGIT_NORMAL_SCHEDULER);
+    add("FLUX2_SCHEDULER", FLUX2_SCHEDULER);
+    add("FLUX_SCHEDULER", FLUX_SCHEDULER);
+    add("BETA_SCHEDULER", BETA_SCHEDULER);
     add("LLADA_IMAGE_SCHEDULER", LLADA_IMAGE_SCHEDULER);
     add("SCHEDULER_COUNT", SCHEDULER_COUNT);
 
@@ -538,6 +569,7 @@ static nb::dict make_enum_dict() {
     add("SD_VAE_FORMAT_FLUX", SD_VAE_FORMAT_FLUX);
     add("SD_VAE_FORMAT_SD3", SD_VAE_FORMAT_SD3);
     add("SD_VAE_FORMAT_FLUX2", SD_VAE_FORMAT_FLUX2);
+    add("SD_VAE_FORMAT_WAN", SD_VAE_FORMAT_WAN);
     add("SD_VAE_FORMAT_COUNT", SD_VAE_FORMAT_COUNT);
     add("SD_CANCEL_ALL", SD_CANCEL_ALL);
     add("SD_CANCEL_NEW_LATENTS", SD_CANCEL_NEW_LATENTS);
@@ -553,10 +585,12 @@ static nb::dict make_enum_dict() {
     add("PREVIEW_PROJ", PREVIEW_PROJ);
     add("PREVIEW_TAE", PREVIEW_TAE);
     add("PREVIEW_VAE", PREVIEW_VAE);
+    add("PREVIEW_COUNT", PREVIEW_COUNT);
 
     add("LORA_APPLY_AUTO", LORA_APPLY_AUTO);
     add("LORA_APPLY_IMMEDIATELY", LORA_APPLY_IMMEDIATELY);
     add("LORA_APPLY_AT_RUNTIME", LORA_APPLY_AT_RUNTIME);
+    add("LORA_APPLY_MODE_COUNT", LORA_APPLY_MODE_COUNT);
 
     add("SD_HIRES_UPSCALER_NONE", SD_HIRES_UPSCALER_NONE);
     add("SD_HIRES_UPSCALER_LATENT", SD_HIRES_UPSCALER_LATENT);
@@ -568,6 +602,7 @@ static nb::dict make_enum_dict() {
     add("SD_HIRES_UPSCALER_LANCZOS", SD_HIRES_UPSCALER_LANCZOS);
     add("SD_HIRES_UPSCALER_NEAREST", SD_HIRES_UPSCALER_NEAREST);
     add("SD_HIRES_UPSCALER_MODEL", SD_HIRES_UPSCALER_MODEL);
+    add("SD_HIRES_UPSCALER_COUNT", SD_HIRES_UPSCALER_COUNT);
 
     add("SD_CACHE_DISABLED", SD_CACHE_DISABLED);
     add("SD_CACHE_EASYCACHE", SD_CACHE_EASYCACHE);
@@ -1013,6 +1048,8 @@ NB_MODULE(_sd_native, m) {
         .def_prop_ro("_busy_lock", [](SDContextW& s){ return s.busy_lock; })
         .def("_try_acquire_busy", &SDContextW::try_acquire_busy)
         .def("close", [](SDContextW& s){
+            // a running generate_* holds the lock
+            inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
             if (s.ctx) { free_sd_ctx(s.ctx); s.ctx = nullptr; }
         })
         .def("cancel", [](SDContextW& s, int mode){
@@ -1030,6 +1067,36 @@ NB_MODULE(_sd_native, m) {
         .def_prop_ro("supports_video_generation", [](SDContextW& s){
             if (!s.ctx) throw std::runtime_error("Context not initialized");
             return (bool) sd_ctx_supports_video_generation(s.ctx);
+        })
+        .def("load_control_net", [](SDContextW& s, const std::string& path){
+            if (!s.ctx) throw std::runtime_error("Context not initialized");
+            nb::module_::import_("inferna.utils.validation").attr("validate_model_file")(
+                path, "kind"_a = "ControlNet model");
+            bool ok;
+            {
+                inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
+                nb::gil_scoped_release rel;
+                ok = sd_ctx_load_control_net(s.ctx, path.c_str());
+            }
+            if (!ok) throw std::runtime_error("Failed to load ControlNet from " + path);
+        }, "path"_a, "Load or replace the ControlNet without reloading the model.")
+        .def("unload_control_net", [](SDContextW& s){
+            if (!s.ctx) throw std::runtime_error("Context not initialized");
+            bool ok;
+            {
+                inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
+                nb::gil_scoped_release rel;
+                ok = sd_ctx_unload_control_net(s.ctx);
+            }
+            if (!ok) throw std::runtime_error("Failed to unload ControlNet");
+        })
+        .def_prop_ro("has_control_net", [](SDContextW& s){
+            if (!s.ctx) throw std::runtime_error("Context not initialized");
+            return sd_ctx_has_control_net(s.ctx);
+        })
+        .def("get_model_version_name", [](SDContextW& s){
+            if (!s.ctx) throw std::runtime_error("Context not initialized");
+            return std::string(sd_get_model_version_name(s.ctx));
         })
         .def("get_default_sample_method", [](SDContextW& s){
             if (!s.ctx) throw std::runtime_error("Context not initialized");
@@ -1181,6 +1248,48 @@ NB_MODULE(_sd_native, m) {
     // -------------------------------------------------------------------------
     // Upscaler
     // -------------------------------------------------------------------------
+    nb::class_<ADetailerW>(m, "ADetailer")
+        .def(nb::init<const std::string&, int, std::optional<std::string>, std::optional<std::string>>(),
+             "detector_path"_a, "n_threads"_a = -1, "backend"_a = nb::none(), "params_backend"_a = nb::none())
+        .def_prop_ro("is_valid", [](ADetailerW& s){ return s.ctx != nullptr; })
+        .def_prop_ro("_busy_lock", [](ADetailerW& s){ return s.busy_lock; })
+        .def("close", [](ADetailerW& s){
+            inferna::BusyGuard guard(s.busy_lock, ADetailerW::kBusyMsg);
+            free_adetailer_ctx(s.ctx);
+            s.ctx = nullptr;
+        })
+        .def("detail", [](ADetailerW& s, SDContextW& sd, SDImageW& image, SDImageGenParamsW& params,
+                          std::optional<std::string> prompt, std::optional<std::string> negative_prompt,
+                          std::optional<std::string> extra_args) {
+            if (!s.ctx) throw std::runtime_error("ADetailer has been closed");
+            if (!sd.ctx) throw std::runtime_error("Context not initialized");
+            if (!image.img.data) throw std::invalid_argument("image has no data");
+            params.sync_sample();
+            auto c = [](const std::optional<std::string>& v){ return v ? v->c_str() : nullptr; };
+            sd_adetailer_params_t ad{c(prompt), c(negative_prompt), c(extra_args)};
+            sd_image_t* result = nullptr;
+            int n = 0;
+            bool ok;
+            {
+                // adetail_image runs generate_image on `sd`
+                inferna::BusyGuard guard(s.busy_lock, ADetailerW::kBusyMsg);
+                inferna::BusyGuard sd_guard(sd.busy_lock, SDContextW::kBusyMsg);
+                nb::gil_scoped_release rel;
+                ok = adetail_image(s.ctx, sd.ctx, image.img, &ad, &params.p, &result, &n);
+            }
+            if (!ok || n != 1 || !result) {
+                free_sd_images(result, n);
+                throw std::runtime_error("ADetailer failed; see the stable-diffusion.cpp log");
+            }
+            auto* w = new SDImageW{};
+            w->img = result[0];
+            w->owns = true;
+            std::free(result);
+            return w;
+        }, "sd_ctx"_a, "image"_a, "params"_a, "prompt"_a = nb::none(), "negative_prompt"_a = nb::none(),
+           "extra_args"_a = nb::none(), nb::rv_policy::take_ownership,
+           "Detect regions in image and re-inpaint each with sd_ctx; returns the composited image.");
+
     nb::class_<UpscalerW>(m, "Upscaler")
         .def(nb::init<const std::string&, bool, int, int,
                       std::optional<std::string>, std::optional<std::string>>(),
@@ -1222,30 +1331,69 @@ NB_MODULE(_sd_native, m) {
         const char* info = sd_get_system_info();
         return info ? std::string(info) : std::string();
     });
-    m.def("type_name", [](int t){
-        const char* n = sd_type_name((sd_type_t)t);
-        return n ? std::string(n) : std::string();
-    });
-    m.def("sample_method_name", [](int t){
-        const char* n = sd_sample_method_name((sample_method_t)t);
-        return n ? std::string(n) : std::string();
-    });
-    m.def("scheduler_name", [](int t){
-        const char* n = sd_scheduler_name((scheduler_t)t);
-        return n ? std::string(n) : std::string();
-    });
+    // sd.cpp checks only `v < COUNT`, so a negative value would index before
+    // its name table; its str_to_* return COUNT for an unknown name.
+#define SD_ENUM_STR(py, ctype, count, name_fn, parse_fn)                                  \
+    m.def(py "_name", [](int v){                                                          \
+        if (v < 0 || v >= (int) count)                                                    \
+            throw std::invalid_argument("unknown " py " " + std::to_string(v));          \
+        return std::string(name_fn((ctype) v));                                           \
+    }, "value"_a);                                                                        \
+    m.def(py "_from_str", [](const std::string& s){                                       \
+        int v = (int) parse_fn(s.c_str());                                                \
+        if (v == (int) count) throw std::invalid_argument("unknown " py " '" + s + "'"); \
+        return v;                                                                         \
+    }, "name"_a);
+    SD_ENUM_STR("type",            sd_type_t,           SD_TYPE_COUNT,           sd_type_name,            str_to_sd_type)
+    SD_ENUM_STR("rng_type",        rng_type_t,          RNG_TYPE_COUNT,          sd_rng_type_name,        str_to_rng_type)
+    SD_ENUM_STR("sample_method",   sample_method_t,     SAMPLE_METHOD_COUNT,     sd_sample_method_name,   str_to_sample_method)
+    SD_ENUM_STR("scheduler",       scheduler_t,         SCHEDULER_COUNT,         sd_scheduler_name,       str_to_scheduler)
+    SD_ENUM_STR("prediction",      prediction_t,        PREDICTION_COUNT,        sd_prediction_name,      str_to_prediction)
+    SD_ENUM_STR("preview",         preview_t,           PREVIEW_COUNT,           sd_preview_name,         str_to_preview)
+    SD_ENUM_STR("lora_apply_mode", lora_apply_mode_t,   LORA_APPLY_MODE_COUNT,   sd_lora_apply_mode_name, str_to_lora_apply_mode)
+    SD_ENUM_STR("hires_upscaler",  sd_hires_upscaler_t, SD_HIRES_UPSCALER_COUNT, sd_hires_upscaler_name,  str_to_sd_hires_upscaler)
+#undef SD_ENUM_STR
+    m.def("version", [](){ return std::string(sd_version()); });
+    m.def("commit",  [](){ return std::string(sd_commit()); });
+    m.def("list_devices", [](){
+        // load backends from inferna's path first; sd.cpp's fallback loader
+        // searches next to the executable
+        inferna::load_all_backends("inferna.sd._sd_native");
+        std::string out(sd_list_devices(nullptr, 0), '\0');
+        sd_list_devices(out.data(), out.size() + 1);
+        return out;
+    }, "Tab-separated 'name\\tdescription' lines, one per ggml backend device.");
 
-    m.def("convert_native", [](const std::string& input_path,
+    m.def("convert_native", [](std::optional<std::string> model_path,
+                               std::optional<std::string> clip_l_path,
+                               std::optional<std::string> clip_g_path,
+                               std::optional<std::string> t5xxl_path,
+                               std::optional<std::string> diffusion_model_path,
+                               std::optional<std::string> vae_path,
                                const std::string& output_path,
                                int output_type,
-                               std::optional<std::string> vae_path,
                                std::optional<std::string> tensor_type_rules,
-                               bool convert_name) {
-        const char* vae_ptr = vae_path ? vae_path->c_str() : nullptr;
-        const char* rules_ptr = tensor_type_rules ? tensor_type_rules->c_str() : nullptr;
-        return (bool) convert(input_path.c_str(), vae_ptr, output_path.c_str(),
-                              (sd_type_t)output_type, rules_ptr, convert_name);
+                               bool convert_name,
+                               int n_threads) {
+        auto c = [](const std::optional<std::string>& v){ return v ? v->c_str() : nullptr; };
+        nb::gil_scoped_release rel;
+        return (bool) convert_with_components(c(model_path), c(clip_l_path), c(clip_g_path), c(t5xxl_path),
+                                              c(diffusion_model_path), c(vae_path), output_path.c_str(),
+                                              (sd_type_t)output_type,
+                                              // sd.cpp builds a std::string from it; null crashes
+                                              tensor_type_rules ? tensor_type_rules->c_str() : "", convert_name,
+                                              n_threads);
     });
+
+    // The imatrix is process-wide: collection accumulates over every
+    // generation, and convert() uses whatever is loaded or collected.
+    m.def("enable_imatrix_collection",  [](){ enable_imatrix_collection(); });
+    m.def("disable_imatrix_collection", [](){ disable_imatrix_collection(); });
+    m.def("load_imatrix", [](const std::string& path){
+        nb::module_::import_("inferna.utils.validation").attr("validate_imatrix_file")(path);
+        if (!load_imatrix(path.c_str())) throw std::runtime_error("Failed to load imatrix from " + path);
+    }, "path"_a);
+    m.def("save_imatrix", [](const std::string& path){ save_imatrix(path.c_str()); }, "path"_a);
 
     m.def("preprocess_canny", [](SDImageW& img, float high_threshold, float low_threshold,
                                   float weak, float strong, bool inverse) {

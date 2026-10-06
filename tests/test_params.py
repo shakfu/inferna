@@ -384,3 +384,14 @@ def test_ggml_prec_values():
     assert cy.GGML_PREC_F16 == 20
     assert cy.GGML_PREC_Q8 == 30
     assert cy.GGML_PREC_Q4 == 40
+
+
+def test_b11429_params_fields():
+    mp = cy.LlamaModelParams()
+    assert mp.load_mtp is False
+    mp.load_mtp = True
+    assert mp.load_mtp is True
+    cp = cy.LlamaContextParams()
+    assert (cp.n_outputs_max, cp.n_outputs_max_per_seq) == (0, 1)  # llama_context_default_params
+    cp.n_outputs_max, cp.n_outputs_max_per_seq = 64, 8
+    assert (cp.n_outputs_max, cp.n_outputs_max_per_seq) == (64, 8)

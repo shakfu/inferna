@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -374,6 +375,34 @@ struct LlamaBatchW {
     LlamaBatchW(const LlamaBatchW&) = delete;
     LlamaBatchW& operator=(const LlamaBatchW&) = delete;
 };
+
+// =============================================================================
+// LlamaBatchExt — owns llama_batch_ext* (sized from its context)
+// =============================================================================
+
+struct LlamaBatchExtW {
+    llama_batch_ext* ptr = nullptr;
+    nb::object ctx_obj;  // limits and memory come from this context
+    int32_t n_vocab = 0;
+    int n_pos_per_embd = 1;  // positions per embedding entry: 4 under M-RoPE
+    bool rejected = false;   // a failed add left an empty entry in the batch
+
+    ~LlamaBatchExtW() { llama_batch_ext_free(ptr); }
+    LlamaBatchExtW() = default;
+    LlamaBatchExtW(const LlamaBatchExtW&) = delete;
+    LlamaBatchExtW& operator=(const LlamaBatchExtW&) = delete;
+};
+
+// Embedding rows for llama_batch_ext; llama.cpp copies the data.
+static llama_embd to_llama_embd(const nb::ndarray<const float, nb::c_contig, nb::device::cpu>& a) {
+    if (a.ndim() != 1 && a.ndim() != 2)
+        throw std::invalid_argument("embd must be 1-D (n_embd) or 2-D (n_rows, n_embd)");
+    llama_embd e{};
+    e.data   = a.data();
+    e.n_rows = a.ndim() == 2 ? a.shape(0) : 1;
+    e.n_embd = a.ndim() == 2 ? a.shape(1) : a.shape(0);
+    return e;
+}
 
 // =============================================================================
 // LlamaContext — owns llama_context*
@@ -1087,6 +1116,7 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaModelParamsW, int,  split_mode,   "split_mode")
         PARAM_VAL(LlamaModelParamsW, int,  main_gpu,     "main_gpu")
         PARAM_VAL(LlamaModelParamsW, bool, vocab_only,    "vocab_only")
+        PARAM_VAL(LlamaModelParamsW, bool, load_mtp,      "load_mtp")
         .def_prop_rw("load_mode",
             [](LlamaModelParamsW& s) { return (int) s.p.load_mode; },
             [](LlamaModelParamsW& s, int v) {
@@ -1265,6 +1295,8 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_ubatch,        "n_ubatch")
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_seq_max,       "n_seq_max")
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_rs_seq,        "n_rs_seq")
+        PARAM_VAL(LlamaContextParamsW, uint32_t, n_outputs_max,   "n_outputs_max")
+        PARAM_VAL(LlamaContextParamsW, uint32_t, n_outputs_max_per_seq, "n_outputs_max_per_seq")
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_threads,       "n_threads")
         PARAM_VAL(LlamaContextParamsW, uint32_t, n_threads_batch, "n_threads_batch")
         PARAM_VAL(LlamaContextParamsW, int,  ctx_type,          "ctx_type")
@@ -1934,6 +1966,89 @@ NB_MODULE(_llama_native, m) {
         });
 
     // -------------------------------------------------------------------------
+    // LlamaBatchExt
+    // -------------------------------------------------------------------------
+    using EmbdArray = nb::ndarray<const float, nb::c_contig, nb::device::cpu>;
+    auto ext_ptr = [](LlamaBatchExtW& s) {
+        if (!s.ptr) throw std::runtime_error("LlamaBatchExt has been closed");
+        if (s.rejected) throw std::invalid_argument("LlamaBatchExt holds a rejected entry; call clear()");
+        return s.ptr;
+    };
+    // add_* return an index >= 0 or a negative code; raise instead so a bad
+    // index never reaches the setters.
+    auto ext_idx = [](LlamaBatchExtW& s, int32_t idx) {
+        if (idx == -1) throw std::out_of_range("LlamaBatchExt is full (n_batch reached)");
+        if (idx == -2) {
+            // llama.cpp keeps the entry it rejected; only add_embd can reach this
+            s.rejected = true;
+            throw std::invalid_argument("invalid embedding; the batch is unusable until clear()");
+        }
+        if (idx == -3) throw std::invalid_argument("invalid seq_id");
+        return idx;
+    };
+    nb::class_<LlamaBatchExtW>(m, "LlamaBatchExt",
+        "Extended batch for LlamaContext.process(). Capacity, n_seq_max and embedding "
+        "width come from the context. add_* return the entry index and raise on error; "
+        "set_* return False on a bad index or value, as in llama.h.")
+        .def("__init__", [](LlamaBatchExtW* self, nb::object ctx) {
+            auto& c = nb::cast<LlamaContextW&>(ctx);
+            c.ensure_valid();
+            new (self) LlamaBatchExtW();
+            self->ptr = llama_batch_ext_init(c.ptr);
+            self->n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(c.ptr)));
+            // llama.cpp's hparams.n_pos_per_embd(), which llama.h does not expose
+            llama_rope_type rope = llama_model_rope_type(llama_get_model(c.ptr));
+            self->n_pos_per_embd =
+                (rope == LLAMA_ROPE_TYPE_MROPE || rope == LLAMA_ROPE_TYPE_IMROPE) ? 4 : 1;
+            self->ctx_obj = std::move(ctx);
+        }, "ctx"_a)
+        .def("close", [](LlamaBatchExtW& s) { llama_batch_ext_free(s.ptr); s.ptr = nullptr; })
+        .def("clear", [](LlamaBatchExtW& s) {
+            if (!s.ptr) throw std::runtime_error("LlamaBatchExt has been closed");
+            llama_batch_ext_clear(s.ptr);
+            s.rejected = false;
+        })
+        .def_ro("n_pos_per_embd", &LlamaBatchExtW::n_pos_per_embd,
+                "Positions an embedding entry takes in set_pos(): 4 for M-RoPE models, else 1.")
+        .def("add", [ext_ptr, ext_idx](LlamaBatchExtW& s, int seq_id) {
+            return ext_idx(s, llama_batch_ext_add(ext_ptr(s), seq_id));
+        }, "seq_id"_a, "Add an entry with no token or embedding; set its position with set_pos().")
+        .def("add_token", [ext_ptr, ext_idx](LlamaBatchExtW& s, int seq_id, int token) {
+            // llama.cpp appends the entry before it rejects a bad id
+            if (token < 0 || token >= s.n_vocab)
+                throw std::invalid_argument("invalid token id " + std::to_string(token));
+            return ext_idx(s, llama_batch_ext_add_token(ext_ptr(s), seq_id, token));
+        }, "seq_id"_a, "token"_a)
+        .def("add_embd", [ext_ptr, ext_idx](LlamaBatchExtW& s, int seq_id, EmbdArray embd) {
+            return ext_idx(s, llama_batch_ext_add_embd(ext_ptr(s), seq_id, to_llama_embd(embd)));
+        }, "seq_id"_a, "embd"_a, "Add an embedding entry; embd is float32 (n_embd,) or (n_rows, n_embd).")
+        .def("add_seq", [ext_ptr](LlamaBatchExtW& s, int idx, int seq_id) {
+            return llama_batch_ext_add_seq(ext_ptr(s), idx, seq_id);
+        }, "idx"_a, "seq_id"_a, "Add entry idx to another sequence. Call before the set_* methods.")
+        .def("set_pos", [ext_ptr](LlamaBatchExtW& s, int idx, const std::vector<llama_pos>& pos) {
+            // llama.cpp reads 1 position for a token entry and n_pos_per_embd for an
+            // embedding entry; the full local array keeps either read in bounds
+            std::array<llama_pos, 4> p{};
+            if (pos.size() != 1 && pos.size() != (size_t) s.n_pos_per_embd)
+                throw std::invalid_argument("pos must hold 1 or n_pos_per_embd=" +
+                                            std::to_string(s.n_pos_per_embd) + " positions");
+            std::copy(pos.begin(), pos.end(), p.begin());
+            return llama_batch_ext_set_pos(ext_ptr(s), idx, p.data());
+        }, "idx"_a, "pos"_a, "Set the position(s) of entry idx: 1 for a token, n_pos_per_embd for M-RoPE embeddings.")
+        .def("set_embd_token", [ext_ptr](LlamaBatchExtW& s, int idx, EmbdArray embd) {
+            return llama_batch_ext_set_embd_token(ext_ptr(s), idx, to_llama_embd(embd));
+        }, "idx"_a, "embd"_a)
+        .def("set_embd_state", [ext_ptr](LlamaBatchExtW& s, int idx, EmbdArray embd) {
+            return llama_batch_ext_set_embd_state(ext_ptr(s), idx, to_llama_embd(embd));
+        }, "idx"_a, "embd"_a, "Set carried-over hidden state for entry idx (not yet implemented upstream).")
+        .def("set_output_embd", [ext_ptr](LlamaBatchExtW& s, int idx, bool value) {
+            return llama_batch_ext_set_output_embd(ext_ptr(s), idx, value);
+        }, "idx"_a, "value"_a = true)
+        .def("set_output_logits", [ext_ptr](LlamaBatchExtW& s, int idx, bool value) {
+            return llama_batch_ext_set_output_logits(ext_ptr(s), idx, value);
+        }, "idx"_a, "value"_a = true);
+
+    // -------------------------------------------------------------------------
     // LlamaContext
     // -------------------------------------------------------------------------
     nb::class_<LlamaContextW>(m, "LlamaContext",
@@ -2034,9 +2149,37 @@ NB_MODULE(_llama_native, m) {
             s.ensure_valid();
             llama_set_embeddings(s.ptr, e);
         })
+        .def("process", [](LlamaContextW& s, int type, LlamaBatchExtW& batch){
+            s.ensure_valid();
+            if (!batch.ptr) throw std::runtime_error("LlamaBatchExt has been closed");
+            if (batch.rejected) throw std::invalid_argument("LlamaBatchExt holds a rejected entry; call clear()");
+            // the batch is sized from, and reads the memory of, its own context
+            if (nb::cast<LlamaContextW*>(batch.ctx_obj) != &s)
+                throw std::invalid_argument("LlamaBatchExt belongs to a different LlamaContext");
+            if (type != LLAMA_PROCESS_TYPE_ENCODE && type != LLAMA_PROCESS_TYPE_DECODE)
+                throw std::invalid_argument("unknown process type " + std::to_string(type));
+            llama_context* ctx = s.ptr;
+            int rc;
+            {
+                nb::gil_scoped_release rel;
+                rc = llama_process(ctx, (llama_process_type) type, batch.ptr);
+            }
+            if (rc == 1) throw std::invalid_argument(
+                "could not find a KV slot for the batch (try reducing the size "
+                "of the batch or increase the context)");
+            if (rc == 2) {
+                PyErr_SetString(PyExc_InterruptedError, "llama_process aborted by abort_callback");
+                throw nb::python_error();
+            }
+            if (rc != 0) throw std::runtime_error("llama_process failed with code " + std::to_string(rc));
+        }, "type"_a, "batch"_a, "Encode or decode a LlamaBatchExt (LLAMA_PROCESS_TYPE_*).")
         .def("set_causal_attn", [](LlamaContextW& s, bool c){
             s.ensure_valid();
             llama_set_causal_attn(s.ptr, c);
+        })
+        .def("get_causal_attn", [](LlamaContextW& s){
+            s.ensure_valid();
+            return llama_get_causal_attn(s.ptr);
         })
         .def("set_adapters_lora", [](LlamaContextW& s,
                                       const std::vector<LlamaAdapterLoraW*>& adapters,
@@ -2831,8 +2974,16 @@ NB_MODULE(_llama_native, m) {
     },
           "mode"_a, "Name of a LLAMA_LOAD_MODE_* value.");
     m.def("llama_load_mode_from_str", [](const std::string& name){
-        return (int) llama_load_mode_from_str(name.c_str());
+        // llama.cpp aborts on an unknown name
+        for (int m = LLAMA_LOAD_MODE_AUTO; m <= LLAMA_LOAD_MODE_DIRECT_IO; ++m)
+            if (name == llama_load_mode_name((llama_load_mode) m)) return m;
+        throw std::invalid_argument("unknown load mode '" + name + "'");
     }, "name"_a, "LLAMA_LOAD_MODE_* value for a name from llama_load_mode_name().");
+    m.def("gguf_type_name", [](int type) -> nb::object {
+        const char* n = gguf_type_name((gguf_type) type);
+        if (!n) return nb::none();
+        return nb::str(n);
+    }, "type"_a, "Name of a GGUF_TYPE_* value, e.g. 'u32', or None.");
     m.def("llama_model_meta_key_str", [](int key) -> nb::object {
         const char* k = llama_model_meta_key_str((llama_model_meta_key) key);
         if (!k) return nb::none();

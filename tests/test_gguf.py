@@ -205,3 +205,17 @@ def test_gguf_from_fileobj_garbage_raises(tmp_path):
     path.write_bytes(b"\0" * 64)
     with open(path, "rb") as f, pytest.raises(RuntimeError, match="Failed to load GGUF"):
         GGUFContext.from_fileobj(f)
+
+
+def test_gguf_type_name(model_path):
+    import inferna.llama.llama_cpp as cy
+
+    ctx = GGUFContext.from_file(model_path)
+    assert ctx.get_kv_type(ctx.find_key("general.architecture")) == cy.GGUF_TYPE_STRING
+    assert cy.gguf_type_name(cy.GGUF_TYPE_STRING) == "str"
+    assert cy.gguf_type_name(cy.GGUF_TYPE_UINT32) == "u32"
+    assert all(cy.gguf_type_name(t) for t in range(cy.GGUF_TYPE_COUNT))
+    assert {cy.gguf_type_name(ctx.get_kv_type(i)) for i in range(ctx.n_kv)} <= {
+        cy.gguf_type_name(t) for t in range(cy.GGUF_TYPE_COUNT)
+    }
+    assert cy.gguf_type_name(cy.GGUF_TYPE_COUNT) is None

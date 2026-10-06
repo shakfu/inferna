@@ -8,6 +8,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -385,6 +386,14 @@ void register_mtmd(nb::module_& m) {
             s.ensure_valid();
             return (bool) mtmd_decode_use_mrope(s.ptr);
         })
+        .def_prop_ro("media_marker", [](MtmdContextW& s){
+            s.ensure_valid();
+            return std::string(mtmd_get_marker(s.ptr));
+        }, "Marker that tokenize() replaces with each bitmap, as set in MtmdContextParams.")
+        .def("model_can_chat", [](MtmdContextW& s, nb::object llama_ctx){
+            s.ensure_valid();
+            return mtmd_helper_model_can_chat(inferna::unwrap_ctx(llama_ctx), s.ptr);
+        }, "llama_ctx"_a, "False for a TTS-only model: one that generates audio and has no chat template.")
         .def("tokenize",
             [](MtmdContextW& s, const std::string& text,
                std::vector<MtmdBitmapW*> bitmaps,
@@ -442,9 +451,27 @@ void register_mtmd(nb::module_& m) {
         .def("eval_chunks",
             [](MtmdContextW& s, nb::object llama_ctx,
                MtmdInputChunksW& chunks, int n_past, int seq_id,
-               int32_t n_batch, bool logits_last){
+               std::optional<int32_t> n_batch_opt, bool logits_last){
                 s.ensure_valid();
                 ::llama_context* ctx_ptr = inferna::unwrap_ctx(llama_ctx);
+                int32_t n_batch = n_batch_opt ? *n_batch_opt : (int32_t) llama_n_batch(ctx_ptr);
+                if (n_batch <= 0) throw std::invalid_argument("n_batch must be positive");
+                // A non-causal media chunk (gemma3) must be decoded in one ubatch:
+                // split, its tokens cannot attend to each other; over n_ubatch
+                // llama.cpp aborts the process.
+                size_t limit = std::min<size_t>((size_t) n_batch, llama_n_ubatch(ctx_ptr));
+                for (size_t i = 0; i < mtmd_input_chunks_size(chunks.ptr); ++i) {
+                    const mtmd_input_chunk* c = mtmd_input_chunks_get(chunks.ptr, i);
+                    if (mtmd_input_chunk_get_type(c) == MTMD_INPUT_CHUNK_TYPE_TEXT) continue;
+                    if (!mtmd_decode_use_non_causal(s.ptr, c)) continue;
+                    size_t n = mtmd_input_chunk_get_n_tokens(c);
+                    if (n > limit) throw std::invalid_argument(
+                        "chunk " + std::to_string(i) + " needs " + std::to_string(n) +
+                        " tokens in one batch because this model uses non-causal attention on "
+                        "media (n_batch=" + std::to_string(n_batch) + ", n_ubatch=" +
+                        std::to_string(llama_n_ubatch(ctx_ptr)) + "); raise both to at least " +
+                        std::to_string(n) + ", or lower MtmdContextParams.image_max_tokens");
+                }
                 llama_pos new_n_past = 0;
                 int32_t rc = mtmd_helper_eval_chunks(
                     s.ptr, ctx_ptr, chunks.ptr, (llama_pos) n_past,
@@ -455,7 +482,8 @@ void register_mtmd(nb::module_& m) {
                 return new_n_past;
             },
             "llama_ctx"_a, "chunks"_a, "n_past"_a = 0, "seq_id"_a = 0,
-            "n_batch"_a = 32, "logits_last"_a = true);
+            "n_batch"_a = nb::none(), "logits_last"_a = true,
+            "Decode chunks into llama_ctx; n_batch defaults to the context's n_batch.");
 
     // -------------------------------------------------------------------------
     // Module-level

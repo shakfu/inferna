@@ -249,3 +249,77 @@ def validate_whisper_file(path: str, *, kind: str = "whisper model") -> None:
             f"(first 4 bytes={header!r}, expected one of: {accepted}). "
             "Whisper accepts either legacy ggml or newer GGUF formats."
         )
+
+
+# The VAD loader reads a length-prefixed model-type string ("silero-16k")
+# after the magic. A whisper model has n_vocab there, and the loader then
+# allocates from garbage layer counts.
+WHISPER_VAD_MAX_TYPE_LEN = 64
+
+
+def validate_whisper_vad_file(path: str, *, kind: str = "VAD model") -> None:
+    """Validate a whisper.cpp VAD model file (legacy ggml, e.g. Silero)."""
+    validate_model_file(path, kind=kind)
+
+    try:
+        with open(path, "rb") as f:
+            header = f.read(8 + WHISPER_VAD_MAX_TYPE_LEN)
+    except OSError as e:
+        raise PermissionError(f"failed to read {kind} header from {path}: {e}") from e
+
+    if header[:4] != GGML_LEGACY_MAGIC_LE:
+        raise ValueError(
+            f"{path} does not look like a valid {kind} file "
+            f"(first 4 bytes={header[:4]!r}, expected {GGML_LEGACY_MAGIC_LE!r})."
+        )
+    n = struct.unpack("<i", header[4:8])[0] if len(header) >= 8 else -1
+    model_type = header[8 : 8 + n] if 0 < n <= WHISPER_VAD_MAX_TYPE_LEN else b""
+    if len(model_type) != n or not model_type.isascii() or not model_type.decode().isprintable():
+        raise ValueError(
+            f"{path} is not a {kind}: no model-type string after the magic. "
+            "A whisper transcription model cannot be used as a VAD model."
+        )
+
+
+# stable-diffusion.cpp's load_imatrix trusts every length in the file: a
+# negative name length writes before its buffer, a huge one allocates without
+# bound. Real tensor names are well under this.
+IMATRIX_MAX_NAME_LEN = 4096
+
+
+def validate_imatrix_file(path: str) -> None:
+    """Validate a stable-diffusion.cpp imatrix file by walking its entries.
+
+    Layout: int32 n_entries; per entry int32 len, name[len], int32 ncall,
+    int32 nval, float32[nval]; then int32 last_call.
+    """
+    validate_model_file(path, kind="imatrix")
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        raise PermissionError(f"failed to read imatrix {path}: {e}") from e
+
+    def fail(why: str) -> None:
+        raise ValueError(f"{path} is not a valid imatrix file: {why}")
+
+    def i32(off: int) -> int:
+        if off + 4 > len(data):
+            fail(f"truncated at byte {off}")
+        return int(struct.unpack_from("<i", data, off)[0])
+
+    n_entries = i32(0)
+    if n_entries < 1:
+        fail(f"n_entries={n_entries}")
+    off = 4
+    for i in range(n_entries):
+        n = i32(off)
+        if not 0 < n <= IMATRIX_MAX_NAME_LEN:
+            fail(f"entry {i} name length {n}")
+        off += 4 + n
+        i32(off)  # ncall
+        nval = i32(off + 4)
+        off += 8
+        if nval < 1 or off + 4 * nval > len(data):
+            fail(f"entry {i} has {nval} values, file has {(len(data) - off) // 4} left")
+        off += 4 * nval

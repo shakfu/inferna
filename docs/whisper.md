@@ -119,7 +119,14 @@ ctx = WhisperContext("models/ggml-base.bin", params)
 | `full_get_token_text(i, j)` | Get text of token j in segment i |
 | `full_get_token_id(i, j)` | Get ID of token j in segment i |
 | `full_get_token_p(i, j)` | Get probability of token j in segment i |
+| `full_get_token_t0(i, j)`, `full_get_token_t1(i, j)` | Token times (centiseconds, VAD-mapped); needs `token_timestamps` |
+| `full_get_segment_speaker_turn_next(i)` | Next segment is a speaker turn; needs `tdrz_enable` |
+| `full_n_vad_segments()` | VAD speech segments in the last `full()`; 0 without VAD |
+| `full_get_vad_segment_t0(i)`, `full_get_vad_segment_t1(i)` | VAD segment bounds (centiseconds) |
+| `get_timings()` | Mean ms per sample/encode/decode/batchd/prompt call |
 | `full_lang_id()` | Get detected language ID |
+
+Segment and token getters raise `IndexError` on an index outside the last `full()` result, and `RuntimeError` while another thread runs `full()` on the same context or state.
 
 **Model Information:**
 
@@ -138,6 +145,54 @@ ctx = WhisperContext("models/ggml-base.bin", params)
 | `tokenize(text)` | Convert text to token IDs |
 | `token_to_str(id)` | Convert token ID to text |
 | `token_count(text)` | Count tokens in text |
+
+`full_parallel(samples, params, n_processors=2)` splits the audio into `n_processors` chunks, runs them on parallel states, and merges the results into the context. Words at chunk boundaries can be lost.
+
+### WhisperState
+
+A `WhisperState` holds its own buffers and results on a shared `WhisperContext`. The model loads once; each state runs `full()` independently, so separate states can transcribe on separate threads. A state has the same `full_*` result getters as `WhisperContext`.
+
+| Member | Description |
+|--------|-------------|
+| `WhisperState(ctx)` | Create a state on `ctx` |
+| `full(samples, params)` | Transcribe into this state |
+| `close()` | Free the state's buffers |
+| `is_valid`, `ctx` | Open flag; parent context |
+
+One state runs one `full()` at a time; a second concurrent call raises `RuntimeError`. `WhisperContext.close()` raises while any of its states is open.
+
+### Step-by-step pipeline
+
+`full()` runs the whole pipeline. `WhisperContext` and `WhisperState` also expose each step:
+
+| Method | Description |
+|--------|-------------|
+| `pcm_to_mel(samples, n_threads=1)` | Log mel spectrogram of 16 kHz mono samples |
+| `set_mel(mel)` | Use your own mel, float32 of shape `(model_n_mels(), n_len)` |
+| `n_len()` | Mel length in 10 ms frames |
+| `encode(offset=0, n_threads=1)` | Run the encoder from mel frame `offset` |
+| `decode(tokens, n_past=0, n_threads=1)` | Decode `tokens` after `n_past` cached tokens |
+| `get_logits()` | Logits of the last token of the last `decode()`, shape `(model_n_vocab(),)` |
+| `lang_auto_detect(offset_ms=0, n_threads=1)` | `(lang_id, probs)`; needs a multilingual model |
+
+Greedy decoding without timestamps:
+
+```python
+ctx.pcm_to_mel(samples)
+ctx.encode()
+prompt = [ctx.token_sot(), ctx.token_not()]
+ctx.decode(prompt)
+out = []
+while len(out) < 100:
+    token = int(np.argmax(ctx.get_logits()))
+    if token == ctx.token_eot():
+        break
+    out.append(token)
+    ctx.decode([token], n_past=len(prompt) + len(out) - 1)
+print("".join(ctx.token_to_str(t) for t in out))
+```
+
+`decode()` raises `ValueError` when `n_past + len(tokens)` exceeds `n_text_ctx()` or a token id is out of range.
 
 ### WhisperContextParams
 
@@ -203,6 +258,29 @@ vad.max_speech_duration_s = 30.0 # Maximum speech segment
 vad.speech_pad_ms = 30           # Padding around speech
 vad.samples_overlap = 0.0        # Sample overlap
 ```
+
+### WhisperVadContext
+
+Standalone Silero VAD, without a whisper model. `full()` with `params.vad = True` runs the same detector internally.
+
+```python
+from inferna.whisper import WhisperVadContext
+
+vad = WhisperVadContext("models/ggml-silero-v5.1.2.bin")
+vad.segments_from_samples(samples)   # [(29.0, 221.0), (330.0, 377.0), ...] in centiseconds
+```
+
+| Method | Description |
+|--------|-------------|
+| `WhisperVadContext(model_path, params=None)` | Load a VAD model; `params` is a `WhisperVadContextParams` (`n_threads`, `use_gpu`, `gpu_device`) |
+| `detect_speech(samples, reset=True)` | Speech probability per window; `reset=False` keeps the LSTM state for streaming |
+| `reset_state()` | Clear the LSTM state between utterances |
+| `probs()` | Probabilities from the last `detect_speech()` |
+| `segments_from_probs(params=None)` | Segments from those probabilities, using `WhisperVadParams` |
+| `segments_from_samples(samples, params=None)` | `detect_speech()` then `segments_from_probs()` |
+| `close()`, `is_valid` | Free the model; open flag |
+
+A whisper transcription model passed as `model_path` raises `ValueError`.
 
 ### Sampling Strategies
 
@@ -375,6 +453,24 @@ def transcribe_batch(audio_paths: list, model_path: str) -> dict:
         results[path] = text.strip()
 
     return results
+```
+
+To transcribe files concurrently, give each thread its own `WhisperState` on one context:
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+ctx = WhisperContext(model_path)
+
+def transcribe(path):
+    state = WhisperState(ctx)
+    state.full(load_audio(path), WhisperFullParams())
+    text = "".join(state.full_get_segment_text(i) for i in range(state.full_n_segments()))
+    state.close()
+    return text.strip()
+
+with ThreadPoolExecutor(max_workers=2) as pool:
+    results = dict(zip(audio_paths, pool.map(transcribe, audio_paths)))
 ```
 
 ### Streaming Transcription

@@ -1,5 +1,6 @@
 """Tests for the stable diffusion module."""
 
+import glob
 import os
 import tempfile
 import pytest
@@ -36,6 +37,26 @@ from inferna.sd import (
     type_name,
     sample_method_name,
     scheduler_name,
+    rng_type_name,
+    prediction_name,
+    preview_name,
+    lora_apply_mode_name,
+    hires_upscaler_name,
+    type_from_str,
+    rng_type_from_str,
+    sample_method_from_str,
+    scheduler_from_str,
+    prediction_from_str,
+    preview_from_str,
+    lora_apply_mode_from_str,
+    hires_upscaler_from_str,
+    version,
+    commit,
+    list_devices,
+    enable_imatrix_collection,
+    disable_imatrix_collection,
+    load_imatrix,
+    save_imatrix,
     set_log_callback,
     set_progress_callback,
     set_preview_callback,
@@ -43,6 +64,10 @@ from inferna.sd import (
 
 
 # Model path for integration tests
+SD15_PATH = "models/v1-5-pruned-emaonly.q8_0.gguf"
+# Optional models; tests that need them skip when absent.
+CONTROLNET_PATH = next(iter(sorted(glob.glob("models/control_v11p_sd15_canny*"))), None)
+DETECTOR_PATH = "models/face_yolov8n.safetensors"
 MODEL_PATH = "models/sd_xl_turbo_1.0.q8_0.gguf"
 
 
@@ -130,6 +155,54 @@ class TestUtilityFunctions:
     def test_scheduler_name(self):
         assert scheduler_name(Scheduler.DISCRETE) == "discrete"
         assert scheduler_name(Scheduler.KARRAS) == "karras"
+
+    @pytest.mark.parametrize(
+        "enum,name_fn,from_str",
+        [
+            (RngType, rng_type_name, rng_type_from_str),
+            (SampleMethod, sample_method_name, sample_method_from_str),
+            (Scheduler, scheduler_name, scheduler_from_str),
+            (Prediction, prediction_name, prediction_from_str),
+            (PreviewMode, preview_name, preview_from_str),
+            (LoraApplyMode, lora_apply_mode_name, lora_apply_mode_from_str),
+            (HiresUpscaler, hires_upscaler_name, hires_upscaler_from_str),
+        ],
+    )
+    def test_name_round_trip(self, enum, name_fn, from_str):
+        members = [m for m in enum if m.name != "COUNT"]
+        for m in members:
+            assert from_str(name_fn(m)) is m
+        with pytest.raises(ValueError, match="unknown"):
+            from_str("bogus")
+        # sd.cpp checks only the upper bound and indexes its table with the value
+        with pytest.raises(ValueError, match="unknown"):
+            name_fn(-1)
+        with pytest.raises(ValueError, match="unknown"):
+            name_fn(len(members))
+
+    def test_type_round_trip(self):
+        for t in (SDType.F32, SDType.F16, SDType.Q8_0, SDType.BF16, SDType.F8_E4M3):
+            assert type_from_str(type_name(t)) is t
+        with pytest.raises(ValueError, match="unknown"):
+            type_from_str("bogus")
+        with pytest.raises(ValueError, match="unknown"):
+            type_name(SDType.COUNT)
+
+    def test_new_upstream_enum_members(self):
+        assert sample_method_name(SampleMethod.LMS) == "lms"
+        assert sample_method_from_str("dpm++2m_sde") is SampleMethod.DPMPP2M_SDE
+        assert scheduler_name(Scheduler.BETA) == "beta"
+        assert VaeFormat.WAN > VaeFormat.FLUX2
+
+    def test_version_and_commit(self):
+        assert version()
+        assert commit()
+
+    def test_list_devices(self):
+        devices = list_devices()
+        assert devices
+        assert all(len(d) == 2 and d[0] for d in devices)
+        assert any(name == "CPU" for name, _ in devices)
 
 
 class TestSDImage:
@@ -522,6 +595,7 @@ class TestSDContextIntegration:
 
         ctx = sd_ctx_factory(params)
         assert ctx.is_valid
+        assert ctx.model_version == "SDXL"
 
     def test_generate_image(self, sd_ctx_factory):
         params = SDContextParams()
@@ -587,6 +661,64 @@ class TestSDContextIntegration:
 
         # Should be identical with same seed
         assert np.array_equal(arr1, arr2)
+
+
+@pytest.mark.skipif(not os.path.exists(MODEL_PATH), reason=f"Model not found at {MODEL_PATH}")
+class TestRuntimeControlNet:
+    def test_failed_load_leaves_context_usable(self, sd_ctx_factory, tmp_path):
+        params = SDContextParams()
+        params.model_path = MODEL_PATH
+        ctx = sd_ctx_factory(params)
+        assert not ctx.has_control_net
+        ctx.unload_control_net()  # no-op without one
+        with pytest.raises(FileNotFoundError):
+            ctx.load_control_net(str(tmp_path / "missing.safetensors"))
+        not_controlnet = tmp_path / "x.safetensors"
+        not_controlnet.write_bytes(b"\0" * 64)
+        with pytest.raises(RuntimeError, match="Failed to load ControlNet"):
+            ctx.load_control_net(str(not_controlnet))
+        assert not ctx.has_control_net
+        images = ctx.generate(prompt="a red square", width=256, height=256, seed=1, sample_steps=1, cfg_scale=1.0)
+        assert images[0].width == 256
+
+    @pytest.mark.skipif(
+        not (CONTROLNET_PATH and os.path.exists(SD15_PATH)),
+        reason=f"needs {SD15_PATH} and models/control_v11p_sd15_canny*",
+    )
+    def test_load_generate_unload(self, sd_ctx_factory):
+        params = SDContextParams()
+        params.model_path = SD15_PATH
+        ctx = sd_ctx_factory(params)
+        edges = np.zeros((256, 256, 3), dtype=np.uint8)
+        edges[64:192, 64] = edges[64:192, 191] = edges[64, 64:192] = edges[191, 64:192] = 255
+        control = SDImage.from_numpy(edges)
+
+        def generate():
+            image = ctx.generate(prompt="a box", width=256, height=256, seed=1, sample_steps=2, control_image=control)
+            return image[0].to_numpy().astype(float)
+
+        plain = generate()
+        ctx.load_control_net(CONTROLNET_PATH)
+        assert ctx.has_control_net
+        guided = generate()
+        # same seed: any difference comes from the ControlNet (measured mean 41/255)
+        assert np.abs(guided - plain).mean() > 5
+        ctx.load_control_net(CONTROLNET_PATH)  # replacing is allowed
+        ctx.unload_control_net()
+        assert not ctx.has_control_net
+        # exact on Metal; other backends need not be bit-for-bit deterministic
+        assert np.abs(generate() - plain).mean() < 1
+
+    def test_busy_guard(self, sd_ctx_factory):
+        params = SDContextParams()
+        params.model_path = MODEL_PATH
+        ctx = sd_ctx_factory(params)
+        assert ctx._busy_lock.acquire(blocking=False)
+        try:
+            with pytest.raises(RuntimeError, match="another thread"):
+                ctx.unload_control_net()
+        finally:
+            ctx._busy_lock.release()
 
 
 @pytest.mark.skipif(not os.path.exists(MODEL_PATH), reason=f"Model not found at {MODEL_PATH}")
@@ -692,6 +824,19 @@ class TestSDContextConcurrencyGuard:
             assert "another thread" in str(errors[0])
         finally:
             ctx._busy_lock.release()
+
+    def test_close_raises_while_busy(self, sd_ctx_factory):
+        # close() during generate() on another thread would free the model under it
+        ctx = self._make_ctx(sd_ctx_factory)
+        assert ctx._busy_lock.acquire(blocking=False)
+        try:
+            with pytest.raises(RuntimeError, match="another thread"):
+                ctx.close()
+            assert ctx.is_valid
+        finally:
+            ctx._busy_lock.release()
+        ctx.close()
+        assert not ctx.is_valid
 
     def test_lock_release_allows_subsequent_acquire(self, sd_ctx_factory):
         """Sanity check: after releasing the busy-lock,
@@ -1478,6 +1623,152 @@ class TestConvertModel:
             convert_model(
                 input_path="/nonexistent/model.safetensors", output_path="/tmp/output.gguf", output_type=SDType.F16
             )
+
+
+VAE_PATH = "models/ae.safetensors"
+
+
+class TestConvertComponents:
+    def test_needs_an_input(self, tmp_path):
+        with pytest.raises(ValueError, match="at least one input"):
+            convert_model(output_path=str(tmp_path / "o.gguf"))
+
+    def test_missing_component_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            convert_model(vae_path=str(tmp_path / "missing.safetensors"), output_path=str(tmp_path / "o.gguf"))
+
+    @pytest.mark.skipif(not os.path.exists(VAE_PATH), reason=f"VAE not found at {VAE_PATH}")
+    @pytest.mark.parametrize("kw", ["input_path", "vae_path"])
+    def test_convert_without_rules(self, tmp_path, kw):
+        # tensor_type_rules=None used to reach sd.cpp as a null C string and segfault
+        out = tmp_path / "o.gguf"
+        convert_model(**{kw: VAE_PATH}, output_path=str(out), output_type=SDType.Q8_0, n_threads=4)
+        assert out.read_bytes()[:4] == b"GGUF"
+
+
+def _imatrix_bytes(entries, n_entries=None):
+    import struct
+
+    out = struct.pack("<i", len(entries) if n_entries is None else n_entries)
+    for name, name_len, nval, values in entries:
+        out += struct.pack("<i", name_len) + name + struct.pack("<ii", 1, nval) + struct.pack(f"<{len(values)}f", *values)
+    return out + struct.pack("<i", 1)
+
+
+class TestCliSamplerParsing:
+    @pytest.mark.parametrize(
+        "sampler,scheduler,expected",
+        [
+            ("euler_a", "karras", (SampleMethod.EULER_A, Scheduler.KARRAS)),
+            ("DPMPP2M", "SGM_UNIFORM", (SampleMethod.DPMPP2M, Scheduler.SGM_UNIFORM)),
+            ("dpm++2m", "sgm_uniform", (SampleMethod.DPMPP2M, Scheduler.SGM_UNIFORM)),
+            ("dpm++2m_sde", "beta", (SampleMethod.DPMPP2M_SDE, Scheduler.BETA)),
+            (None, None, (None, None)),
+        ],
+    )
+    def test_member_and_upstream_names(self, sampler, scheduler, expected):
+        import argparse
+
+        from inferna.sd.__main__ import parse_sampler_scheduler
+
+        assert parse_sampler_scheduler(argparse.Namespace(sampler=sampler, scheduler=scheduler)) == expected
+
+    def test_unknown_exits_and_lists_upstream_names(self, capsys):
+        import argparse
+
+        from inferna.sd.__main__ import parse_sampler_scheduler
+
+        with pytest.raises(SystemExit):
+            parse_sampler_scheduler(argparse.Namespace(sampler="bogus", scheduler=None))
+        out = capsys.readouterr()
+        assert "Unknown sampler: bogus" in out.err
+        assert "dpm++2m" in out.out
+
+
+class TestADetailer:
+    def test_missing_detector_raises(self, tmp_path):
+        from inferna.sd import ADetailer
+
+        with pytest.raises(FileNotFoundError):
+            ADetailer(str(tmp_path / "face_yolov8n.safetensors"))
+
+    @pytest.mark.skipif(not os.path.exists(VAE_PATH), reason=f"{VAE_PATH} not found")
+    def test_non_detector_raises(self):
+        from inferna.sd import ADetailer
+
+        with pytest.raises(RuntimeError, match="Failed to load ADetailer detector"):
+            ADetailer(VAE_PATH)
+
+    @pytest.mark.skipif(
+        not (os.path.exists(DETECTOR_PATH) and os.path.exists(MODEL_PATH)),
+        reason=f"needs {DETECTOR_PATH} and {MODEL_PATH}",
+    )
+    def test_detail(self, sd_ctx_factory):
+        from inferna.sd import ADetailer
+
+        params = SDContextParams()
+        params.model_path = MODEL_PATH
+        ctx = sd_ctx_factory(params)
+        portrait = ctx.generate(
+            prompt="close-up photo of a person's face", width=512, height=512, seed=3, sample_steps=1, cfg_scale=1.0
+        )[0]
+        gen = SDImageGenParams()
+        gen.prompt = "detailed face"
+        with ADetailer(DETECTOR_PATH) as ad:
+            out = ad.detail(
+                ctx,
+                portrait,
+                gen,
+                extra_args={"steps": 1, "cfg_scale": 1.0, "inpaint_width": 512, "inpaint_height": 512},
+            )
+        assert (out.width, out.height) == (portrait.width, portrait.height)
+
+    def test_extra_args_formatting(self):
+        from inferna.sd.stable_diffusion import _ad_args
+
+        assert _ad_args(None) is None
+        assert _ad_args("confidence=0.3") == "confidence=0.3"
+        assert _ad_args({"confidence": 0.3, "merge_masks": True, "sort_by": "area"}) == (
+            "confidence=0.3,merge_masks=true,sort_by=area"
+        )
+
+
+class TestImatrixFile:
+    @pytest.mark.parametrize(
+        "data,why",
+        [
+            (_imatrix_bytes([], n_entries=0), "n_entries"),
+            (_imatrix_bytes([(b"w", -1, 1, [1.0])]), "name length"),
+            (_imatrix_bytes([(b"w", 1, 1 << 30, [1.0])]), "values"),
+            (_imatrix_bytes([(b"w", 1, 1, [1.0])], n_entries=2), "truncated"),
+        ],
+    )
+    def test_malformed_file_raises(self, tmp_path, data, why):
+        path = tmp_path / "im.dat"
+        path.write_bytes(data)
+        with pytest.raises(ValueError, match=why):
+            load_imatrix(str(path))
+
+    def test_save_to_unwritable_path_raises(self, tmp_path):
+        with pytest.raises(OSError):
+            save_imatrix(str(tmp_path / "missing-dir" / "im.dat"))
+
+
+@pytest.mark.skipif(not os.path.exists(MODEL_PATH), reason=f"Model not found at {MODEL_PATH}")
+class TestImatrixCollection:
+    def test_collect_save_load(self, sd_ctx_factory, tmp_path):
+        params = SDContextParams()
+        params.model_path = MODEL_PATH
+        ctx = sd_ctx_factory(params)
+        enable_imatrix_collection()
+        try:
+            ctx.generate(prompt="a red square", width=256, height=256, seed=1, sample_steps=1, cfg_scale=1.0)
+        finally:
+            disable_imatrix_collection()
+        path = tmp_path / "im.dat"
+        save_imatrix(str(path))
+        assert path.stat().st_size > 1000
+        load_imatrix(str(path))
 
 
 class TestConvenienceFunctions:

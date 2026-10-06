@@ -1338,6 +1338,8 @@ ctx.set_val_str("custom.metadata", "updated")
 ctx.write_to_file("modified.gguf")
 ```
 
+`ctx.get_kv_type(key_id)` returns a `GGUF_TYPE_*` constant (`GGUF_TYPE_UINT32`, `GGUF_TYPE_STRING`, ...); `gguf_type_name()` names it (`"u32"`, `"str"`) and returns `None` for an unknown value.
+
 ---
 
 ### JSON Schema to Grammar
@@ -1581,28 +1583,40 @@ server.stop()
 
 ## Multimodal Support
 
-LLAVA and other vision-language models.
+Vision and audio input through llama.cpp's mtmd library: a model plus its multimodal projector (mmproj).
 
 ```python
-from inferna.llama.mtmd.multimodal import (
-    LlavaImageEmbed,
-    load_mmproj,
-    process_image
-)
+import inferna.llama.llama_cpp as cy
+from inferna.llama.mtmd import MtmdBitmap, MtmdContext, MtmdContextParams
 
-# Load multimodal projector
-mmproj = load_mmproj("models/mmproj.gguf")
+model = cy.LlamaModel("models/gemma-4-E4B-it-Q4_K_M.gguf")
+ctx = cy.LlamaContext(model)
+mtmd = MtmdContext("models/mmproj-gemma-4-E4B-it-BF16.gguf", model, MtmdContextParams(n_threads=4))
 
-# Process image
-image_embed = process_image(
-    ctx=ctx,
-    image_path="image.jpg",
-    mmproj=mmproj
-)
-
-# Use in generation
-# Image embeddings are automatically integrated into context
+image = MtmdBitmap.from_file(mtmd, "photo.jpg")
+chunks = mtmd.tokenize(f"Describe this image: {mtmd.media_marker}", [image])
+n_past = mtmd.eval_chunks(ctx, chunks)   # decodes text and image; sample from ctx next
 ```
+
+### `MtmdContext`
+
+| Member | Description |
+|--------|-------------|
+| `MtmdContext(mmproj_path, model, params=None)` | Load a projector for `model` |
+| `tokenize(text, bitmaps)` | Split `text` at each `media_marker` and pair the pieces with `bitmaps`; returns `MtmdInputChunks` |
+| `eval_chunks(llama_ctx, chunks, n_past=0, seq_id=0, n_batch=None, logits_last=True)` | Decode the chunks; returns the new `n_past`. `n_batch` defaults to the context's `n_batch` |
+| `encode_chunk(chunk)`, `get_output_embeddings(n_tokens, n_embd)` | Run the projector on one chunk and read its embeddings |
+| `media_marker` | Marker that `tokenize` replaces, from `MtmdContextParams.media_marker` |
+| `supports_vision`, `supports_audio`, `audio_sample_rate` | Capabilities of the projector |
+| `uses_non_causal`, `uses_mrope` | Attention and position scheme of media tokens |
+| `model_can_chat(llama_ctx)` | False for a TTS-only model (audio output, no chat template) |
+| `close()`, `is_valid` | Free the projector; open flag |
+
+For models with non-causal attention on media (gemma3, and gemma4 apart from E2B/E4B), a media chunk must fit in one batch. `eval_chunks` raises `ValueError` when it exceeds `n_batch` or the context's `n_ubatch`.
+
+`MtmdBitmap` loads media with `from_file(ctx, path)` or `from_buffer(ctx, data)`, or builds it from pixels or samples with `create_image` / `create_audio`.
+
+`inferna.llama.mtmd.multimodal` adds higher-level wrappers: `MultimodalProcessor`, `ImageAnalyzer`, `VisionLanguageChat` and `AudioProcessor`. See `tests/examples/multimodal_example.py`.
 
 ---
 
@@ -1654,6 +1668,8 @@ for i in range(ctx.full_n_segments()):
 | `full_get_segment_t0(i)` | Get start time (centiseconds) |
 | `full_get_segment_t1(i)` | Get end time (centiseconds) |
 | `full_lang_id()` | Get detected language ID |
+| `full_n_vad_segments()`, `full_get_vad_segment_t0/t1(i)` | VAD speech segments (centiseconds) |
+| `get_timings()` | Mean ms per sample/encode/decode/batchd/prompt call |
 | `is_multilingual()` | Check if model supports multiple languages |
 
 ### Audio Requirements
@@ -1961,7 +1977,7 @@ convert_model(
 )
 ```
 
-Raises `FileNotFoundError` if the input is missing, `RuntimeError` on conversion failure.
+Raises `FileNotFoundError` if an input is missing, `RuntimeError` on conversion failure. Keyword-only `clip_l_path`, `clip_g_path`, `t5xxl_path`, `diffusion_model_path` and `n_threads` merge separate component files; see [stable_diffusion.md](stable_diffusion.md#model-conversion), which also covers the imatrix functions.
 
 ### `canny_preprocess()`
 
@@ -2028,7 +2044,7 @@ set_preview_callback(None)
 
 - `IPNDM`, `IPNDM_V`, `LCM`, `DDIM_TRAILING`, `TCD`
 
-- `RES_MULTISTEP`, `RES_2S`, `ER_SDE`
+- `RES_MULTISTEP`, `RES_2S`, `ER_SDE`, `EULER_CFG_PP`, `EULER_A_CFG_PP`, `EULER_GE`, `DPMPP2M_SDE`, `DPMPP2M_SDE_BT`, `LMS`
 
 - `COUNT` (auto-detect sentinel)
 
@@ -2036,27 +2052,35 @@ set_preview_callback(None)
 
 - `DISCRETE`, `KARRAS`, `EXPONENTIAL`, `AYS`, `GITS`
 
-- `SGM_UNIFORM`, `SIMPLE`, `SMOOTHSTEP`, `KL_OPTIMAL`, `LCM`, `BONG_TANGENT`
+- `SGM_UNIFORM`, `SIMPLE`, `SMOOTHSTEP`, `KL_OPTIMAL`, `LCM`, `BONG_TANGENT`, `LTX2`, `LOGIT_NORMAL`, `FLUX2`, `FLUX`, `BETA`, `LLADA_IMAGE`
 
 - `COUNT` (auto-detect sentinel)
 
 **`Prediction`**
 
-- `EPS`, `V`, `EDM_V`, `FLOW`, `FLUX_FLOW`, `FLUX2_FLOW`, `COUNT`
-
-**`SDType`**: Data types for model weights / quantization
-
-- `F32`, `F16`, `BF16`
-
-- `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`
-
-- `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K`
+- `EPS`, `V`, `EDM_V`, `FLOW` (SD3), `FLUX_FLOW`, `SEFI_FLOW`, `MINIT2I_FLOW`, `SENSENOVA_U1_FLOW`
 
 - `COUNT` (auto-detect sentinel)
 
+**`SDType`**: Data types for model weights / quantization
+
+- `F64`, `F32`, `F16`, `BF16`, `F8_E4M3`, `F8_E5M2`
+
+- `I8`, `I16`, `I32`, `I64`
+
+- `Q1_0`, `Q2_0`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`
+
+- `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K`
+
+- `IQ1_S`, `IQ1_M`, `IQ2_XXS`, `IQ2_XS`, `IQ2_S`, `IQ3_XXS`, `IQ3_S`, `IQ4_NL`, `IQ4_XS`
+
+- `TQ1_0`, `TQ2_0`, `MXFP4`, `NVFP4`
+
+- `COUNT` (keep the weights' stored types)
+
 **`RngType`**: `STD_DEFAULT`, `CUDA`, `CPU`
 
-**`LogLevel`**: `DEBUG`, `INFO`, `WARN`, `ERROR`
+**`LogLevel`**: `DEBUG`, `VERBOSE`, `INFO`, `WARN`, `ERROR`
 
 **`PreviewMode`**: `NONE`, `PROJ`, `TAE`, `VAE`
 
@@ -2092,6 +2116,8 @@ print(type_name(SDType.Q4_0))                  # "q4_0"
 print(sample_method_name(SampleMethod.EULER))  # "euler"
 print(scheduler_name(Scheduler.KARRAS))        # "karras"
 ```
+
+Each enum also has `<enum>_from_str()`, the inverse of `<enum>_name()`; see [stable_diffusion.md](stable_diffusion.md#utility-functions).
 
 ### CLI Tool
 

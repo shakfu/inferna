@@ -183,6 +183,9 @@ if ctx.is_valid:
 | `is_valid` | Check if context is valid |
 | `supports_image_generation` | `bool` — model can run `generate()` / txt2img (false for WAN-style video-only models) |
 | `supports_video_generation` | `bool` — model can run `generate_video()` |
+| `model_version` | Detected model family, e.g. `"SDXL"` |
+| `load_control_net(path)` | Load or replace the ControlNet without reloading the model |
+| `unload_control_net()`, `has_control_net` | Drop the ControlNet; whether one is loaded |
 
 ### SDContextParams
 
@@ -397,6 +400,26 @@ for _ in range(2):
     img = upscaler.upscale(img)  # 16x total
 ```
 
+### ADetailer
+
+Detects regions such as faces with a YOLOv8 detector and re-inpaints each one with an `SDContext`. Convert an Ultralytics checkpoint first with stable-diffusion.cpp's `scripts/convert_yolov8_to_safetensors.py`.
+
+```python
+from inferna.sd import ADetailer, SDImage, SDImageGenParams
+
+params = SDImageGenParams()
+params.prompt = "portrait photo"
+params.strength = 0.4
+
+with ADetailer("face_yolov8n.safetensors") as ad:
+    fixed = ad.detail(ctx, SDImage.load("portrait.png"), params,
+                      prompt="[PROMPT], detailed face",
+                      extra_args={"confidence": 0.3, "inpaint_padding": 32})
+fixed.save("portrait-fixed.png")
+```
+
+`prompt` defaults to `params.prompt`. In it, `[SEP]` separates per-region prompts, `[PROMPT]` inserts `params.prompt`, and `[SKIP]` skips a region. `extra_args` takes the keys of stable-diffusion.cpp's `--extra-ad-args`, as a dict or a `"key=value,..."` string.
+
 ## Enums
 
 ### SampleMethod
@@ -417,7 +440,15 @@ Sampling methods for diffusion:
 | `LCM` | Latent Consistency Model |
 | `DDIM_TRAILING` | DDIM trailing |
 | `TCD` | TCD |
+| `RES_MULTISTEP` | `res_multistep` |
+| `RES_2S` | `res_2s` |
 | `ER_SDE` | ER-SDE |
+| `EULER_CFG_PP` | Euler with CFG++ (`euler_cfg_pp`) |
+| `EULER_A_CFG_PP` | Euler ancestral with CFG++ (`euler_a_cfg_pp`) |
+| `EULER_GE` | `euler_ge` |
+| `DPMPP2M_SDE` | DPM++ 2M SDE |
+| `DPMPP2M_SDE_BT` | DPM++ 2M SDE (Brownian tree) |
+| `LMS` | LMS |
 | `COUNT` | Sentinel — auto-resolve per model (default) |
 
 ### Scheduler
@@ -434,7 +465,16 @@ Noise schedulers:
 | `SGM_UNIFORM` | SGM uniform |
 | `SIMPLE` | Simple scheduler |
 | `SMOOTHSTEP` | Smoothstep scheduler |
+| `KL_OPTIMAL` | KL-optimal scheduler |
 | `LCM` | LCM scheduler |
+| `BONG_TANGENT` | Bong tangent scheduler |
+| `LTX2` | LTX-2 scheduler |
+| `LOGIT_NORMAL` | Logit-normal scheduler |
+| `FLUX2` | Flux2 scheduler |
+| `FLUX` | Flux scheduler |
+| `BETA` | Beta scheduler |
+| `LLADA_IMAGE` | `llada_image` |
+| `COUNT` | Sentinel — auto-resolve per model (default) |
 
 ### Prediction
 
@@ -442,27 +482,33 @@ Prediction types:
 
 | Value | Description |
 |-------|-------------|
-| `DEFAULT` | Auto-detect from model |
 | `EPS` | Epsilon prediction |
 | `V` | V-prediction |
 | `EDM_V` | EDM V-prediction |
-| `SD3_FLOW` | SD3 flow matching |
+| `FLOW` | SD3 flow matching (`sd3_flow`) |
 | `FLUX_FLOW` | FLUX flow matching |
-| `FLUX2_FLOW` | FLUX2 flow matching |
+| `SEFI_FLOW` | `sefi_flow` |
+| `MINIT2I_FLOW` | `minit2i_flow` |
+| `SENSENOVA_U1_FLOW` | `sensenova_u1_flow` |
+| `COUNT` | Sentinel — auto-detect from the model (default) |
 
 ### SDType
 
 Data types for quantization:
 
-- Float: `F32`, `F16`, `BF16`
+- Float: `F64`, `F32`, `F16`, `BF16`, `F8_E4M3`, `F8_E5M2`
 
-- 4-bit: `Q4_0`, `Q4_1`, `Q4_K`
+- Integer: `I8`, `I16`, `I32`, `I64`
 
-- 5-bit: `Q5_0`, `Q5_1`, `Q5_K`
+- Legacy quants: `Q1_0`, `Q2_0`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`
 
-- 8-bit: `Q8_0`, `Q8_1`, `Q8_K`
+- K-quants: `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K`
 
-- K-quants: `Q2_K`, `Q3_K`, `Q6_K`
+- I-quants: `IQ1_S`, `IQ1_M`, `IQ2_XXS`, `IQ2_XS`, `IQ2_S`, `IQ3_XXS`, `IQ3_S`, `IQ4_NL`, `IQ4_XS`
+
+- Ternary and FP4: `TQ1_0`, `TQ2_0`, `MXFP4`, `NVFP4`
+
+- `COUNT`: sentinel; as `SDContextParams.wtype` it keeps the weights' stored types (default)
 
 ### LoraApplyMode
 
@@ -563,6 +609,40 @@ convert_model(
     tensor_type_rules="^vae\\.=f16"      # Optional mixed precision
 )
 ```
+
+Separate component files merge into one GGUF. Pass at least one of `input_path`, `diffusion_model_path`, `clip_l_path`, `clip_g_path`, `t5xxl_path`, `vae_path`:
+
+```python
+convert_model(
+    diffusion_model_path="flux1-dev.safetensors",
+    clip_l_path="clip_l.safetensors",
+    t5xxl_path="t5xxl_fp16.safetensors",
+    vae_path="ae.safetensors",
+    output_path="flux1-dev-q4_0.gguf",
+    output_type=SDType.Q4_0,
+    n_threads=8,                        # 0: let stable-diffusion.cpp choose
+)
+```
+
+### Importance matrix
+
+Quantization uses an importance matrix (imatrix) when one is loaded or collected. Collect it by generating with representative prompts:
+
+```python
+from inferna.sd import enable_imatrix_collection, disable_imatrix_collection, save_imatrix, load_imatrix
+
+enable_imatrix_collection()
+for prompt in prompts:
+    ctx.generate(prompt=prompt)
+disable_imatrix_collection()
+save_imatrix("sdxl.imatrix")
+
+# later, in a new process
+load_imatrix("sdxl.imatrix")
+convert_model(input_path="sdxl.safetensors", output_path="sdxl-q4_k.gguf", output_type=SDType.Q4_K)
+```
+
+The imatrix is process-wide and cannot be cleared. stable-diffusion.cpp exits the process when collected activations disagree in size with stored ones, so collect for one model per process and do not load another model's imatrix into it.
 
 ## ControlNet Preprocessing
 
@@ -762,8 +842,8 @@ python -m inferna.sd info
 
 | Option | Description |
 |--------|-------------|
-| `--sampler` | Sampling method |
-| `--scheduler` | Noise scheduler |
+| `--sampler` | Sampling method: enum name (`DPMPP2M`) or stable-diffusion.cpp name (`dpm++2m`) |
+| `--scheduler` | Noise scheduler, named the same two ways |
 | `--eta` | Eta for DDIM/TCD |
 | `--rng` | RNG type (std_default, cuda, cpu) |
 | `--prediction` | Prediction type override |
@@ -820,7 +900,10 @@ from inferna.sd import (
     get_system_info,
     type_name,
     sample_method_name,
-    scheduler_name
+    scheduler_name,
+    sample_method_from_str,
+    version,
+    list_devices,
 )
 
 print(f"CPU cores: {get_num_cores()}")
@@ -828,7 +911,12 @@ print(get_system_info())
 print(type_name(SDType.Q4_0))           # "q4_0"
 print(sample_method_name(SampleMethod.EULER))  # "euler"
 print(scheduler_name(Scheduler.KARRAS))  # "karras"
+print(sample_method_from_str("dpm++2m"))  # SampleMethod.DPMPP2M
+print(version())                         # "master-898-2bb7294+"
+print(list_devices())                    # [("MTL0", "Apple M1"), ("BLAS", "Accelerate"), ("CPU", "Apple M1")]
 ```
+
+Every enum has a `<enum>_name()` and `<enum>_from_str()` pair: `type`, `rng_type`, `sample_method`, `scheduler`, `prediction`, `preview`, `lora_apply_mode`, `hires_upscaler`. Both raise `ValueError` on an unknown value, including `COUNT`.
 
 ## Performance Tips
 

@@ -345,3 +345,96 @@ def test_load_mode_setter_rejects_unknown_value():
         p.load_mode = 99
     p.load_mode = cy.LLAMA_LOAD_MODE_NONE
     assert p.load_mode == cy.LLAMA_LOAD_MODE_NONE
+
+
+class TestBatchExt:
+    def _filled(self, ctx, tokens):
+        b = cy.LlamaBatchExt(ctx)
+        for i, t in enumerate(tokens):
+            assert b.add_token(0, t) == i
+            assert b.set_pos(i, [i])
+        assert b.set_output_logits(len(tokens) - 1)
+        return b
+
+    def test_process_matches_decode(self, model, tokens):
+        ref = _decoded(model, tokens)
+        expected = ref.get_logits_ith(-1)
+        ctx = _ctx(model)
+        b = self._filled(ctx, tokens)
+        ctx.process(cy.LLAMA_PROCESS_TYPE_DECODE, b)
+        assert ctx.get_logits_ith(-1) == pytest.approx(expected, abs=1e-3)
+        assert ctx.memory_seq_pos_max(0) == len(tokens) - 1
+        del b, ctx, ref
+        gc.collect()
+
+    def test_add_errors_raise(self, model):
+        ctx = _ctx(model)
+        b = cy.LlamaBatchExt(ctx)
+        with pytest.raises(ValueError, match="seq_id"):
+            b.add(5)
+        with pytest.raises(ValueError, match="token id"):
+            b.add_token(0, model.n_vocab + 1)
+        for _ in range(ctx.n_batch):
+            b.add(0)
+        with pytest.raises(IndexError, match="full"):
+            b.add(0)
+        b.clear()
+        assert b.add(0) == 0
+        del b, ctx
+        gc.collect()
+
+    def test_setters_return_false_on_bad_input(self, model):
+        np = pytest.importorskip("numpy")
+        ctx = _ctx(model)
+        b = cy.LlamaBatchExt(ctx)
+        idx = b.add_token(0, 1)
+        assert not b.set_pos(idx + 1, [0])
+        assert not b.add_seq(idx, 5)
+        assert not b.set_output_embd(idx + 1)
+        assert not b.set_embd_token(idx, np.zeros(3, dtype=np.float32))
+        assert b.set_embd_token(idx, np.zeros(model.n_embd_inp, dtype=np.float32))
+        assert b.n_pos_per_embd == 1  # Llama 3.2 uses plain RoPE
+        with pytest.raises(ValueError, match="n_pos_per_embd=1"):
+            b.set_pos(idx, [0] * 4)
+        del b, ctx
+        gc.collect()
+
+    def test_rejected_add_blocks_batch_until_clear(self, model, tokens):
+        np = pytest.importorskip("numpy")
+        ctx = _ctx(model)
+        b = cy.LlamaBatchExt(ctx)
+        b.add_token(0, tokens[0])
+        # llama.cpp keeps the entry it rejected, with no token, embedding or position
+        with pytest.raises(ValueError, match="until clear"):
+            b.add_embd(0, np.zeros(3, dtype=np.float32))
+        with pytest.raises(ValueError, match="rejected entry"):
+            b.add_token(0, tokens[0])
+        with pytest.raises(ValueError, match="rejected entry"):
+            ctx.process(cy.LLAMA_PROCESS_TYPE_DECODE, b)
+        b.clear()
+        assert b.add_token(0, tokens[0]) == 0
+        del b, ctx
+        gc.collect()
+
+    def test_lifetime_guards(self, model, tokens):
+        ctx, other = _ctx(model), _ctx(model)
+        b = self._filled(ctx, tokens)
+        with pytest.raises(ValueError, match="different LlamaContext"):
+            other.process(cy.LLAMA_PROCESS_TYPE_DECODE, b)
+        with pytest.raises(ValueError, match="unknown process type"):
+            ctx.process(7, b)
+        b.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            b.add(0)
+        with pytest.raises(RuntimeError, match="closed"):
+            ctx.process(cy.LLAMA_PROCESS_TYPE_DECODE, b)
+        del b, ctx, other
+        gc.collect()
+
+    def test_causal_attn_round_trip(self, model):
+        ctx = _ctx(model)
+        assert ctx.get_causal_attn()
+        ctx.set_causal_attn(False)
+        assert not ctx.get_causal_attn()
+        del ctx
+        gc.collect()

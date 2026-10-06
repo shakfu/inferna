@@ -66,6 +66,7 @@ from .stable_diffusion import (
     SDImageGenParams,
     SDSampleParams,
     Upscaler,
+    ADetailer,
     # Enums
     RngType,
     SampleMethod,
@@ -85,6 +86,10 @@ from .stable_diffusion import (
     # Model utilities
     convert_model,
     canny_preprocess,
+    enable_imatrix_collection,
+    disable_imatrix_collection,
+    load_imatrix,
+    save_imatrix,
     # Backend loading
     ggml_backend_load_all,
     # Utility functions
@@ -93,6 +98,22 @@ from .stable_diffusion import (
     type_name,
     sample_method_name,
     scheduler_name,
+    rng_type_name,
+    prediction_name,
+    preview_name,
+    lora_apply_mode_name,
+    hires_upscaler_name,
+    type_from_str,
+    rng_type_from_str,
+    sample_method_from_str,
+    scheduler_from_str,
+    prediction_from_str,
+    preview_from_str,
+    lora_apply_mode_from_str,
+    hires_upscaler_from_str,
+    version,
+    commit,
+    list_devices,
     # Callback setters
     set_log_callback,
     set_progress_callback,
@@ -109,6 +130,7 @@ __all__ = [
     "SDImageGenParams",
     "SDSampleParams",
     "Upscaler",
+    "ADetailer",
     # Enums
     "RngType",
     "SampleMethod",
@@ -128,6 +150,10 @@ __all__ = [
     # Model utilities
     "convert_model",
     "canny_preprocess",
+    "enable_imatrix_collection",
+    "disable_imatrix_collection",
+    "load_imatrix",
+    "save_imatrix",
     # Backend loading
     "ggml_backend_load_all",
     # Utility functions
@@ -136,6 +162,22 @@ __all__ = [
     "type_name",
     "sample_method_name",
     "scheduler_name",
+    "rng_type_name",
+    "prediction_name",
+    "preview_name",
+    "lora_apply_mode_name",
+    "hires_upscaler_name",
+    "type_from_str",
+    "rng_type_from_str",
+    "sample_method_from_str",
+    "scheduler_from_str",
+    "prediction_from_str",
+    "preview_from_str",
+    "lora_apply_mode_from_str",
+    "hires_upscaler_from_str",
+    "version",
+    "commit",
+    "list_devices",
     # Callback setters
     "set_log_callback",
     "set_progress_callback",
