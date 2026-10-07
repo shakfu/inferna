@@ -303,6 +303,33 @@ WHEEL_REPAIR_WIN_INCLUDES: dict[str, list[str]] = {
 WHEEL_REPAIR_WIN_EXCLUDES: dict[str, list[str]] = {
     "cuda": ["nvcuda.dll", "cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
 }
+# delvewheel mangles bundled non-system DLLs to hash-suffixed names and
+# rewrites the import tables of everything in the dependency graph to match.
+# Backend plugins arrive via --include and are NOT in that graph -- nothing in
+# the wheel imports them, that is why --include is needed -- so their own
+# import tables are never rewritten and they keep importing the pre-mangling
+# names (e.g. ggml-vulkan.dll -> ggml-base.dll, which no longer exists). Pin
+# the project libs to their real names so an --include'd plugin can resolve
+# them.
+#
+# Applied unconditionally, not per-backend: the CPU wheel static-links ggml
+# into the extensions and bundles none of these, so the flag is a no-op there,
+# while one shared list means a future --include'd plugin cannot reintroduce
+# the bug. Confirmed broken in the published 0.6.1 vulkan Windows wheel.
+#
+# msvcp140.dll is here for the same reason: the plugins import it by its real
+# name, and the mangled copy is invisible to them, so on a machine without the
+# VC++ redistributable they would not load. Keeping the real name gives up
+# delvewheel's isolation -- if another package has already loaded an older
+# msvcp140.dll into the process, the loader reuses that one instead.
+WHEEL_REPAIR_WIN_NO_MANGLE: list[str] = [
+    "ggml.dll",
+    "ggml-base.dll",
+    "ggml-cpu.dll",
+    "llama.dll",
+    "mtmd.dll",
+    "msvcp140.dll",
+]
 if PLATFORM == "Darwin":
     # Source of truth: matches pyproject.toml [tool.cibuildwheel.macos]
     # environment.MACOSX_DEPLOYMENT_TARGET and Makefile.
@@ -3701,6 +3728,7 @@ class Application(ShellCmd, metaclass=MetaCommander):
         darwin_base = WHEEL_REPAIR_DARWIN_BASE
         win_includes = WHEEL_REPAIR_WIN_INCLUDES
         win_excludes = WHEEL_REPAIR_WIN_EXCLUDES
+        win_no_mangle = WHEEL_REPAIR_WIN_NO_MANGLE
 
         backend = args.backend or ""
 
@@ -3811,6 +3839,8 @@ class Application(ShellCmd, metaclass=MetaCommander):
                     cmd += ["--include", inc]
                 for exc in win_excludes.get(backend, []):
                     cmd += ["--no-dll", exc]
+                if win_no_mangle:
+                    cmd += ["--no-mangle", ";".join(win_no_mangle)]
                 cmd.append(str(whl))
                 self.log.info(" ".join(cmd))
                 subprocess.check_call(cmd)

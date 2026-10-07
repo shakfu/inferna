@@ -1,4 +1,4 @@
-"""Tests for `scripts/audit_wheel.py`'s backend detection.
+"""Tests for `scripts/audit_wheel.py`: backend detection and the Windows PE audit.
 
 The audit step runs on every built GPU wheel and decides which external
 dependencies are allowed to remain runtime-supplied by looking up
@@ -16,6 +16,7 @@ failed -- blaming the wheel for a gap in the mapping.
 
 import fnmatch
 import importlib.util
+import struct
 import sys
 from pathlib import Path
 
@@ -126,3 +127,109 @@ def test_exclude_list_key_sets_agree():
     backend would be rejected as unknown.
     """
     assert set(manage.WHEEL_REPAIR_EXCLUDES_LINUX) == set(manage.WHEEL_REPAIR_EXCLUDES_DARWIN)
+
+
+# ---------------------------------------------------------------------------
+# Windows: PE import audit
+
+
+def _make_pe(imports=(), delay_imports=()) -> bytes:
+    """Build a minimal PE32+ image whose import tables name the given DLLs."""
+    raw_ptr, section_rva = 0x200, 0x1000
+    imp_size = 20 * (len(imports) + 1)
+    delay_size = 32 * (len(delay_imports) + 1)
+    names_off = imp_size + delay_size
+    body = bytearray(names_off)
+    for i, name in enumerate([*imports, *delay_imports]):
+        rva = section_rva + len(body)
+        body += name.encode() + b"\0"
+        if i < len(imports):
+            struct.pack_into("<I", body, 20 * i + 12, rva)
+        else:
+            struct.pack_into("<I", body, imp_size + 32 * (i - len(imports)) + 4, rva)
+
+    head = bytearray(raw_ptr)
+    head[0:2] = b"MZ"
+    struct.pack_into("<I", head, 0x3C, 0x40)
+    head[0x40:0x44] = b"PE\0\0"
+    opt_size = 240
+    struct.pack_into("<HHIIIHH", head, 0x44, 0x8664, 1, 0, 0, 0, opt_size, 0)
+    opt = 0x58
+    struct.pack_into("<H", head, opt, 0x20B)
+    struct.pack_into("<I", head, opt + 108, 16)
+    dirs = opt + 112
+    if imports:
+        struct.pack_into("<II", head, dirs + 8 * 1, section_rva, imp_size)
+    if delay_imports:
+        struct.pack_into("<II", head, dirs + 8 * 13, section_rva + imp_size, delay_size)
+    section = opt + opt_size
+    head[section : section + 8] = b".idata\0\0"
+    struct.pack_into("<IIII", head, section + 8, len(body), section_rva, len(body), raw_ptr)
+    return bytes(head + body)
+
+
+def test_pe_imports_reads_import_and_delay_import_tables(tmp_path):
+    dll = tmp_path / "x.dll"
+    dll.write_bytes(_make_pe(["KERNEL32.dll", "ggml-base.dll"], ["nvcuda.dll"]))
+    assert audit_wheel._pe_imports(dll) == {"KERNEL32.dll", "ggml-base.dll", "nvcuda.dll"}
+
+
+def test_pe_imports_ignores_non_pe(tmp_path):
+    junk = tmp_path / "junk.dll"
+    junk.write_bytes(b"not a PE file at all")
+    assert audit_wheel._pe_imports(junk) == set()
+
+
+def _vulkan_wheel(root: Path, *, mangled: bool) -> None:
+    """Lay out a repaired inferna_vulkan wheel: a traced extension plus the
+    --include'd ggml-vulkan.dll plugin, which delvewheel never rewrites."""
+    libs = root / "inferna_vulkan.libs"
+    libs.mkdir(parents=True)
+    base = "ggml-base-11e962b8f57276b0c0ecd825ee9db2e1.dll" if mangled else "ggml-base.dll"
+    (libs / base).write_bytes(_make_pe(["KERNEL32.dll", "VCRUNTIME140.dll"]))
+    (root / "inferna").mkdir()
+    (root / "inferna" / "_llama_native.pyd").write_bytes(
+        _make_pe([base, "KERNEL32.dll", "python3.dll", "api-ms-win-crt-heap-l1-1-0.dll"])
+    )
+    (libs / "ggml-vulkan.dll").write_bytes(_make_pe(["ggml-base.dll", "vulkan-1.dll", "KERNEL32.dll"]))
+
+
+def test_windows_flags_plugin_importing_mangled_name(tmp_path):
+    """The 0.6.1 vulkan wheel: ggml-base.dll was renamed, the plugin was not
+    rewritten, and Windows refused to load ggml-vulkan.dll."""
+    _vulkan_wheel(tmp_path, mangled=True)
+    unexpected = audit_wheel._audit_windows(None, "vulkan", tmp_path)
+    assert [lib for lib, _ in unexpected] == ["ggml-base.dll"]
+    assert unexpected[0][1] == {str(Path("inferna_vulkan.libs") / "ggml-vulkan.dll")}
+
+
+def test_windows_passes_with_project_libs_unmangled(tmp_path):
+    _vulkan_wheel(tmp_path, mangled=False)
+    assert audit_wheel._audit_windows(None, "vulkan", tmp_path) == []
+
+
+def test_windows_driver_dll_only_allowed_for_its_backend(tmp_path, monkeypatch):
+    # A host with the Vulkan driver has vulkan-1.dll in System32, which would
+    # pass the import as a system DLL; point the lookup at an empty dir.
+    monkeypatch.setenv("SystemRoot", str(tmp_path / "Windows"))
+    _vulkan_wheel(tmp_path, mangled=False)
+    unexpected = audit_wheel._audit_windows(None, "cuda", tmp_path)
+    assert [lib for lib, _ in unexpected] == ["vulkan-1.dll"]
+
+
+def test_windows_flags_msvc_redist_even_if_installed(tmp_path):
+    """A dev box has MSVCP140.dll in System32; a user's machine may not."""
+    (tmp_path / "plugin.dll").write_bytes(_make_pe(["MSVCP140.dll", "VCRUNTIME140_1.dll"]))
+    unexpected = audit_wheel._audit_windows(None, "", tmp_path)
+    assert [lib for lib, _ in unexpected] == ["MSVCP140.dll"]
+
+
+def test_no_mangle_covers_what_backend_plugins_import():
+    """Every project lib a ggml backend plugin links against must keep its
+    real name, or the --include'd plugin cannot resolve it."""
+    no_mangle = {n.lower() for n in manage.WHEEL_REPAIR_WIN_NO_MANGLE}
+    assert {"ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "msvcp140.dll"} <= no_mangle
+
+
+def test_windows_driver_dll_keys_are_backends():
+    assert set(audit_wheel.WINDOWS_DRIVER_DLLS) <= set(manage.WHEEL_REPAIR_EXCLUDES_LINUX)

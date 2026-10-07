@@ -24,13 +24,25 @@ delocate bundles), lives under ``/usr/lib/`` or ``/System/`` (OS-supplied),
 or contains a substring from ``WHEEL_REPAIR_EXCLUDES_DARWIN[<backend>]``
 (delocate matches by substring, not glob).
 
+Windows: walks every ``*.dll``/``*.pyd`` and reads its PE import and
+delay-import tables directly (no pefile/dumpbin needed). An imported DLL
+is acceptable if (a) a file of exactly that name is in the wheel, (b) it
+is a Windows system DLL (``api-ms-win-*``, a core OS DLL, or -- when
+auditing on Windows -- present in System32 and not a Visual C++
+redistributable), (c) the interpreter supplies it (``python3*.dll``,
+``vcruntime140*.dll``), or (d) it is a driver runtime the backend expects
+(``WINDOWS_DRIVER_DLLS`` here, plus ``WHEEL_REPAIR_WIN_EXCLUDES[<backend>]``).
+Rule (a) deliberately ignores delvewheel's ``-<hash>.dll`` suffix: a
+plugin delvewheel never traced keeps importing pre-rename names that no
+longer exist, which is exactly the failure this catches.
+
 Backend defaults to whatever appears between the first ``_`` and the
 ``-<version>`` in the wheel filename (``cyllama_sycl-...`` -> ``sycl``;
 ``inferna-0.1.6-...`` -> no backend, treated as CPU/base build).
 
 Exit codes:
-    0 — no unexpected NEEDED entries
-    1 — at least one unexpected NEEDED entry was found
+    0 — no unexpected NEEDED entries / imports
+    1 — at least one unexpected NEEDED entry / import was found
     2 — usage / tooling error (e.g. no readelf available)
 
 Example::
@@ -43,8 +55,10 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -247,6 +261,172 @@ def _dylib_install_names(path: Path, otool: str) -> set[str]:
     return set(_DYLIB_LINE_RE.findall(out))
 
 
+_PE_IMPORT_DIR = 1
+_PE_DELAY_IMPORT_DIR = 13
+
+
+def _pe_imports(path: Path) -> set[str]:
+    """Return the DLL names in a PE file's import and delay-import tables.
+
+    Parsed directly from the headers so the audit needs neither pefile nor
+    dumpbin. Returns an empty set for anything that is not a well-formed PE.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return set()
+    try:
+        if data[:2] != b"MZ":
+            return set()
+        (pe,) = struct.unpack_from("<I", data, 0x3C)
+        if data[pe : pe + 4] != b"PE\0\0":
+            return set()
+        n_sections, _, _, _, opt_size = struct.unpack_from("<HIIIH", data, pe + 6)
+        opt = pe + 24
+        (magic,) = struct.unpack_from("<H", data, opt)
+        # Data directories follow NumberOfRvaAndSizes, whose offset differs
+        # between PE32 and PE32+.
+        n_dirs_off = {0x10B: 92, 0x20B: 108}.get(magic)
+        if n_dirs_off is None:
+            return set()
+        (n_dirs,) = struct.unpack_from("<I", data, opt + n_dirs_off)
+        dirs = opt + n_dirs_off + 4
+        sections = []
+        for i in range(n_sections):
+            off = opt + opt_size + 40 * i
+            vsize, vaddr, rawsize, rawptr = struct.unpack_from("<IIII", data, off + 8)
+            sections.append((vaddr, max(vsize, rawsize), rawptr))
+
+        def file_offset(rva: int) -> int | None:
+            for vaddr, size, rawptr in sections:
+                if vaddr <= rva < vaddr + size:
+                    return rawptr + rva - vaddr
+            return None
+
+        def c_string(rva: int) -> str | None:
+            off = file_offset(rva)
+            if off is None:
+                return None
+            end = data.find(b"\0", off)
+            return data[off:end].decode("ascii", "replace") if end != -1 else None
+
+        names: set[str] = set()
+        # (directory index, descriptor size, offset of the DLL-name RVA)
+        for index, desc_size, name_field in ((_PE_IMPORT_DIR, 20, 12), (_PE_DELAY_IMPORT_DIR, 32, 4)):
+            if index >= n_dirs:
+                continue
+            rva, size = struct.unpack_from("<II", data, dirs + 8 * index)
+            off = file_offset(rva) if rva and size else None
+            if off is None:
+                continue
+            while off + desc_size <= len(data):
+                desc = data[off : off + desc_size]
+                if desc == b"\0" * desc_size:
+                    break
+                (name_rva,) = struct.unpack_from("<I", desc, name_field)
+                name = c_string(name_rva)
+                if name:
+                    names.add(name)
+                off += desc_size
+        return names
+    except struct.error:
+        return set()
+
+
+# Core OS DLLs present on every supported Windows install. Backstops the
+# System32 lookup below, which is only possible when auditing on Windows.
+WINDOWS_SYSTEM_DLLS = frozenset(
+    {
+        "advapi32.dll",
+        "bcrypt.dll",
+        "cfgmgr32.dll",
+        "comctl32.dll",
+        "crypt32.dll",
+        "d3d12.dll",
+        "dbghelp.dll",
+        "dxgi.dll",
+        "gdi32.dll",
+        "iphlpapi.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "ole32.dll",
+        "oleaut32.dll",
+        "powrprof.dll",
+        "psapi.dll",
+        "rpcrt4.dll",
+        "secur32.dll",
+        "setupapi.dll",
+        "shell32.dll",
+        "shlwapi.dll",
+        "ucrtbase.dll",
+        "user32.dll",
+        "userenv.dll",
+        "version.dll",
+        "winmm.dll",
+        "ws2_32.dll",
+    }
+)
+
+# Visual C++ redistributables. A dev box or CI runner usually has them in
+# System32, but an end user's machine need not, so finding one there proves
+# nothing: delvewheel must bundle them, and every import must name the
+# bundled copy. vcruntime140*.dll is the exception -- the interpreter ships
+# it and has already loaded it.
+_MSVC_REDIST_RE = re.compile(r"^(msvcp|vcomp|concrt|vccorlib)\d+(_\w+)?\.dll$")
+_PYTHON_SUPPLIED_RE = re.compile(r"^(python3\d*|vcruntime140(_\d+)?)\.dll$")
+
+# Supplied by the GPU driver, never bundled: delvewheel finds these in
+# System32 and leaves them external without being told to. Backend-specific
+# runtimes that do need an explicit `--no-dll` live in
+# manage.WHEEL_REPAIR_WIN_EXCLUDES and are allowed alongside these.
+WINDOWS_DRIVER_DLLS: dict[str, list[str]] = {
+    "vulkan": ["vulkan-1.dll"],
+    "cuda": ["nvcuda.dll"],
+}
+
+
+def _is_windows_system_dll(name: str) -> bool:
+    lower = name.lower()
+    if lower.startswith(("api-ms-win-", "ext-ms-")) or lower in WINDOWS_SYSTEM_DLLS:
+        return True
+    if _MSVC_REDIST_RE.match(lower) or sys.platform != "win32":
+        return False
+    system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    return (system32 / name).is_file()
+
+
+def _audit_windows(wheel: Path, backend: str, root: Path) -> list[tuple[str, set[str]]]:
+    """Return [(imported_dll, set_of_importers)] for every unresolvable import.
+
+    delvewheel renames each bundled DLL to `<name>-<hash>.dll` and rewrites the
+    import tables of every binary it traced to match. A binary it did not
+    trace -- a ggml backend plugin forced in with `--include`, which nothing in
+    the wheel imports -- keeps the original names, and Windows refuses to load
+    it once those names are gone. So rather than trust hash suffixes, check
+    that each import names a file that is actually in the wheel.
+    """
+    allowed = {
+        n.lower() for n in manage.WHEEL_REPAIR_WIN_EXCLUDES.get(backend, []) + WINDOWS_DRIVER_DLLS.get(backend, [])
+    }
+    binaries = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in (".dll", ".pyd"))
+    bundled = {p.name.lower() for p in binaries}
+
+    refs: dict[str, set[str]] = {}
+    for path in binaries:
+        for name in _pe_imports(path):
+            refs.setdefault(name, set()).add(str(path.relative_to(root)))
+
+    unexpected: list[tuple[str, set[str]]] = []
+    for name in sorted(refs, key=str.lower):
+        lower = name.lower()
+        if lower in bundled or lower in allowed:
+            continue
+        if _PYTHON_SUPPLIED_RE.match(lower) or _is_windows_system_dll(name):
+            continue
+        unexpected.append((name, refs[name]))
+    return unexpected
+
+
 def _audit_darwin(wheel: Path, backend: str, root: Path) -> list[tuple[str, set[str]]]:
     otool = _find_otool()
     excludes = manage.WHEEL_REPAIR_EXCLUDES_DARWIN.get(backend, manage.WHEEL_REPAIR_DARWIN_BASE)
@@ -327,11 +507,8 @@ def main(argv: list[str] | None = None) -> int:
             unexpected = _audit_darwin(wheel, backend, root)
             exclude_field = "WHEEL_REPAIR_EXCLUDES_DARWIN"
         else:
-            # Windows would need pefile / dumpbin to read PE imports; the
-            # delvewheel exclude list is short enough that a misconfiguration
-            # is usually caught by the build itself. Treat as a no-op.
-            print(f"Windows audit not implemented; nothing to check for {wheel.name}.")
-            return 0
+            unexpected = _audit_windows(wheel, backend, root)
+            exclude_field = "WHEEL_REPAIR_WIN_EXCLUDES"
 
     if not unexpected:
         print(

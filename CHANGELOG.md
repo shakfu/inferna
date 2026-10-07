@@ -24,6 +24,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 We really should be releasing this as a minor version bump to 0.7.0  but we have decided to track llama.cpp releases so this time is maybe ok to make a mistake.
 
+### Added
+
+- **`scripts/audit_wheel.py` now audits Windows wheels.** It reads the import and delay-import tables of every `.dll`/`.pyd` in the wheel directly from the PE headers, so it needs neither pefile nor dumpbin. Each imported DLL must be one of:
+
+  - a file of exactly that name in the wheel;
+  - a Windows system DLL;
+  - `python3*.dll` or `vcruntime140*.dll`, which the interpreter supplies;
+  - a driver runtime the backend expects (`vulkan-1.dll` for vulkan, `nvcuda.dll` plus `WHEEL_REPAIR_WIN_EXCLUDES` for cuda).
+
+  It ignores delvewheel's `-<hash>.dll` suffixes on purpose, because a plugin delvewheel never traced keeps importing names that no longer exist. Visual C++ redistributables (`msvcp140*`, `vcomp140*`, ...) never count as system DLLs, even when present in System32: a dev box or CI runner has them, but a user's machine need not. Before this the Windows path printed "not implemented" and exited 0. It already runs in `_gpu-build-vulkan-windows.yml` and `_gpu-build-cuda-windows.yml`, so it now fails the job before upload. Covered by new tests in `tests/test_audit_wheel.py`, which build minimal PE images in memory. Run against the published 0.6.1 vulkan wheel, it reports both bugs below.
+
+### Fixed
+
+- **The Windows vulkan wheel could not load its Vulkan backend.** delvewheel renames the DLLs it bundles to hash-suffixed names and rewrites the imports of every binary it traces. `ggml-vulkan.dll` is added with `--include` because nothing in the wheel links to it, so delvewheel never rewrote its imports. In 0.6.1 it still imported `ggml-base.dll`, which the wheel ships only as `ggml-base-11e962b8....dll`, so ggml could not load it:
+
+  ```text
+  load_backend: failed to load ...\inferna_vulkan.libs\ggml-vulkan.dll:
+  ```
+
+  Every "vulkan" run silently fell back to the CPU backend. `wheel_repair` now passes `--no-mangle` for `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`, `llama.dll` and `mtmd.dll` (`WHEEL_REPAIR_WIN_NO_MANGLE` in `scripts/manage.py`), so an `--include`d plugin finds them under their real names. This is the fix cyllama made after its 0.4.2 wheels. The cuda wheel adds `ggml-cuda.dll` the same way and is likely affected too; it has not been checked.
+
+- **`ggml-vulkan.dll` imported the C++ runtime under a name the wheel does not ship.** It imports `MSVCP140.dll`, but delvewheel bundles only `msvcp140-<hash>.dll`. It loaded anyway on any machine with the Visual C++ redistributable in System32, so neither builds nor tests noticed; on a machine without it, the backend would not load even with the fix above. `msvcp140.dll` is now in the `--no-mangle` list too. That gives up some of delvewheel's isolation: if another package has already loaded an older `msvcp140.dll` into the process, the loader reuses it.
+
 ## [0.6.1]
 
 ### Added
