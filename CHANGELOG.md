@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+## [0.6.1]
+
 ### Added
 
 - **Decision models (`inferna.llama.decision`)** answer llama.cpp's `/v1/systemone` requests in-process: typed `choice`, `score` and `noul` questions, each scored in one forward pass. `DecisionModel(path).answer(request)` supports `laya` (also Julia-1), `lev` and `kev`; `PythonServer` and `EmbeddedServer` serve `POST /v1/systemone` for such models. Ported from cyllama. Answers match upstream `llama-server` b11429 on the same machine to 1e-5 for all three types.
@@ -110,7 +112,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - **TTS vocoder output could contain values near 1e18.** `irfft` took its transform length from its input. A WavTokenizer row is 1282 floats, so it ran a 1282-point transform that read 1284 floats, two past the end of the buffer. Whatever lay there entered every frame: usually a denormal, once about 1e18, which failed `test_tts_vocoder.py` only on some heap layouts. Frames were also 1282 samples instead of `n_fft = 1280`. `irfft(inp_cplx, n)` now takes the length explicitly and raises `ValueError` on an input shorter than the `2 * (n // 2 + 1)` floats it reads. Direct callers of `irfft` must pass `n`.
 
 - **`LlamaContext.encode` raises on an aborted encode.** It raised only on negative return codes, but `llama_encode` returns 2 when an abort callback stops it, leaving the output buffer from the previous call. Code 2 now raises `InterruptedError` and any other non-zero code `RuntimeError`.
-
 
 ## [0.6.0]
 
