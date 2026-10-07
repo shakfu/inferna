@@ -214,7 +214,8 @@ def test_env_run_tees_stderr_when_capturing(rwt, tmp_path, capfd):
     script = "import sys; print('out'); sys.stderr.write('err-line\\n'); sys.exit(3)"
     env.capture = bytearray()
     assert env.run([sys.executable, "-c", script]) == 3
-    assert bytes(env.capture) == b"err-line\n"
+    # The tee is byte-faithful; a text-mode child writes CRLF on Windows.
+    assert bytes(env.capture).splitlines() == [b"err-line"]
     seen = capfd.readouterr()
     assert "err-line" in seen.err and "out" in seen.out
     env.capture = None
