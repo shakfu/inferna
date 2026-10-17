@@ -279,6 +279,8 @@ WHEEL_REPAIR_EXCLUDES_LINUX: dict[str, list[str]] = {
         # Intel DPC++ compiler random-number runtime, typically pulled
         # in transitively alongside libsvml/libimf.
         "libirng.so",
+        # oneDNN, linked by ggml-sycl for flash attention and GEMM.
+        "libdnnl.so.3",
     ],
     "opencl": ["libOpenCL.so.1", "libgomp.so.1"],
     "metal": [],
@@ -3476,7 +3478,11 @@ class Application(ShellCmd, metaclass=MetaCommander):
                 ],
                 ["dnf", "config-manager", "--add-repo", "https://yum.repos.intel.com/oneapi"],
             ],
-            "packages": ["intel-oneapi-dpcpp-cpp-2025.3", "intel-oneapi-mkl-devel-2025.3"],
+            "packages": [
+                "intel-oneapi-dpcpp-cpp-2025.3",
+                "intel-oneapi-mkl-devel-2025.3",
+                "intel-oneapi-dnnl-devel-2025.3",
+            ],
             "post_cmds": [],
         },
         "vulkan": {
