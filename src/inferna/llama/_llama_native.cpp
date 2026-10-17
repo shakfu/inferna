@@ -1313,6 +1313,7 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaContextParamsW, uint32_t, yarn_orig_ctx, "yarn_orig_ctx")
         PARAM_VAL(LlamaContextParamsW, int,  type_k,            "type_k")
         PARAM_VAL(LlamaContextParamsW, int,  type_v,            "type_v")
+        PARAM_VAL(LlamaContextParamsW, size_t, moe_cache_size,  "moe_cache_size")
         PARAM_VAL(LlamaContextParamsW, bool, embeddings,        "embeddings")
         PARAM_VAL(LlamaContextParamsW, bool, offload_kqv,       "offload_kqv")
         PARAM_VAL(LlamaContextParamsW, bool, no_perf,           "no_perf")
@@ -2610,6 +2611,8 @@ NB_MODULE(_llama_native, m) {
             out["n_p_eval"]    = d.n_p_eval;
             out["n_eval"]      = d.n_eval;
             out["n_reused"]    = d.n_reused;
+            out["n_reallocs_same"] = d.n_reallocs_same;
+            out["n_reallocs_diff"] = d.n_reallocs_diff;
             return out;
         })
         .def("print_perf_data", [](LlamaContextW& s){ s.ensure_valid(); llama_perf_context_print(s.ptr); })

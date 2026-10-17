@@ -151,6 +151,7 @@ void register_enums(nb::module_& m) {
     EXPORT(LLAMA_VOCAB_TYPE_RWKV);
     EXPORT(LLAMA_VOCAB_TYPE_PLAMO2);
     EXPORT(LLAMA_VOCAB_TYPE_TEST);
+    EXPORT(LLAMA_VOCAB_TYPE_PLAMO3);
 
     // -------- llama RoPE type --------
     EXPORT(LLAMA_ROPE_TYPE_NONE);

@@ -22,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
-We really should be releasing this as a minor version bump to 0.7.0  but we have decided to track llama.cpp releases so this time is maybe ok to make a mistake.
+## [0.7.0]
 
 ### Added
 
@@ -34,6 +34,20 @@ We really should be releasing this as a minor version bump to 0.7.0  but we have
   - a driver runtime the backend expects (`vulkan-1.dll` for vulkan, `nvcuda.dll` plus `WHEEL_REPAIR_WIN_EXCLUDES` for cuda).
 
   It ignores delvewheel's `-<hash>.dll` suffixes on purpose, because a plugin delvewheel never traced keeps importing names that no longer exist. Visual C++ redistributables (`msvcp140*`, `vcomp140*`, ...) never count as system DLLs, even when present in System32: a dev box or CI runner has them, but a user's machine need not. Before this the Windows path printed "not implemented" and exited 0. It already runs in `_gpu-build-vulkan-windows.yml` and `_gpu-build-cuda-windows.yml`, so it now fails the job before upload. Covered by new tests in `tests/test_audit_wheel.py`, which build minimal PE images in memory. Run against the published 0.6.1 vulkan wheel, it reports both bugs below.
+
+- **Decision models: `score_bias` and four more types.** Ported from cyllama 0.7.0. `DecisionModel` reads `<arch>.decision.score_bias.<n_levels>.<level>` and adds it to the level's score before the softmax, as upstream does. New types:
+  - `pplx-decider` and `vllm-d3` use lev's label tokens.
+  - `vllm-d3` also accepts a null `state` and a missing `instructions`, returns non-text score legends as canonical JSON, and computes confidence from entropy.
+  - `lfm2-d1` takes the maximum logit over each option's label tokens.
+  - `lfm2-d1-omni` reads laya-style embedding rows from a prompt cut to per-piece token budgets.
+
+  All match upstream `llama-server` b11669 to 1e-5: d1-omni on `d1-omni-600M-Q8_0.gguf`, the others on synthetic models. `vllm-decision2`, like `clef`, needs `llama_batch_ext_set_decision_order`, which is not in `llama.h`. Requests with images or audio now raise `NotImplementedError` (501 from the servers) instead of being answered without them.
+
+### Changed
+
+- **`DecisionModel(cache_prompt=True)` reuses the KV prefix of the previous prompt, as `llama-server` does.** Upstream keeps the prefix a decision prompt shares with the slot's last prompt, across requests too, so its answers depend on earlier questions. inferna evaluated every prompt from the start and could not match that. `cache_prompt=False` keeps the old behaviour, where the same request always gets the same answer.
+
+- **llama.cpp `b11429` -> `b11669` (`v0.7.0`).** New `llama.h` symbols are bound: `LLAMA_VOCAB_TYPE_PLAMO3`, `LlamaContextParams.moe_cache_size`, and the `n_reallocs_same`/`n_reallocs_diff` counters in `get_perf_data()`. Upstream modern-bert now uses exact erf GELU, so laya answers shift by up to 0.034. `REFERENCE["laya"]` in `tests/test_decision.py` is re-pinned from upstream b11669, as in cyllama.
 
 ### Fixed
 
