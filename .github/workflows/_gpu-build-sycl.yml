@@ -111,7 +111,7 @@ jobs:
             CC=icx
             CXX=icpx
             PATH=/opt/intel/oneapi/compiler/latest/bin:$PATH
-            LD_LIBRARY_PATH=/opt/intel/oneapi/compiler/latest/lib:/opt/intel/oneapi/mkl/latest/lib:/opt/intel/oneapi/dnnl/latest/lib:$LD_LIBRARY_PATH
+            LD_LIBRARY_PATH=/opt/intel/oneapi/compiler/latest/lib:/opt/intel/oneapi/mkl/latest/lib:$LD_LIBRARY_PATH
             CFLAGS=-s
             CXXFLAGS=-s
             CCACHE_DIR=/project/.ccache
