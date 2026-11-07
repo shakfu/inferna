@@ -588,6 +588,12 @@ def test_media_marker_and_model_can_chat():
     default = MtmdContext(str(VLM_MMPROJ), model, MtmdContextParams(n_threads=4))
     assert default.media_marker == get_default_media_marker()
     assert default.model_can_chat(ctx)  # has a chat template and no audio generator
+    caps = default.capabilities
+    assert set(caps) == {"chat", "vision", "audio", "video", "audio_stream", "text_gen", "audio_gen", "audio_gen_spk_ref"}
+    assert all(type(v) is bool for v in caps.values())
+    assert caps["chat"] and caps["vision"] and caps["text_gen"] and not caps["audio_gen"]
+    assert caps["audio"] == default.supports_audio
+    assert caps["video"] in (False, caps["vision"])  # video needs vision and the MTMD_VIDEO build option
     custom = MtmdContext(str(VLM_MMPROJ), model, MtmdContextParams(n_threads=4, media_marker="<pic>"))
     assert custom.media_marker == "<pic>"
     del custom, default, ctx, model
@@ -612,6 +618,8 @@ def test_tts_only_model_cannot_chat():
     ctx = cy.LlamaContext(model, cy.LlamaContextParams(), verbose=False)
     mtmd = MtmdContext(str(TTS_MMPROJ), model, MtmdContextParams(n_threads=4))
     assert not mtmd.model_can_chat(ctx)
+    caps = mtmd.capabilities
+    assert caps["audio_gen"] and not caps["chat"] and not caps["vision"]
     del mtmd, ctx, model
     gc.collect()
 

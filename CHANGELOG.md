@@ -22,7 +22,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **`MtmdContext.capabilities`**: a dict of the model/mmproj pairing's input, output and chat capabilities, from upstream `mtmd_helper_get_capabilities()`. `model_can_chat()` now uses it; upstream deprecated the function it called in `b11960`.
+
+### Changed
+
+- **llama.cpp bumped to `b11960`.** The new realtime audio-stream, audio-generation state and video-template API is recorded as unwrapped in `tests/test_llama_api_coverage.py`.
+
 ### Fixed
+
+- **`LlamaServer` did not find a binary built by `make llama-server`**, which writes `build/llama-server/bin/llama-server`, a path auto-detection did not search. Wheels do not ship the binary; the docstring now says so.
 
 - **SYCL wheel build failed after the llama.cpp bump to `b11669`.** Upstream now aborts CMake when oneDNN is missing and `GGML_SYCL_DNN=ON` (the default); it used to fall back to the slower MKL path. CI now installs `intel-oneapi-dnnl-devel-2025.3` rather than passing `-DGGML_SYCL_DNN=OFF`, which upstream reports costs 20-40% prefill on long prompts. `libdnnl.so.3` is not vendored, so SYCL hosts must also install `intel-oneapi-dnnl-2025.3`.
 

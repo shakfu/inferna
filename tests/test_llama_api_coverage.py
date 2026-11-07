@@ -34,6 +34,7 @@ HEADERS = {
 _MTMD_BATCH = "multi-chunk mmproj batch encoding; not bound yet"
 _MTMD_GEN_AUDIO = "audio generation pipeline; not bound yet"
 _MTMD_VIDEO = "video input; not bound yet"
+_MTMD_AUDIO_STREAM = "realtime audio-stream transcription; not bound yet"
 _MTMD_CHUNK = "chunk copy and serialization; not bound yet"
 _MTMD_IMAGE_TOKENS = "image-token introspection; MtmdInputChunk does not expose mtmd_image_tokens"
 _GGUF_RAW = "raw pointer access; typed getters/setters are bound"
@@ -58,9 +59,28 @@ KNOWN_UNWRAPPED = {
         "mtmd_batch_get_output_embd": _MTMD_BATCH,
         "mtmd_bitmap_init_lazy": _MTMD_VIDEO,
         "mtmd_bitmap_set_mergeable": _MTMD_VIDEO,
+        "mtmd_bitmap_set_is_video": _MTMD_VIDEO,
+        "mtmd_get_video_config": _MTMD_VIDEO,
+        **{
+            f"mtmd_audio_stream_{n}": _MTMD_AUDIO_STREAM
+            for n in (
+                "params_default",
+                "init",
+                "free",
+                "push",
+                "step",
+                "flush",
+                "get_n_rows",
+                "get_n_rows_flushed",
+                "get_output_embd",
+                "is_seq_start",
+            )
+        },
+        "mtmd_support_audio_stream": _MTMD_AUDIO_STREAM,
         "mtmd_gen_audio_get_info": _MTMD_GEN_AUDIO,
         "mtmd_gen_audio_process": _MTMD_GEN_AUDIO,
         "mtmd_gen_inp_default": _MTMD_GEN_AUDIO,
+        **{f"mtmd_gen_state_{n}": _MTMD_GEN_AUDIO for n in ("params_default", "init", "free", "reset")},
         "mtmd_input_chunk_copy": _MTMD_CHUNK,
         "mtmd_input_chunk_get_placeholder": _MTMD_CHUNK,
         "mtmd_input_chunk_save": _MTMD_CHUNK,
@@ -79,13 +99,25 @@ KNOWN_UNWRAPPED = {
     "mtmd-helper.h": {
         **{
             f"mtmd_helper_gen_audio_{n}": _MTMD_GEN_AUDIO
-            for n in ("init", "free", "reset", "set_input", "step_prompt", "step_gen", "get_output")
+            for n in (
+                "init",
+                "free",
+                "reset",
+                "set_input",
+                "step_prompt",
+                "step_gen",
+                "get_output",
+                "flush",
+                "inp_default",
+                "next_is_text",
+                "get_logit_bias",
+            )
         },
+        "mtmd_helper_audio_stream_get_logit_bias": _MTMD_AUDIO_STREAM,
         **{
             f"mtmd_helper_video_{n}": _MTMD_VIDEO
             for n in ("init", "init_from_buf", "init_params_default", "free", "get_info", "read_next")
         },
-        "mtmd_helper_support_video": _MTMD_VIDEO,
         "mtmd_helper_decode_image_chunk": "eval_chunks covers decoding; mtmd_helper_eval_chunks is bound",
         "mtmd_helper_eval_chunk_single": "eval_chunks covers decoding; mtmd_helper_eval_chunks is bound",
         "mtmd_helper_image_get_decoder_pos": _MTMD_IMAGE_TOKENS,
@@ -144,12 +176,16 @@ KNOWN_UNBOUND_ENUMERATORS = {
             "AUDIO_TYPE_NONE",
             "AUDIO_TYPE_POCKETTTS",
             "AUDIO_TYPE_QWEN3TTS",
+            "AUDIO_TYPE_SOPRANO",
+            "AUDIO_TYPE_LFM3A",
             "PROCESS_TYPE_GEN_CODE",
             "PROCESS_TYPE_GEN_WAV",
         )
     },
     "MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM": _MTMD_GEN_AUDIO,
     "MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV": _MTMD_GEN_AUDIO,
+    **{f"MTMD_HELPER_GEN_AUDIO_OUT_{n}": _MTMD_GEN_AUDIO for n in ("AUTO", "TEXT", "AUDIO", "MIXED")},
+    **{f"MTMD_VIDEO_TEMPLATE_{n}": _MTMD_VIDEO for n in ("DEFAULT", "LFM3", "LFM3_OMNI")},
 }
 
 # ggml enums the bindings export in full; others (ggml_op, ...) are exported selectively.

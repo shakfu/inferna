@@ -390,9 +390,19 @@ void register_mtmd(nb::module_& m) {
             s.ensure_valid();
             return std::string(mtmd_get_marker(s.ptr));
         }, "Marker that tokenize() replaces with each bitmap, as set in MtmdContextParams.")
+        .def_prop_ro("capabilities", [](MtmdContextW& s){
+            s.ensure_valid();
+            mtmd_helper_cap c = mtmd_helper_get_capabilities(inferna::unwrap_model(s.model_obj), s.ptr);
+            nb::dict d;
+            d["chat"] = c.chat; d["vision"] = c.vision; d["audio"] = c.audio; d["video"] = c.video;
+            d["audio_stream"] = c.audio_stream; d["text_gen"] = c.text_gen;
+            d["audio_gen"] = c.audio_gen; d["audio_gen_spk_ref"] = c.audio_gen_spk_ref;
+            return d;
+        }, "Model/mmproj capabilities as a dict of bools. ``video`` is also False when "
+           "the build lacks MTMD_VIDEO; ``audio_gen_spk_ref`` means voice cloning from a speaker reference.")
         .def("model_can_chat", [](MtmdContextW& s, nb::object llama_ctx){
             s.ensure_valid();
-            return mtmd_helper_model_can_chat(inferna::unwrap_ctx(llama_ctx), s.ptr);
+            return mtmd_helper_get_capabilities(llama_get_model(inferna::unwrap_ctx(llama_ctx)), s.ptr).chat;
         }, "llama_ctx"_a, "False for a TTS-only model: one that generates audio and has no chat template.")
         .def("tokenize",
             [](MtmdContextW& s, const std::string& text,

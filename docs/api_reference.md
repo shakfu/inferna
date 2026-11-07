@@ -1643,6 +1643,7 @@ n_past = mtmd.eval_chunks(ctx, chunks)   # decodes text and image; sample from c
 | `supports_vision`, `supports_audio`, `audio_sample_rate` | Capabilities of the projector |
 | `uses_non_causal`, `uses_mrope` | Attention and position scheme of media tokens |
 | `model_can_chat(llama_ctx)` | False for a TTS-only model (audio output, no chat template) |
+| `capabilities` | Dict of bools: `chat`, `vision`, `audio`, `video`, `audio_stream`, `text_gen`, `audio_gen`, `audio_gen_spk_ref` |
 | `close()`, `is_valid` | Free the projector; open flag |
 
 For models with non-causal attention on media (gemma3, and gemma4 apart from E2B/E4B), a media chunk must fit in one batch. `eval_chunks` raises `ValueError` when it exceeds `n_batch` or the context's `n_ubatch`.
