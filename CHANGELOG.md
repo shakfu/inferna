@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
-## [Unreleased]
+## [0.8.0]
 
 ### Added
 
@@ -31,6 +31,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - **llama.cpp bumped to `b11960`.** The new realtime audio-stream, audio-generation state and video-template API is recorded as unwrapped in `tests/test_llama_api_coverage.py`.
 
 ### Fixed
+
+- **ROCm 6.3 wheel failed to compile at `b11960`** (`__ballot_sync` undeclared in `topk-moe.cu`). `llama.cpp-hip-ballot-sync.patch` backports upstream's one-line fix (`78febbad9d`); see `scripts/patches/README.md`. The deps cache keys now hash `scripts/patches/*.patch`, because a cache hit skips the deps build and so silently drops a new patch.
+
+- **`check-vendor` CI failed after its header checks passed.** On git 2.56, temp-dir cleanup raised ENOTEMPTY on the clone, most likely from detached auto-maintenance. The clone now runs with auto maintenance and gc off, and cleanup errors no longer fail the job.
 
 - **`LlamaServer` did not find a binary built by `make llama-server`**, which writes `build/llama-server/bin/llama-server`, a path auto-detection did not search. Wheels do not ship the binary; the docstring now says so.
 
