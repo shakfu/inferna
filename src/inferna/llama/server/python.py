@@ -27,8 +27,17 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 import uuid
 
+from ...utils.platform import resolve_n_threads
+
 # Import our existing inferna bindings
-from ..llama_cpp import LlamaModel, LlamaContext, LlamaSampler, ggml_backend_load_all, llama_batch_get_one
+from ..llama_cpp import (
+    LlamaContext,
+    LlamaModel,
+    LlamaModelParams,
+    LlamaSampler,
+    ggml_backend_load_all,
+    llama_batch_get_one,
+)
 from ..token_decoder import TokenDecoder
 
 
@@ -125,7 +134,7 @@ class ServerConfig:
     # Model parameters
     n_ctx: int = 4096
     n_batch: int = 2048
-    n_threads: int = -1
+    n_threads: int = -1  # per slot; -1: physical cores / n_parallel
     n_gpu_layers: int = -1
 
     # Server features
@@ -203,6 +212,13 @@ class ChatResponse:
     usage: Dict[str, int] = field(default_factory=dict)
 
 
+def model_params(config: ServerConfig) -> LlamaModelParams:
+    """Model load parameters for `config`."""
+    params = LlamaModelParams()
+    params.n_gpu_layers = config.n_gpu_layers
+    return params
+
+
 class ServerSlot:
     """Represents a processing slot for handling requests."""
 
@@ -217,6 +233,10 @@ class ServerSlot:
         ctx_params = LlamaContextParams()
         ctx_params.n_ctx = config.n_ctx
         ctx_params.n_batch = config.n_batch
+        # Slots decode concurrently; more threads in total than cores makes every slot slower.
+        n_threads = resolve_n_threads(config.n_threads, config.n_parallel)
+        ctx_params.n_threads = n_threads
+        ctx_params.n_threads_batch = n_threads
         self.context = LlamaContext(model, ctx_params, verbose=False)
 
         # Sampler is rebuilt per-request to support per-request parameters
@@ -242,6 +262,7 @@ class ServerSlot:
 
         sampler_params = LlamaSamplerChainParams()
         self.sampler = LlamaSampler(sampler_params)
+        self.sampler.add_suppress_tokens(self.model.get_vocab())
         self.sampler.add_min_p(min_p, 1)
         self.sampler.add_temp(temperature)
         self.sampler.add_dist(seed if seed is not None else 1337)
@@ -377,7 +398,7 @@ class PythonServer:
 
             # Load model. Backends live in separate shared objects in the published wheels; see Embedder.__init__.
             ggml_backend_load_all()
-            self.model = LlamaModel(path_model=self.config.model_path)
+            self.model = LlamaModel(path_model=self.config.model_path, params=model_params(self.config))
 
             from ..decision import load_decision_model
 

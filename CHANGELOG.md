@@ -20,6 +20,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.9.0]
+
+### Added
+
+- **TTS through libmtmd audio generation** (Qwen3-TTS, Pocket TTS, Soprano, LFM3-Audio, Chatterbox). `MtmdAudioGenerator` binds the upstream `mtmd_helper_gen_audio` pipeline. `inferna.llama.tts.MtmdTTSGenerator` wraps it with `generate()` and `stream()`, and `inferna tts -mm <mmproj>` selects it. Ported from cyllama.
+
+- **Predefined TTS voices.** `MtmdContext.gen_audio_voices()` lists them and `gen_audio_voice(name)` returns a voice bitmap to pass as `speaker`. `gen_audio_info` reports `n_voices`, and `MtmdBitmap.is_voice` identifies these bitmaps. `MtmdTTSGenerator` and the TTS CLI take `voice` / `--voice`, which cannot be combined with `speaker_file`. Without either, a model with voices uses its first voice, as `llama-tts` does. Upstream `b12110` removed the `voice` string input and now selects voices through `speaker_ref`.
+
+- **`MtmdBatch`** encodes several media chunks in one projector pass, via `MtmdContext.batch()`. It holds a reference to each added chunk; mtmd only borrows the pointer, so a chunk collected before `encode()` would be read after free. `MtmdContextParams.batch_max_tokens` caps its size.
+
+- **`MtmdVideo`** reads a video as frames plus timestamp text through ffmpeg, via `MtmdContext.open_video()` for a file or `open_video_buffer()` for bytes. `no_soundtrack=True` drops the soundtrack that LFM3-Omni otherwise hears; `MtmdVideo` yields its bitmaps as `"audio"`, not `"image"`.
+
+- **LFM3-Audio continuation.** `MtmdAudioGenerator.set_input(n_past=..., out_mode=MtmdGenAudioOutMode.TEXT)` continues sequence 0 with a text, audio, mixed or model-chosen response. Before each `step_gen()`, `next_is_text()` says whether to pass a text token sampled from the backbone, with the bias from `get_logit_bias()`, or `LLAMA_TOKEN_NULL`. `out_mode` without `n_past` raises `ValueError`, since upstream ignores it.
+
+- **`get_mmproj_caps(path)`** reports an mmproj's input and output modalities without loading a context.
+
+### Changed
+
+- **llama.cpp updated to `v0.9.0` (`b12110`, from `v0.8.0`).** Exports `GGML_TYPE_F8_E4M3` and `LLAMA_FTYPE_MOSTLY_F8_E4M3` (42). `GGML_TYPE_COUNT` is now 44, which is also the default of `LlamaModelQuantizeParams.output_tensor_type` and `token_embedding_type`.
+
+- **Every sampler chain now applies the model's suppress tokens.** `LlamaSampler.add_suppress_tokens(vocab)` biases `tokenizer.ggml.suppress_tokens` to `-inf`, matching upstream `common_sampler`. It is called in `LLM`, `simple()`, `BatchGenerator`, `ConstrainedAgent`, `Chat`, the CLI, `PythonServer` and both TTS generators. Output changes only for models that declare the key; among llama.cpp's converters those are MiniMax-Text-01/M1, Gemma 4 Unified and Chatterbox. Ported from cyllama.
+
+### Removed
+
+- **`llama.cpp-hip-ballot-sync.patch`.** `b12110` includes the upstream fix it backported.
+
+### Fixed
+
+- **`MtmdTTSGenerator` failed on LFM3-Audio with `set_input` error 1.** The pipeline only accepts a prompt rendered from the model's "tts" chat template, which carries the voice and language. The generator now renders that template when the model has one, as `llama-tts` does through `common_chat_get_tts_prompt`. Ported from cyllama.
+
+- **Every high-level context ran on 4 threads**, llama.cpp's default, whatever the core count. This covered `LLM`, `BatchGenerator`, `Chat`, `TTSGenerator`, `MtmdTTSGenerator`, `Embedder`, `Reranker` and both servers, which ignored `ServerConfig.n_threads`. They now use physical cores; each server slot gets physical cores divided by `n_parallel`. `GenerationConfig` gains `n_threads` and `n_threads_batch` (-1 = physical cores), applied to a reused context too. `inferna generate`, `inferna chat` and `python -m inferna.llama.chat` take `-t/--threads` and `-tb/--threads-batch`, and `llama/cli.py` defaults both to -1 instead of 4. `inferna.utils.platform.resolve_n_threads(share=N)` splits cores between N concurrent contexts. In cyllama, `LLM` with Llama-3.2-1B Q8_0 on a 16-core CPU went from 298 to 600-850 tokens/s for prompt processing and from 32 to 40 tokens/s for generation. Logical cores were rejected as the default: they cut generation by 66%. Ported from cyllama.
+
+- **`GenerationConfig(seed=-1)` passed validation, then generation raised `TypeError`** in `add_dist`, which takes a uint32. -1 is now normalized to `LLAMA_DEFAULT_SEED` (0xFFFFFFFF), so it samples randomly and bypasses the response cache. Seeds above 0xFFFFFFFF are rejected. Ported from cyllama.
+
+- **Both servers ignored `ServerConfig.n_gpu_layers`**, and so the CLI's `--gpu-layers`: the model loaded with llama.cpp's default. Ported from cyllama.
+
+- **Grammar, DRY and infill sampler links could outlive their vocab.** Upstream stores the raw vocab pointer, and the chain kept no reference, so `sampler.add_grammar(LlamaModel(path).get_vocab(), ...)` read freed memory once the temporary model was collected. Those links now keep their vocab, also through `clone()` and `chain_remove()`. Ported from cyllama.
+
+- **mtmd objects used freed memory after `close()` of a parent.** `MtmdVideo` and `MtmdAudioGenerator` held references to their `MtmdContext` (and the generator to its `LlamaContext`), but `close()` frees the native context regardless. Each now raises `RuntimeError` naming the closed parent. `MtmdBitmap.from_file()` and `from_buffer()` also check their context, and `from_file()` raises `TypeError` for a non-`MtmdContext`. Ported from cyllama.
+
+- **`MtmdTTSGenerator.close()` left the model loaded** until the generator was collected, because the closed context and mmproj still referenced it. `close()` now drops those references. cyllama calls `LlamaModel.close()` instead; inferna does not bind it, because vocab, context and LoRA objects keep raw pointers into the model and would read freed memory.
+
 ## [0.8.0]
 
 ### Added

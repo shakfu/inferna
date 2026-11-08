@@ -36,6 +36,7 @@ from .python import (
     ServerConfig,
     ServerSlot,
     is_authorized,
+    model_params,
     stop_at,
     warn_if_not_loopback,
 )
@@ -238,7 +239,7 @@ class EmbeddedServer:
 
             # Backends live in separate shared objects in the published wheels; see Embedder.__init__.
             ggml_backend_load_all()
-            self._model = LlamaModel(path_model=self._config.model_path)
+            self._model = LlamaModel(path_model=self._config.model_path, params=model_params(self._config))
 
             from ..decision import load_decision_model
 

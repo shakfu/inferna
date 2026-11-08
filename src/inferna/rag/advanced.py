@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from .pipeline import RAGConfig, RAGResponse
+from ..utils.platform import resolve_n_threads
 from .types import RerankerProtocol, SearchResult
 
 if TYPE_CHECKING:
@@ -400,6 +401,7 @@ class Reranker(RerankerProtocol):
             self._model = LlamaModel(self.model_path, params)
             ctx_params = LlamaContextParams()
             ctx_params.n_ctx = self.n_ctx
+            ctx_params.n_threads = ctx_params.n_threads_batch = resolve_n_threads()
             self._ctx = LlamaContext(self._model, ctx_params)
 
     def score(self, query: str, document: str) -> float:

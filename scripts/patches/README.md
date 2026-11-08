@@ -25,7 +25,6 @@ payload; each carries its own rationale in a header above the diff.
 | Patch | Trees | What it fixes |
 |-|-|-|
 | `ggml-metal-pin-msl-version-set-lang.patch` | llama.cpp (v0.4.0+), whisper.cpp (v1.9.4+) | Metal shader compilation depending on the host process's SDK rather than the running OS |
-| `llama.cpp-hip-ballot-sync.patch` | llama.cpp (b11960) | `__ballot_sync` undeclared in `topk-moe.cu` on ROCm below 7.0; backport of upstream `78febbad9d`, delete at the next bump |
 | `stable-diffusion.cpp-msvc-bigobj.patch` | sd.cpp | `C1128: number of sections exceeded object file format limit` on MSVC |
 
 In shared-ggml mode sd.cpp compiles llama.cpp's ggml tree in place

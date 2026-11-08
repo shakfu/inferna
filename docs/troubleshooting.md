@@ -146,6 +146,17 @@ ls thirdparty/llama.cpp/include/
    system_profiler SPDisplaysDataType | grep Metal
    ```
 
+4. **On CPU, check the thread count.** The default is one thread per physical core. More threads than physical cores slow generation, which is memory-bound. This includes SMT siblings, and several `LLM` instances decoding at once. Split cores between concurrent instances:
+
+   ```python
+   from inferna import LLM
+   from inferna.utils.platform import physical_cores, resolve_n_threads
+
+   print(physical_cores())
+   t = resolve_n_threads(share=2)  # two LLMs decoding concurrently
+   llm = LLM("model.gguf", n_threads=t, n_threads_batch=t)
+   ```
+
 ## Generation Issues
 
 ### Empty or Truncated Output

@@ -592,6 +592,8 @@ struct LlamaSamplerW {
     // resets it, so the binding lasts for the chain's life.
     uint64_t bound_ctx = 0;
     bool attached = false;   // a context holds this chain's pointer
+    // vocabs whose raw pointer a link holds (grammar, dry, infill)
+    std::vector<nb::object> keepalive;
 
     bool is_chain() const { return ptr && llama_sampler_chain_get(ptr, -1) != nullptr; }
 
@@ -2664,6 +2666,7 @@ NB_MODULE(_llama_native, m) {
             auto* w = new LlamaSamplerW{};
             w->ptr = llama_sampler_chain_remove(s.ptr, i);
             w->owner = true;  // ownership moves out of the chain
+            w->keepalive = s.keepalive;
             return nb::cast(w, nb::rv_policy::take_ownership);
         }, "i"_a, "Detach link i and return it; the caller now owns it.")
         .def("copy_state_from", [](LlamaSamplerW& s, LlamaSamplerW& src){
@@ -2680,16 +2683,18 @@ NB_MODULE(_llama_native, m) {
            "and optional name, accept(token), reset(), clone(). The three arguments are "
            "stdlib arrays ('i', 'f', 'f') copied from the candidates; changes to logits "
            "and probs are copied back. Returning an index selects that candidate.")
-        .def("add_grammar_lazy_patterns", [](LlamaSamplerW& s, LlamaVocabW& vocab,
+        .def("add_grammar_lazy_patterns", [](LlamaSamplerW& s, nb::object vocab_obj,
                 const std::string& grammar_str, const std::string& grammar_root,
                 const std::vector<std::string>& trigger_patterns,
                 const std::vector<llama_token>& trigger_tokens){
+            LlamaVocabW& vocab = nb::cast<LlamaVocabW&>(vocab_obj);
             std::vector<const char*> pats;
             for (auto& t : trigger_patterns) pats.push_back(t.c_str());
             chain_add_checked(s, llama_sampler_init_grammar_lazy_patterns(
                 vocab.ptr, grammar_str.c_str(), grammar_root.c_str(),
                 pats.data(), pats.size(), trigger_tokens.data(), trigger_tokens.size()),
                 "grammar_lazy_patterns");
+            s.keepalive.push_back(vocab_obj);
         }, "vocab"_a, "grammar_str"_a, "grammar_root"_a,
            "trigger_patterns"_a = std::vector<std::string>{}, "trigger_tokens"_a = std::vector<llama_token>{},
            "Grammar that activates on the first match of a trigger pattern or token.")
@@ -2697,6 +2702,7 @@ NB_MODULE(_llama_native, m) {
             auto* w = new LlamaSamplerW{};
             w->ptr = llama_sampler_clone(s.ptr);
             w->owner = true;
+            w->keepalive = s.keepalive;
             if (PyErr_Occurred()) { delete w; throw nb::python_error(); }
             return nb::cast(w, nb::rv_policy::take_ownership);
         }, "Copy of this sampler with its state. A clone is never bound to a context.")
@@ -2735,11 +2741,13 @@ NB_MODULE(_llama_native, m) {
         .def("add_mirostat_v2", [](LlamaSamplerW& s, uint32_t seed, float tau, float eta){
             chain_add_checked(s, llama_sampler_init_mirostat_v2(seed, tau, eta), "mirostat_v2");
         })
-        .def("add_grammar", [](LlamaSamplerW& s, LlamaVocabW& vocab,
+        .def("add_grammar", [](LlamaSamplerW& s, nb::object vocab_obj,
                                  const std::string& grammar_str, const std::string& grammar_root){
+            LlamaVocabW& vocab = nb::cast<LlamaVocabW&>(vocab_obj);
             chain_add_checked(s,
                 llama_sampler_init_grammar(vocab.ptr, grammar_str.c_str(), grammar_root.c_str()),
                 "grammar");
+            s.keepalive.push_back(vocab_obj);
         })
         // n_vocab is only consulted by the GPU-offloaded sampling path, but it
         // must still be the real vocabulary size there, so it is required
@@ -2765,17 +2773,31 @@ NB_MODULE(_llama_native, m) {
                                                 arr.empty() ? nullptr : arr.data()),
                 "logit_bias");
         })
-        .def("add_infill", [](LlamaSamplerW& s, LlamaVocabW& vocab){
-            chain_add_checked(s, llama_sampler_init_infill(vocab.ptr), "infill");
+        .def("add_infill", [](LlamaSamplerW& s, nb::object vocab_obj){
+            chain_add_checked(s, llama_sampler_init_infill(nb::cast<LlamaVocabW&>(vocab_obj).ptr), "infill");
+            s.keepalive.push_back(vocab_obj);
         })
+        .def("add_suppress_tokens", [](LlamaSamplerW& s, LlamaVocabW& vocab){
+            int32_t n = 0;
+            const llama_token* toks = llama_vocab_get_suppress_tokens(vocab.ptr, &n);
+            if (!toks || n <= 0) return;
+            std::vector<llama_logit_bias> bias((size_t) n);
+            for (int32_t i = 0; i < n; ++i) bias[i] = { toks[i], -INFINITY };
+            chain_add_checked(s,
+                llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab.ptr), n, bias.data()),
+                "suppress_tokens");
+        }, "vocab"_a,
+           "Bias the model's suppress tokens (tokenizer.ggml.suppress_tokens) to -inf, as upstream "
+           "common_sampler does. Adds no link when the model declares none.")
         .def("add_top_n_sigma", [](LlamaSamplerW& s, float n){
             chain_add_checked(s, llama_sampler_init_top_n_sigma(n), "top_n_sigma");
         }, "n"_a)
-        .def("add_dry", [](LlamaSamplerW& s, LlamaVocabW& vocab,
+        .def("add_dry", [](LlamaSamplerW& s, nb::object vocab_obj,
                            float dry_multiplier, float dry_base, int32_t dry_allowed_length,
                            int32_t dry_penalty_last_n, nb::list seq_breakers){
             // init_dry copies the breaker strings internally, so the temporaries
             // below only need to outlive the call.
+            LlamaVocabW& vocab = nb::cast<LlamaVocabW&>(vocab_obj);
             std::vector<std::string> breakers_owned;
             breakers_owned.reserve(seq_breakers.size());
             for (auto h : seq_breakers) breakers_owned.push_back(nb::cast<std::string>(h));
@@ -2788,6 +2810,7 @@ NB_MODULE(_llama_native, m) {
                                        breakers_c.empty() ? nullptr : breakers_c.data(),
                                        breakers_c.size()),
                 "dry");
+            s.keepalive.push_back(vocab_obj);
         }, "vocab"_a, "dry_multiplier"_a, "dry_base"_a,
            "dry_allowed_length"_a, "dry_penalty_last_n"_a, "seq_breakers"_a)
         .def("add_adaptive_p", [](LlamaSamplerW& s, float target, float decay, uint32_t seed){

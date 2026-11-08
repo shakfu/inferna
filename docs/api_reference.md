@@ -521,6 +521,8 @@ class GenerationConfig:
     tensor_split: Optional[List[float]] = None
     n_ctx: Optional[int] = None
     n_batch: int = 2048
+    n_threads: int = -1
+    n_threads_batch: int = -1
     seed: int = 0xFFFFFFFF
     stop_sequences: List[str] = field(default_factory=list)
     add_bos: bool = True
@@ -579,7 +581,11 @@ class GenerationConfig:
 
 - `n_batch`: Batch size for processing (default: 2048)
 
-- `seed`: Random seed (default: `0xFFFFFFFF` sentinel = let llama.cpp pick a random seed)
+- `n_threads`: CPU threads for generation; -1 = physical cores (default: -1). Logical cores (SMT) slow generation, which is memory-bound.
+
+- `n_threads_batch`: CPU threads for prompt processing; -1 = physical cores (default: -1). Prompt processing is compute-bound, so logical cores can help when nothing else is decoding.
+
+- `seed`: Random seed (default: `0xFFFFFFFF` sentinel = let llama.cpp pick a random seed). `-1` is accepted and normalized to the sentinel.
 
 - `stop_sequences`: Strings that stop generation (default: [])
 
@@ -1046,8 +1052,9 @@ from inferna.llama.llama_cpp import LlamaContext, LlamaContextParams
 ctx_params = LlamaContextParams()
 ctx_params.n_ctx = 2048
 ctx_params.n_batch = 512
-ctx_params.n_threads = 4
-ctx_params.n_threads_batch = 4
+# The C default is 4 threads. The high-level API uses physical cores:
+from inferna.utils.platform import resolve_n_threads
+ctx_params.n_threads = ctx_params.n_threads_batch = resolve_n_threads()
 
 ctx = LlamaContext(model, ctx_params)
 
@@ -1199,6 +1206,9 @@ sampler.add_custom(BanToken(13))
 
 `add_grammar_lazy_patterns(vocab, grammar, root, trigger_patterns=[], trigger_tokens=[])`
 adds a grammar that applies from the first trigger match.
+
+`add_suppress_tokens(vocab)` biases the model's `tokenizer.ggml.suppress_tokens` to `-inf`, as upstream
+`common_sampler` does; it adds no link when the model declares none. Every high-level sampler chain calls it.
 
 ---
 
@@ -1644,11 +1654,22 @@ n_past = mtmd.eval_chunks(ctx, chunks)   # decodes text and image; sample from c
 | `uses_non_causal`, `uses_mrope` | Attention and position scheme of media tokens |
 | `model_can_chat(llama_ctx)` | False for a TTS-only model (audio output, no chat template) |
 | `capabilities` | Dict of bools: `chat`, `vision`, `audio`, `video`, `audio_stream`, `text_gen`, `audio_gen`, `audio_gen_spk_ref` |
+| `batch()` | `MtmdBatch` that encodes several media chunks in one projector pass |
+| `open_video(path, fps_target=0.0, ffmpeg_bin_dir=None, timestamp_interval_ms=0, no_soundtrack=False)` | `MtmdVideo` over a file, decoded by ffmpeg; iterate it for `("image", MtmdBitmap)` and `("text", str)` items |
+| `open_video_buffer(data, ...)` | As `open_video`, from bytes |
+| `gen_audio_info` | Dict: `type` (`MtmdGenAudioType`), `sample_rate`, `model_variant`, `n_voices` |
+| `gen_audio_voices()`, `gen_audio_voice(name)` | Predefined TTS voice names; one voice as a bitmap to pass as `speaker` |
 | `close()`, `is_valid` | Free the projector; open flag |
 
 For models with non-causal attention on media (gemma3, and gemma4 apart from E2B/E4B), a media chunk must fit in one batch. `eval_chunks` raises `ValueError` when it exceeds `n_batch` or the context's `n_ubatch`.
 
 `MtmdBitmap` loads media with `from_file(ctx, path)` or `from_buffer(ctx, data)`, or builds it from pixels or samples with `create_image` / `create_audio`.
+
+`get_mmproj_caps(path)` reads an mmproj's `vision`, `audio` and `gen_audio` flags without loading a context.
+
+`MtmdBatch.get_output_embd(chunk, n_embd)` returns flat row-major embeddings, as `get_output_embeddings` does.
+
+`MtmdAudioGenerator(llama_ctx, mtmd)` drives TTS one frame at a time: `set_input`, `step_prompt` until 0, then `step_gen(token)` per sampled backbone token, then `get_output`. For LFM3-Audio, `set_input(n_past=..., out_mode=...)` continues a sequence; when `next_is_text()` is true, sample a text token with `get_logit_bias()` applied and pass it to `step_gen`. `inferna.llama.tts.MtmdTTSGenerator` wraps that loop, with `generate(text)` and `stream(text)`; `inferna tts -mm` uses it.
 
 `inferna.llama.mtmd.multimodal` adds higher-level wrappers: `MultimodalProcessor`, `ImageAnalyzer`, `VisionLanguageChat` and `AudioProcessor`. See `tests/examples/multimodal_example.py`.
 

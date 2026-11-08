@@ -29,6 +29,7 @@ import time
 logger = logging.getLogger(__name__)
 
 from .defaults import DEFAULT_N_GPU_LAYERS, DEFAULT_MIROSTAT_M, LLAMA_DEFAULT_SEED
+from .utils.platform import resolve_n_threads
 
 from .llama.llama_cpp import (
     LlamaModel,
@@ -144,6 +145,7 @@ class BatchGenerator:
         ctx_params.n_ctx = n_ctx
         ctx_params.n_batch = batch_size
         ctx_params.n_seq_max = n_seq_max  # Support parallel sequences
+        ctx_params.n_threads = ctx_params.n_threads_batch = resolve_n_threads()
 
         self.ctx = LlamaContext(self.model, ctx_params)
         self._closed = False
@@ -279,6 +281,7 @@ class BatchGenerator:
         # Create sampler
         sampler_params = LlamaSamplerChainParams()
         sampler = LlamaSampler(sampler_params)
+        sampler.add_suppress_tokens(self.vocab)
 
         if config.logit_bias:
             sampler.add_logit_bias(

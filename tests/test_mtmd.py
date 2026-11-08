@@ -440,8 +440,7 @@ class TestErrorHandling:
                     processor._load_audio_bitmap({"invalid": "type"})
 
 
-GEMMA4_MODEL = Path("models/gemma-4-E4B-it-Q4_K_M.gguf")
-GEMMA4_MMPROJ = Path("models/mmproj-gemma-4-E4B-it-BF16.gguf")
+from conftest import GEMMA4_MMPROJ, GEMMA4_MODEL  # noqa: E402
 
 _gemma4_available = GEMMA4_MODEL.exists() and GEMMA4_MMPROJ.exists()
 skip_no_gemma4 = pytest.mark.skipif(not _gemma4_available, reason="gemma-4 model or mmproj not found in models/")
@@ -550,8 +549,8 @@ class TestMtmdIntegration:
 
 
 
-VLM_PATH = Path("models/gemma-4-E4B-it-Q4_K_M.gguf")
-VLM_MMPROJ = Path("models/mmproj-gemma-4-E4B-it-BF16.gguf")
+VLM_PATH = GEMMA4_MODEL
+VLM_MMPROJ = GEMMA4_MMPROJ
 DICE = Path(__file__).parent / "media" / "dice.jpg"
 
 

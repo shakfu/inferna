@@ -31,9 +31,8 @@ HEADERS = {
     "gguf.h": ("GGML_API", "gguf_"),
 }
 
-_MTMD_BATCH = "multi-chunk mmproj batch encoding; not bound yet"
-_MTMD_GEN_AUDIO = "audio generation pipeline; not bound yet"
-_MTMD_VIDEO = "video input; not bound yet"
+_MTMD_GEN_LOW = "low-level gen API; MtmdAudioGenerator drives the mtmd_helper_gen_audio pipeline"
+_MTMD_VIDEO = "video input; MtmdVideo reads files through mtmd_helper_video"
 _MTMD_AUDIO_STREAM = "realtime audio-stream transcription; not bound yet"
 _MTMD_CHUNK = "chunk copy and serialization; not bound yet"
 _MTMD_IMAGE_TOKENS = "image-token introspection; MtmdInputChunk does not expose mtmd_image_tokens"
@@ -52,11 +51,6 @@ KNOWN_UNWRAPPED = {
         "llama_batch_get_one": "reimplemented as an owned LlamaBatch; llama.cpp's borrows the token buffer",
     },
     "mtmd.h": {
-        "mtmd_batch_init": _MTMD_BATCH,
-        "mtmd_batch_free": _MTMD_BATCH,
-        "mtmd_batch_add_chunk": _MTMD_BATCH,
-        "mtmd_batch_encode": _MTMD_BATCH,
-        "mtmd_batch_get_output_embd": _MTMD_BATCH,
         "mtmd_bitmap_init_lazy": _MTMD_VIDEO,
         "mtmd_bitmap_set_mergeable": _MTMD_VIDEO,
         "mtmd_bitmap_set_is_video": _MTMD_VIDEO,
@@ -77,10 +71,10 @@ KNOWN_UNWRAPPED = {
             )
         },
         "mtmd_support_audio_stream": _MTMD_AUDIO_STREAM,
-        "mtmd_gen_audio_get_info": _MTMD_GEN_AUDIO,
-        "mtmd_gen_audio_process": _MTMD_GEN_AUDIO,
-        "mtmd_gen_inp_default": _MTMD_GEN_AUDIO,
-        **{f"mtmd_gen_state_{n}": _MTMD_GEN_AUDIO for n in ("params_default", "init", "free", "reset")},
+        "mtmd_gen_audio_process": _MTMD_GEN_LOW,
+        "mtmd_gen_audio_read_tensor": _MTMD_GEN_LOW,
+        "mtmd_gen_inp_default": _MTMD_GEN_LOW,
+        **{f"mtmd_gen_state_{n}": _MTMD_GEN_LOW for n in ("params_default", "init", "free", "reset", "set_ref")},
         "mtmd_input_chunk_copy": _MTMD_CHUNK,
         "mtmd_input_chunk_get_placeholder": _MTMD_CHUNK,
         "mtmd_input_chunk_save": _MTMD_CHUNK,
@@ -91,33 +85,12 @@ KNOWN_UNWRAPPED = {
         "mtmd_image_tokens_get_n_pos": _MTMD_IMAGE_TOKENS,
         "mtmd_image_tokens_get_decoder_pos": _MTMD_IMAGE_TOKENS,
         "mtmd_get_memory_usage": "C++ only (returns std::map), marked unstable upstream",
-        "mtmd_get_cap_from_file": "not bound yet",
         "mtmd_tokenize_from_parts": "not bound yet; mtmd_tokenize is",
         "mtmd_log_set": "not bound yet; logging goes through llama_log_set",
         "mtmd_test_create_input_chunks": "upstream test helper",
     },
     "mtmd-helper.h": {
-        **{
-            f"mtmd_helper_gen_audio_{n}": _MTMD_GEN_AUDIO
-            for n in (
-                "init",
-                "free",
-                "reset",
-                "set_input",
-                "step_prompt",
-                "step_gen",
-                "get_output",
-                "flush",
-                "inp_default",
-                "next_is_text",
-                "get_logit_bias",
-            )
-        },
         "mtmd_helper_audio_stream_get_logit_bias": _MTMD_AUDIO_STREAM,
-        **{
-            f"mtmd_helper_video_{n}": _MTMD_VIDEO
-            for n in ("init", "init_from_buf", "init_params_default", "free", "get_info", "read_next")
-        },
         "mtmd_helper_decode_image_chunk": "eval_chunks covers decoding; mtmd_helper_eval_chunks is bound",
         "mtmd_helper_eval_chunk_single": "eval_chunks covers decoding; mtmd_helper_eval_chunks is bound",
         "mtmd_helper_image_get_decoder_pos": _MTMD_IMAGE_TOKENS,
@@ -164,28 +137,13 @@ KNOWN_UNBOUND_FIELDS = {
     "mtmd_context_params.image_marker": "deprecated upstream; media_marker is bound",
     "mtmd_context_params.cb_eval": "graph-eval callback; fires per node on ggml worker threads",
     "mtmd_context_params.cb_eval_user_data": "graph-eval callback; fires per node on ggml worker threads",
-    "mtmd_context_params.batch_max_tokens": "used by the mtmd batch API, which is not bound",
 }
 
 # Enumerators of mtmd.h / mtmd-helper.h / gguf.h the bindings do not use.
 # *_COUNT sentinels are skipped.
 KNOWN_UNBOUND_ENUMERATORS = {
-    **{
-        f"MTMD_GEN_{n}": _MTMD_GEN_AUDIO
-        for n in (
-            "AUDIO_TYPE_NONE",
-            "AUDIO_TYPE_POCKETTTS",
-            "AUDIO_TYPE_QWEN3TTS",
-            "AUDIO_TYPE_SOPRANO",
-            "AUDIO_TYPE_LFM3A",
-            "PROCESS_TYPE_GEN_CODE",
-            "PROCESS_TYPE_GEN_WAV",
-        )
-    },
-    "MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM": _MTMD_GEN_AUDIO,
-    "MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV": _MTMD_GEN_AUDIO,
-    **{f"MTMD_HELPER_GEN_AUDIO_OUT_{n}": _MTMD_GEN_AUDIO for n in ("AUTO", "TEXT", "AUDIO", "MIXED")},
-    **{f"MTMD_VIDEO_TEMPLATE_{n}": _MTMD_VIDEO for n in ("DEFAULT", "LFM3", "LFM3_OMNI")},
+    **{f"MTMD_GEN_PROCESS_TYPE_{n}": _MTMD_GEN_LOW for n in ("GEN_CODE", "GEN_WAV")},
+    **{f"MTMD_VIDEO_TEMPLATE_{n}": _MTMD_VIDEO for n in ("DEFAULT", "LFM3", "LFM3_OMNI", "QWEN3VL")},
 }
 
 # ggml enums the bindings export in full; others (ggml_op, ...) are exported selectively.
@@ -290,9 +248,7 @@ def test_struct_fields_are_bound(native_source, header, struct):
     if not _used(struct, native_source):
         pytest.skip("struct not used by the bindings")
     fields = _struct_fields(header)[struct]
-    missing = sorted(
-        f for f in fields if not _used(f, native_source) and f"{struct}.{f}" not in KNOWN_UNBOUND_FIELDS
-    )
+    missing = sorted(f for f in fields if not _used(f, native_source) and f"{struct}.{f}" not in KNOWN_UNBOUND_FIELDS)
     assert not missing, f"{struct} fields with no binding (bind them, or add to KNOWN_UNBOUND_FIELDS): {missing}"
 
 
@@ -330,7 +286,9 @@ def test_enumerators_are_used(native_source, header):
     missing = sorted(
         k for k in _enumerators(header) if not _used(k, native_source) and k not in KNOWN_UNBOUND_ENUMERATORS
     )
-    assert not missing, f"{header} enumerators with no binding (bind them, or add to KNOWN_UNBOUND_ENUMERATORS): {missing}"
+    assert not missing, (
+        f"{header} enumerators with no binding (bind them, or add to KNOWN_UNBOUND_ENUMERATORS): {missing}"
+    )
 
 
 def test_known_unbound_enumerators_are_current(native_source):

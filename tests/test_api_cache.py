@@ -14,6 +14,7 @@ Tests cover:
 """
 
 import dataclasses
+import gc
 import time
 
 import pytest
@@ -265,6 +266,16 @@ class TestRandomSeedBypass:
             assert info.misses == 0
             assert info.currsize == 0
 
+    def test_explicit_minus_one_seed(self, model_path):
+        """seed=-1 generates (the sampler's uint32 rejected it) and bypasses the cache."""
+        with LLM(model_path, max_tokens=4, cache_size=10) as llm:
+            config = GenerationConfig(max_tokens=4, seed=-1)
+            llm("Hello", config=config)
+            llm("Hello", config=config)
+            assert llm.cache_info().currsize == 0
+        del llm
+        gc.collect()
+
     def test_fixed_seed_uses_cache(self, model_path):
         """Fixed seed should use cache."""
         with LLM(model_path, max_tokens=16, cache_size=10, seed=42) as llm:
@@ -345,7 +356,7 @@ class TestCacheKeyFields:
     reason. A new field joins the key by default; this table makes the test
     fail until it is given a distinguishing value."""
 
-    SENTINEL = -1
+    SENTINEL = 0xFFFFFFFF  # LLAMA_DEFAULT_SEED; GenerationConfig normalizes -1 to it
     # A valid value for each keyed field that differs from BASE.
     ALTERNATES = {
         "max_tokens": 17,
@@ -393,7 +404,15 @@ class TestCacheKeyFields:
 
     @pytest.mark.parametrize(
         "name,value",
-        [("n_gpu_layers", 0), ("main_gpu", 1), ("split_mode", 2), ("tensor_split", [0.5, 0.5]), ("n_batch", 64)],
+        [
+            ("n_gpu_layers", 0),
+            ("main_gpu", 1),
+            ("split_mode", 2),
+            ("tensor_split", [0.5, 0.5]),
+            ("n_batch", 64),
+            ("n_threads", 2),
+            ("n_threads_batch", 2),
+        ],
     )
     def test_excluded_field_does_not_change_the_key(self, name, value):
         assert name in CACHE_KEY_EXCLUDED_FIELDS

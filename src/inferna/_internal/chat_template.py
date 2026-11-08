@@ -151,8 +151,12 @@ def _apply_jinja(
     model: "LlamaModel",
     messages: List[Dict[str, str]],
     add_generation_prompt: bool,
+    template_str: Optional[str] = None,
+    **variables: Any,
 ) -> str:
-    """Render the model's embedded chat template via vendored jinja2.
+    """Render ``template_str``, by default the model's embedded chat template, via vendored jinja2.
+
+    ``variables`` are extra template inputs, e.g. ``language`` and ``voice`` for a "tts" template.
 
     Mirrors ``transformers.PreTrainedTokenizerBase.apply_chat_template``:
     ``messages`` / ``bos_token`` / ``eos_token`` / ``add_generation_prompt``
@@ -168,7 +172,7 @@ def _apply_jinja(
     from .._vendor.jinja2 import ext as _jinja2_ext
     from .._vendor.jinja2.sandbox import ImmutableSandboxedEnvironment
 
-    template_str = model.get_default_chat_template()
+    template_str = template_str or model.get_default_chat_template()
     if not template_str:
         raise _JinjaTemplateError("Model has no embedded chat template")
 
@@ -226,5 +230,6 @@ def _apply_jinja(
             bos_token=bos_token,
             eos_token=eos_token,
             add_generation_prompt=add_generation_prompt,
+            **variables,
         ),
     )

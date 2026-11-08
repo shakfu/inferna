@@ -266,8 +266,8 @@ class TestProgressCallbackAbort:
 # =============================================================================
 
 # Reuse the gemma-4 mmproj fixture pair already adopted by tests/test_mtmd.py.
-_GEMMA4_MODEL = Path("models/gemma-4-E4B-it-Q4_K_M.gguf")
-_GEMMA4_MMPROJ = Path("models/mmproj-gemma-4-E4B-it-BF16.gguf")
+from conftest import GEMMA4_MMPROJ as _GEMMA4_MMPROJ, GEMMA4_MODEL as _GEMMA4_MODEL  # noqa: E402
+
 _skip_no_gemma4 = pytest.mark.skipif(
     not (_GEMMA4_MODEL.exists() and _GEMMA4_MMPROJ.exists()),
     reason="gemma-4 model or mmproj not found in models/",

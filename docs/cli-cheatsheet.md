@@ -38,6 +38,8 @@ echo "Hello" | inferna gen -m models/llama.gguf
 | `--repeat-penalty` | float | 1.0 | Repetition penalty (1.0 = disabled) |
 | `-ngl, --n-gpu-layers` | int | -1 | GPU layers to offload (-1 = all) |
 | `-c, --ctx-size` | int | (auto) | Context window size |
+| `-t, --threads` | int | -1 | Threads for generation (-1 = physical cores) |
+| `-tb, --threads-batch` | int | -1 | Threads for prompt processing (-1 = physical cores) |
 | `--seed` | int | 4294967295 | Random seed (0xFFFFFFFF = random) |
 | `--stream` | flag | | Stream tokens to stdout |
 | `--json` | flag | | Output as JSON with stats |
@@ -73,6 +75,8 @@ Interactive mode streams tokens by default. Single-turn mode (`-p`) buffers the 
 | `--repeat-penalty` | float | 1.0 | Repetition penalty (1.0 = disabled) |
 | `-ngl, --n-gpu-layers` | int | -1 | GPU layers to offload (-1 = all) |
 | `-c, --ctx-size` | int | 2048 | Context window size |
+| `-t, --threads` | int | -1 | Threads for generation (-1 = physical cores) |
+| `-tb, --threads-batch` | int | -1 | Threads for prompt processing (-1 = physical cores) |
 | `--seed` | int | 4294967295 | Random seed (0xFFFFFFFF = random) |
 | `--stream` | flag | | Stream tokens in single-turn mode (`-p`) |
 | `--no-stream` | flag | | Buffer full response in interactive mode |
@@ -224,6 +228,8 @@ inferna server -m models/llama.gguf --model-alias my-llama --n-parallel 4
 | `--server-type` | choice | embedded | Server implementation: `embedded` (in-process cpp-httplib) or `python` (pure-Python `http.server`). `python` never serves the webui regardless of `-w` |
 | `-w, --webui` | flag | off | Mount the browser webui at `/`, plus the supporting routes `/bundle.{css,js}`, `/loading.html`, `/props`, `/slots`, `/metrics`. Embedded backend only |
 
+Each slot uses physical cores divided by `--n-parallel` as its thread count.
+
 See [Server Usage Examples](server_usage_examples.md) for the full endpoint surface and SSE streaming details.
 
 ---
@@ -309,19 +315,26 @@ Text-to-speech synthesis.
 ```bash
 inferna tts -m models/tts.gguf -mv models/vocoder.gguf -p "Hello world"
 inferna tts -m models/tts.gguf -mv models/vocoder.gguf -p "Hello" -o speech.wav
+# libmtmd TTS: Qwen3-TTS, Pocket TTS, LFM3-Audio, Chatterbox (backbone + mmproj)
+inferna tts -m models/Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf -mm models/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf -p "Hello" -o speech.wav
 ```
+
+`-mv` selects OuteTTS + WavTokenizer; `-mm` selects libmtmd audio generation. Exactly one is required.
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-m, --model` | string | (required) | Path to text-to-codes model |
-| `-mv, --vocoder-model` | string | (required) | Path to codes-to-speech model |
+| `-m, --model` | string | (required) | Path to text-to-codes or backbone model |
+| `-mv, --vocoder-model` | string | | OuteTTS: path to codes-to-speech model |
+| `-mm, --mmproj` | string | | libmtmd TTS: path to mmproj |
 | `-p, --prompt` | string | (required) | Text to synthesize |
 | `-o, --output` | string | output.wav | Output WAV file |
-| `-c, --context` | int | 8192 | Context size |
-| `-b, --batch` | int | 8192 | Batch size |
+| `-c, --context` | int | 8192 (`-mm`: 4096) | Context size |
+| `-b, --batch` | int | 8192 (`-mm`: 2048) | Batch size |
 | `-ngl, --n-gpu-layers` | int | -1 | GPU layers to offload (-1 = all) |
-| `-n, --n-predict` | int | 4096 | Max tokens to predict |
-| `--speaker-file` | string | | Speaker profile JSON file |
+| `-n, --n-predict` | int | 4096 (`-mm`: 512) | Max tokens, or audio frames with `-mm` |
+| `--speaker-file` | string | | OuteTTS: speaker profile JSON; `-mm`: reference audio for voice cloning |
+| `--lang` | string | en | `-mm` only: language code (Qwen3-TTS, LFM3-Audio) |
+| `--voice` | string | first | `-mm` only: predefined voice name; exclusive with `--speaker-file` |
 | `--use-guide-tokens` | flag | (on) | Use guide tokens (prevents hallucinations) |
 | `--no-guide-tokens` | flag | | Disable guide tokens |
 
@@ -711,8 +724,8 @@ python -m inferna.llama.cli -m models/llama.gguf -i      # interactive mode
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-t, --threads` | int | 4 | Compute threads |
-| `-tb, --threads-batch` | int | 4 | Batch processing threads |
+| `-t, --threads` | int | -1 | Compute threads (-1 = physical cores) |
+| `-tb, --threads-batch` | int | -1 | Batch processing threads (-1 = physical cores) |
 | `--no-mmap` | flag | | Do not memory-map model |
 | `--mlock` | flag | | Lock model in RAM |
 | `--numa` | flag | | NUMA optimizations |

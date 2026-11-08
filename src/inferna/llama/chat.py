@@ -24,6 +24,8 @@ from ..defaults import (
     DEFAULT_MIROSTAT_M,
     DEFAULT_MIROSTAT_TAU,
     DEFAULT_N_GPU_LAYERS,
+    DEFAULT_N_THREADS,
+    DEFAULT_N_THREADS_BATCH,
     DEFAULT_PENALTY_FREQ,
     DEFAULT_PENALTY_LAST_N,
     DEFAULT_PENALTY_PRESENT,
@@ -37,6 +39,7 @@ from ..defaults import (
     DEFAULT_XTC_THRESHOLD,
     LLAMA_DEFAULT_SEED,
 )
+from ..utils.platform import resolve_n_threads
 from ..utils.color import green, white, magenta, grey, cyan, red, bold, END, esc, FG_END
 
 from .llama_cpp import (
@@ -112,8 +115,10 @@ class Chat:
         dynatemp_exponent: float = DEFAULT_DYNATEMP_EXPONENT,
         logit_bias: Optional[Mapping[int, float]] = None,
         seed: int = LLAMA_DEFAULT_SEED,
+        n_threads: int = DEFAULT_N_THREADS,
+        n_threads_batch: int = DEFAULT_N_THREADS_BATCH,
     ):
-        """Initialize the chat with model and parameters"""
+        """Initialize the chat with model and parameters. Thread counts of -1 mean physical cores."""
         # Set up error-only logging (skip for now to avoid issues)
         # set_log_callback(lambda level, text: sys.stderr.write(text) if level >= 3 else None)
 
@@ -132,12 +137,15 @@ class Chat:
         ctx_params = LlamaContextParams()
         ctx_params.n_ctx = n_ctx
         ctx_params.n_batch = n_ctx
+        ctx_params.n_threads = resolve_n_threads(n_threads)
+        ctx_params.n_threads_batch = resolve_n_threads(n_threads_batch)
         self.ctx_params = ctx_params
         self.context = LlamaContext(self.model, ctx_params)
 
         # Initialize sampler with caller-provided parameters
         sampler_params = LlamaSamplerChainParams()
         self.sampler = LlamaSampler(sampler_params)
+        self.sampler.add_suppress_tokens(self.vocab)
         if logit_bias:
             self.sampler.add_logit_bias(
                 self.vocab.n_vocab,
@@ -186,6 +194,8 @@ class Chat:
         self.n_ctx = n_ctx
         self.ngl = ngl
         self.max_tokens = max_tokens
+        self.n_threads = n_threads
+        self.n_threads_batch = n_threads_batch
 
         # Session-level statistics
         self.total_prompt_tokens = 0
@@ -213,6 +223,8 @@ class Chat:
                     n_ctx=self.n_ctx,
                     n_gpu_layers=self.ngl,
                     max_tokens=self.max_tokens,
+                    n_threads=self.n_threads,
+                    n_threads_batch=self.n_threads_batch,
                 ),
                 verbose=False,
             )
@@ -640,6 +652,20 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=LLAMA_DEFAULT_SEED, help="Random seed (default: %(default)s)")
     parser.add_argument(
+        "-t",
+        "--threads",
+        type=int,
+        default=DEFAULT_N_THREADS,
+        help="Threads for generation, -1 = physical cores (default: %(default)s)",
+    )
+    parser.add_argument(
+        "-tb",
+        "--threads-batch",
+        type=int,
+        default=DEFAULT_N_THREADS_BATCH,
+        help="Threads for prompt processing, -1 = physical cores (default: %(default)s)",
+    )
+    parser.add_argument(
         "--no-stream", action="store_true", help="Buffer full response before printing (default: stream)"
     )
     parser.add_argument("--stats", action="store_true", help="Show session statistics on exit")
@@ -658,6 +684,8 @@ def main() -> None:
             min_p=args.min_p,
             repeat_penalty=args.repeat_penalty,
             seed=args.seed,
+            n_threads=args.threads,
+            n_threads_batch=args.threads_batch,
         )
         chat.chat_loop(stream=not args.no_stream, stats=args.stats)
     except Exception as e:

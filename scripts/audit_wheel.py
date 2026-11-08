@@ -300,7 +300,7 @@ def _pe_imports(path: Path) -> set[str]:
         def file_offset(rva: int) -> int | None:
             for vaddr, size, rawptr in sections:
                 if vaddr <= rva < vaddr + size:
-                    return rawptr + rva - vaddr
+                    return int(rawptr + rva - vaddr)
             return None
 
         def c_string(rva: int) -> str | None:

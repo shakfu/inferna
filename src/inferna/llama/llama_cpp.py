@@ -54,7 +54,13 @@ MtmdBitmap = _N.MtmdBitmap
 MtmdInputChunk = _N.MtmdInputChunk
 MtmdInputChunks = _N.MtmdInputChunks
 MtmdInputChunkType = _N.MtmdInputChunkType
+MtmdGenAudioType = _N.MtmdGenAudioType
+MtmdGenAudioOutMode = _N.MtmdGenAudioOutMode
+MtmdBatch = _N.MtmdBatch
+MtmdVideo = _N.MtmdVideo
+MtmdAudioGenerator = _N.MtmdAudioGenerator
 get_default_media_marker = _N.get_default_media_marker
+get_mmproj_caps = _N.get_mmproj_caps
 
 # Module-level functions
 set_log_callback = _N.set_log_callback
@@ -190,6 +196,7 @@ GGML_TYPE_MXFP4 = _N.GGML_TYPE_MXFP4
 GGML_TYPE_NVFP4 = _N.GGML_TYPE_NVFP4
 GGML_TYPE_Q1_0 = _N.GGML_TYPE_Q1_0
 GGML_TYPE_Q2_0 = _N.GGML_TYPE_Q2_0
+GGML_TYPE_F8_E4M3 = _N.GGML_TYPE_F8_E4M3
 GGML_TYPE_COUNT = _N.GGML_TYPE_COUNT
 
 # ggml precision / op / triangular / scale / opt / backend-device-type
@@ -295,6 +302,7 @@ LLAMA_FTYPE_MOSTLY_MXFP4_MOE = _N.LLAMA_FTYPE_MOSTLY_MXFP4_MOE
 LLAMA_FTYPE_MOSTLY_NVFP4 = _N.LLAMA_FTYPE_MOSTLY_NVFP4
 LLAMA_FTYPE_MOSTLY_Q1_0 = _N.LLAMA_FTYPE_MOSTLY_Q1_0
 LLAMA_FTYPE_MOSTLY_Q2_0 = _N.LLAMA_FTYPE_MOSTLY_Q2_0
+LLAMA_FTYPE_MOSTLY_F8_E4M3 = _N.LLAMA_FTYPE_MOSTLY_F8_E4M3
 LLAMA_FTYPE_GUESSED = _N.LLAMA_FTYPE_GUESSED
 
 # llama RoPE scaling

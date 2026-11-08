@@ -67,6 +67,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
+from .utils.platform import resolve_n_threads
 from .defaults import (
     LLAMA_DEFAULT_SEED,
     DEFAULT_TEMPERATURE,
@@ -90,6 +91,8 @@ from .defaults import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_N_GPU_LAYERS,
     DEFAULT_N_BATCH,
+    DEFAULT_N_THREADS,
+    DEFAULT_N_THREADS_BATCH,
     DEFAULT_MAIN_GPU,
     DEFAULT_SPLIT_MODE,
 )
@@ -178,6 +181,8 @@ class GenerationConfig:
             Example: [1, 2] assigns 1/3 to GPU 0 and 2/3 to GPU 1.
         n_ctx: Context window size, None = auto (default: None)
         n_batch: Batch size for processing (see defaults.py)
+        n_threads: Threads for generation, -1 = physical cores (see defaults.py)
+        n_threads_batch: Threads for prompt processing, -1 = physical cores (see defaults.py)
         seed: Random seed for reproducibility (see defaults.py)
         stop_sequences: List of strings that stop generation (default: [])
         add_bos: Add beginning-of-sequence token (default: True)
@@ -225,6 +230,8 @@ class GenerationConfig:
     tensor_split: Optional[List[float]] = None
     n_ctx: Optional[int] = None
     n_batch: int = DEFAULT_N_BATCH
+    n_threads: int = DEFAULT_N_THREADS
+    n_threads_batch: int = DEFAULT_N_THREADS_BATCH
     seed: int = LLAMA_DEFAULT_SEED
     stop_sequences: List[str] = field(default_factory=list)
     add_bos: bool = True
@@ -258,6 +265,8 @@ class GenerationConfig:
             "tensor_split": self.tensor_split.copy() if self.tensor_split else None,
             "n_ctx": self.n_ctx,
             "n_batch": self.n_batch,
+            "n_threads": self.n_threads,
+            "n_threads_batch": self.n_threads_batch,
             "seed": self.seed,
             "stop_sequences": self.stop_sequences.copy(),
             "add_bos": self.add_bos,
@@ -349,8 +358,16 @@ class GenerationConfig:
         if self.n_batch < 1:
             errors.append(f"n_batch must be >= 1, got {self.n_batch}")
 
-        if self.seed < -1:
-            errors.append(f"seed must be >= -1, got {self.seed}")
+        for name in ("n_threads", "n_threads_batch"):
+            value = getattr(self, name)
+            if value == 0 or value < -1:
+                errors.append(f"{name} must be >= 1 or -1 (physical cores), got {value}")
+
+        if self.seed == -1:
+            # -1 is the common "random" spelling; the sampler takes a uint32, where random is 0xFFFFFFFF.
+            self.seed = LLAMA_DEFAULT_SEED
+        elif not 0 <= self.seed <= LLAMA_DEFAULT_SEED:
+            errors.append(f"seed must be -1 or in [0, {LLAMA_DEFAULT_SEED}], got {self.seed}")
 
         if errors:
             raise ValueError("Invalid GenerationConfig: " + "; ".join(errors))
@@ -1202,6 +1219,8 @@ class LLM:
         ctx_params.n_batch = max(required_tokens, 32)
         # Pooling is done in Python; ask llama.cpp for raw per-token states.
         ctx_params.pooling_type = 0  # NONE
+        ctx_params.n_threads = resolve_n_threads(self.config.n_threads)
+        ctx_params.n_threads_batch = resolve_n_threads(self.config.n_threads_batch)
         ctx_params.no_perf = not self.verbose
 
         ctx = LlamaContext(self.model, ctx_params)
@@ -1278,6 +1297,7 @@ class LLM:
         if self._ctx is not None and self._ctx_size >= required_ctx:
             if self.verbose:
                 print(f"Reusing context (size {self._ctx_size}, need {required_ctx})")
+            self._ctx.set_n_threads(resolve_n_threads(config.n_threads), resolve_n_threads(config.n_threads_batch))
             return self._ctx
 
         # Need to create new context (either none exists or too small).
@@ -1294,6 +1314,8 @@ class LLM:
         ctx_params = LlamaContextParams()
         ctx_params.n_ctx = required_ctx
         ctx_params.n_batch = config.n_batch
+        ctx_params.n_threads = resolve_n_threads(config.n_threads)
+        ctx_params.n_threads_batch = resolve_n_threads(config.n_threads_batch)
         ctx_params.no_perf = not self.verbose
 
         # Note: Seed is set in sampler, not context
@@ -1351,6 +1373,7 @@ class LLM:
         sampler_params.no_perf = not self.verbose
 
         sampler = LlamaSampler(sampler_params)
+        sampler.add_suppress_tokens(self.vocab)
 
         # Grammar must come first: it filters the logit distribution
         # down to grammar-valid tokens, then temperature/top-k/top-p
@@ -2475,6 +2498,8 @@ def simple(
         ctx_params.n_ctx = n_prompt + n_predict - 1
     # n_batch is the maximum number of tokens that can be processed in a single call to llama_decode
     ctx_params.n_batch = n_prompt
+    # threads: llama.cpp defaults to 4; physical cores are faster for both prompt and generation
+    ctx_params.n_threads = ctx_params.n_threads_batch = resolve_n_threads()
     # enable performance counters
     ctx_params.no_perf = False
 
@@ -2486,6 +2511,7 @@ def simple(
     sparams.no_perf = False
 
     smplr = cy.LlamaSampler(sparams)
+    smplr.add_suppress_tokens(vocab)
     smplr.add_greedy()
 
     # print the prompt token-by-token

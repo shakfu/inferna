@@ -95,13 +95,15 @@ class ResponseCache:
 
 
 # GenerationConfig fields left out of the cache key, with the reason. These
-# set device placement and batching, not sampler settings.
+# set device placement, batching and threading, not sampler settings.
 CACHE_KEY_EXCLUDED_FIELDS: Dict[str, str] = {
     "n_gpu_layers": "device placement",
     "main_gpu": "device placement",
     "split_mode": "device placement",
     "tensor_split": "device placement",
     "n_batch": "prompt-processing batch size",
+    "n_threads": "CPU thread count",
+    "n_threads_batch": "CPU thread count",
 }
 
 

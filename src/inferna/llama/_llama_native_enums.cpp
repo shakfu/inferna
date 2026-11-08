@@ -89,6 +89,7 @@ void register_enums(nb::module_& m) {
     EXPORT(GGML_TYPE_NVFP4);
     EXPORT(GGML_TYPE_Q1_0);
     EXPORT(GGML_TYPE_Q2_0);
+    EXPORT(GGML_TYPE_F8_E4M3);
     EXPORT(GGML_TYPE_COUNT);
 
     // -------- ggml precision --------
@@ -220,6 +221,7 @@ void register_enums(nb::module_& m) {
     EXPORT(LLAMA_FTYPE_MOSTLY_NVFP4);
     EXPORT(LLAMA_FTYPE_MOSTLY_Q1_0);
     EXPORT(LLAMA_FTYPE_MOSTLY_Q2_0);
+    EXPORT(LLAMA_FTYPE_MOSTLY_F8_E4M3);
     EXPORT(LLAMA_FTYPE_GUESSED);
 
     // -------- llama RoPE scaling --------
