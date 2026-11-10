@@ -18,6 +18,7 @@ on:
       - 'CMakeLists.txt'
       - 'pyproject.toml'
       - 'scripts/manage.py'
+      - 'scripts/versions.toml'
       - '.github/workflows/ci-pr.yml'
 
 concurrency:
@@ -41,7 +42,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-cipr-${{ hashFiles('scripts/manage.py', 'scripts/patches/*.patch', 'pyproject.toml') }}
+          key: deps-cipr-${{ hashFiles('scripts/manage.py', 'scripts/versions.toml', 'scripts/patches/*.patch', 'pyproject.toml') }}
 
       - name: Build third-party deps (CPU only)
         if: steps.cache-deps.outputs.cache-hit != 'true'

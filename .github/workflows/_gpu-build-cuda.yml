@@ -79,7 +79,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-${{ inputs.wheel_kind == 'abi3' && 'abi3-' || '' }}cuda-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'scripts/patches/*.patch', 'pyproject.toml', '.github/workflows/_gpu-build-cuda.yml') }}
+          key: deps-${{ inputs.wheel_kind == 'abi3' && 'abi3-' || '' }}cuda-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'scripts/versions.toml', 'scripts/patches/*.patch', 'pyproject.toml', '.github/workflows/_gpu-build-cuda.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -104,7 +104,7 @@ jobs:
           CIBW_ARCHS_LINUX: x86_64
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_BEFORE_ALL_LINUX: >
-            CI_PYTHON=$(ls -d /opt/python/cp3*/bin | head -1) &&
+            CI_PYTHON=/opt/python/cp312-cp312/bin &&
             $CI_PYTHON/python {project}/scripts/manage.py ci_before_all --backend cuda
             ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }}
           CIBW_BEFORE_BUILD_LINUX: >

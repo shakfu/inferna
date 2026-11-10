@@ -235,10 +235,10 @@ manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"
 
 # Build thirdparty deps once at job start (NOT per-Python).
-# cp310 hard-coding: manylinux2014's bundled system Python is 3.6, too
-# old for manage.py. Revisit when this image is bumped to manylinux_2_28
-# (which ships modern Python).
-before-all = "yum install -y git ccache && /opt/python/cp310-cp310/bin/pip install cmake ninja && PATH=/opt/python/cp310-cp310/bin:$PATH /opt/python/cp310-cp310/bin/python scripts/manage.py build --all --deps-only --no-sd-examples && test -d thirdparty/llama.cpp/lib && ls thirdparty/llama.cpp/lib/*llama* >/dev/null 2>&1 || { echo 'ERROR: manage.py produced no libraries'; exit 1; }"
+# cp312 hard-coding: manylinux2014's bundled system Python is 3.6, and
+# manage.py needs tomllib (3.11+). Revisit when this image is bumped to
+# manylinux_2_28 (which ships modern Python).
+before-all = "yum install -y git ccache && /opt/python/cp312-cp312/bin/pip install cmake ninja && PATH=/opt/python/cp312-cp312/bin:$PATH /opt/python/cp312-cp312/bin/python scripts/manage.py build --all --deps-only --no-sd-examples && test -d thirdparty/llama.cpp/lib && ls thirdparty/llama.cpp/lib/*llama* >/dev/null 2>&1 || { echo 'ERROR: manage.py produced no libraries'; exit 1; }"
 
 # Baseline build env. Workflows that need additional vars (ccache paths,
 # launcher overrides, etc.) should set runner-level env and forward via

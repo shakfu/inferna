@@ -115,7 +115,7 @@ def test_unstamped_build_dir_is_dropped(builder):
 
 
 # First sd.cpp master counter with SD_USE_UPSTREAM_GGML and SD_GGML_SOURCE_DIR
-# (leejet/stable-diffusion.cpp#1999). See the FLOOR comment in manage.py.
+# (leejet/stable-diffusion.cpp#1999). See the FLOOR comment in scripts/versions.toml.
 SDCPP_FIRST_SHARED_GGML_MASTER = 883
 
 

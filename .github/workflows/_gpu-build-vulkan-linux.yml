@@ -75,7 +75,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: thirdparty/
-          key: deps-vulkan-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'scripts/patches/*.patch', 'pyproject.toml', '.github/workflows/_gpu-build-vulkan-linux.yml') }}
+          key: deps-vulkan-${{ inputs.link_mode }}-${{ hashFiles('scripts/manage.py', 'scripts/versions.toml', 'scripts/patches/*.patch', 'pyproject.toml', '.github/workflows/_gpu-build-vulkan-linux.yml') }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -100,7 +100,7 @@ jobs:
           CIBW_ARCHS_LINUX: x86_64
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_BEFORE_ALL_LINUX: >
-            CI_PYTHON=$(ls -d /opt/python/cp3*/bin | head -1) &&
+            CI_PYTHON=/opt/python/cp312-cp312/bin &&
             $CI_PYTHON/python {project}/scripts/manage.py ci_before_all --backend vulkan
             ${{ inputs.link_mode == 'dynamic' && '--dynamic' || '' }}
           CIBW_BEFORE_BUILD_LINUX: >

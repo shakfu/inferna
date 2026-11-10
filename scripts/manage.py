@@ -75,6 +75,7 @@ import platform
 import re
 import shutil
 import tempfile
+import tomllib
 import stat
 import subprocess
 import sys
@@ -165,16 +166,14 @@ PLATFORM = platform.system()
 ARCH = platform.machine()
 PY_VER_MINOR = sys.version_info.minor
 
-# Pinned upstream tags for the three vendored C++ projects + the
-# sqlite-vector helper. Override individually via env (e.g.
-# LLAMACPP_VERSION=master) if you need to test against a newer revision.
-# (Previously gated behind a STABLE_BUILD flag whose two branches carried
-# identical values — the flag was a no-op.)
-# Pin the bNNNNN nightly tag, not the semver tag it duplicates: upstream
-# publishes the prebuilt binary assets only under bNNNNN, so `download_release()`
-# (every dynamic GPU wheel) 404s on a vN.N.N pin.
-LLAMACPP_VERSION = os.getenv("LLAMACPP_VERSION", "b12110")  # equivalent to v0.9.0
-WHISPERCPP_VERSION = os.getenv("WHISPERCPP_VERSION", "v1.9.4")  # from: v1.9.2
+# Pinned upstream tags live in scripts/versions.toml (rationale is there too).
+# Override individually via env (e.g. LLAMACPP_VERSION=master) to test a newer revision.
+with open(Path(__file__).resolve().parent / "versions.toml", "rb") as _f:
+    _VERSIONS = tomllib.load(_f)
+LLAMACPP_VERSION: str = os.getenv("LLAMACPP_VERSION", _VERSIONS["llama_cpp"])
+WHISPERCPP_VERSION: str = os.getenv("WHISPERCPP_VERSION", _VERSIONS["whisper_cpp"])
+SDCPP_VERSION: str = os.getenv("SDCPP_VERSION", _VERSIONS["stable_diffusion_cpp"])
+SQLITEVECTOR_VERSION: str = os.getenv("SQLITEVECTOR_VERSION", _VERSIONS["sqlite_vector"])
 
 # As of upstream b9352 llama.cpp no longer ships a prebuilt server SPA under
 # tools/server/public/. The web UI is now a SvelteKit app in tools/ui/ that is
@@ -204,13 +203,6 @@ LLAMACPP_WEBUI_HF_BASE = "https://huggingface.co/buckets/ggml-org/llama-ui/resol
 # Files the upstream index.html hard-references. If a future pin drops one we
 # want to fail loudly rather than ship a broken UI.
 LLAMACPP_WEBUI_ASSETS = ("index.html", "bundle.css", "bundle.js", "loading.html")
-# FLOOR for shared-ggml builds: master-883. From master-817 sd.cpp calls ops
-# that exist only in leejet's ggml fork, so it no longer compiles against
-# llama.cpp's ggml. master-883 (leejet/stable-diffusion.cpp#1999) added
-# SD_USE_UPSTREAM_GGML, which compiles those calls out, and SD_GGML_SOURCE_DIR;
-# see StableDiffusionCppBuilder._ggml_options.
-SDCPP_VERSION = os.getenv("SDCPP_VERSION", "master-898-2bb7294")  # from master-816-487de75
-SQLITEVECTOR_VERSION = os.getenv("SQLITEVECTOR_VERSION", "1.1.2")
 
 # glslc for the Linux Vulkan wheel, built from source by `_ci_build_shaderc()`
 # because manylinux_2_28 has no glslc package. Pinned, not tracking main:

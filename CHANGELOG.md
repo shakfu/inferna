@@ -20,6 +20,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Release notes link the upstream versions.** `scripts/release_notes.py` appends an `## Upstream versions` section that links the release tag of each pinned llama.cpp, whisper.cpp, stable-diffusion.cpp and sqlite-vector version. Ported from cyllama.
+
+### Changed
+
+- **Upstream version pins moved to `scripts/versions.toml`.** `scripts/manage.py` and `scripts/release_notes.py` both read it; the `LLAMACPP_VERSION`-style env overrides still apply. A TOML file over a `versions.py` module because it is data any tool can read with `tomllib`, without running code. Deps cache keys and the `ci-pr` path filter now include it, so a version bump still invalidates cached builds. The web UI and shaderc pins stay in `manage.py`: they are build tooling, not linked upstreams.
+
+- **Linux `before-all` interpreters pinned to cp312**, because `tomllib` needs 3.11+. This covers the manylinux `before-all` in `pyproject.toml` (was cp310) and the four Linux GPU workflows. Those picked `ls -d /opt/python/cp3*/bin | head -1`, which sorts lexically and selects cp310.
+
 ## [0.9.0]
 
 ### Added

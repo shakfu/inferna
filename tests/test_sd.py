@@ -1295,8 +1295,8 @@ class TestSDImageGenParamsExtended:
         """The binding compiles against either shape of the upstream struct.
 
         sd.cpp master-800 replaced the two booleans with the ref_image_args
-        string. The pin has to straddle that boundary (see SDCPP_VERSION in
-        scripts/manage.py), so the binding detects which the header provides
+        string. The pin has to straddle that boundary (see stable_diffusion_cpp in
+        scripts/versions.toml), so the binding detects which the header provides
         and reports it here. The Python API is the same either way; on an older
         pin, keys other than the two booleans round-trip but are not forwarded.
         """
