@@ -3530,15 +3530,11 @@ class Application(ShellCmd, metaclass=MetaCommander):
         if args.backend == "vulkan":
             self._ci_build_shaderc()
 
-        # 4. Locate the cibuildwheel-shipped Python and install build tools.
-        ci_pythons = sorted(Path("/opt/python").glob("cp3*/bin"))
-        if not ci_pythons:
-            self.log.error("no /opt/python/cp3*/bin found in manylinux container")
-            sys.exit(1)
-        ci_python_bin = ci_pythons[0]
-        ci_python = str(ci_python_bin / "python")
-        ci_pip = str(ci_python_bin / "pip")
-        subprocess.check_call([ci_pip, "install", "cmake", "ninja"])
+        # 4. Build with the interpreter running this script. The lowest
+        #    /opt/python/cp3* (cp310) cannot import tomllib, which manage.py needs.
+        ci_python = sys.executable
+        ci_python_bin = Path(ci_python).parent
+        subprocess.check_call([ci_python, "-m", "pip", "install", "cmake", "ninja"])
 
         # 5. Compose the build env (sourcing oneAPI for SYCL).
         env = os.environ.copy()

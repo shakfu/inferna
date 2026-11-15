@@ -64,6 +64,8 @@ Tracks cyllama `1.0.0a0`.
 
 ### Fixed
 
+- **Linux GPU wheel builds failed in `ci_before_all`.** It built deps with the lowest `/opt/python/cp3*` interpreter, cp310, which has no `tomllib`. It now uses the interpreter running `manage.py` (cp312, set by the workflows).
+
 - **`Speculative.is_compat(None)` raised `AttributeError`.** It returns `False`.
 
 - **Prediction enum and `sd --prediction` were incomplete.** `Prediction` lacked `FLUX3_FLOW`, `H3_AV_FLOW` and `MING_IMAGE_FLOW`. `--prediction sd3_flow` selected `EPS`, because the name map used `flow`. The choices are now upstream's 11 prediction names. `RngType.COUNT` names the `sampler_rng_type` default, which means "same as `rng_type`".
