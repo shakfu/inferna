@@ -20,17 +20,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
-## [Unreleased]
+## [1.0.0a0]
+
+Tracks cyllama `1.0.0a0`.
 
 ### Added
 
 - **Release notes link the upstream versions.** `scripts/release_notes.py` appends an `## Upstream versions` section that links the release tag of each pinned llama.cpp, whisper.cpp, stable-diffusion.cpp and sqlite-vector version. Ported from cyllama.
 
+- **SD generation metadata, per-context progress, and two context params.** `SDImage.generation_info` holds the upstream `sdcpp.generation/v1` JSON (seed, sampler, size) for each generated, upscaled or adetailed image. `SDContext.set_generation_progress_callback` receives `SDGenerationProgress(stage, detail, unit, sample_pass, completed, total)` events for that context only; the process-wide `set_progress_callback` lets two contexts overwrite each other and does not report stages. `SDContextParams.batched_cfg` (no effect on Metal, where upstream disables it) and `SDContextParams.conditioning_cache_size` expose the matching `sd_ctx_params_t` fields.
+
+- **`SDContext.generate()` takes `vae_tile_size` and `vae_tile_overlap`.** `None` keeps the defaults (256 px, 0.5).
+
+- **`MtmdResampler`** wraps `mtmd_helper_resampler_*`, a stateful mono float32 resampler for converting capture-rate audio to `MtmdContext.audio_sample_rate`. `LlamaContextParams.moe_cache_cpu_share`, `MtmdGenAudioType.DRAMA3` and a `temp` argument to `MtmdAudioGenerator.set_input` are also exposed. Without `DRAMA3`, reading the gen-audio info of a Drama3 mmproj failed.
+
+- **`Embedder(pooling=...)` accepts a `PoolingType`** as well as its name. Passing the enum raised `AttributeError`.
+
+- **`inferna transcribe` gains `-fa`/`-nfa` and `--dtw MODEL`**, with upstream whisper-cli's names. `--dtw` turns flash attention off; combining it with `-fa` is an error. Upstream keeps flash attention on, so its `--dtw` has no effect. `-ojf` adds `t_dtw` in seconds per token. The CLI's `flash_attn` default changes from off to on, matching `WhisperContextParams`.
+
 ### Changed
+
+- **llama.cpp bumped to `b12359` (v1.0.0).** The new NextN / DFlash speculative-decoding functions, `llama_batch_ext_add_embd_row` and `llama_batch_ext_set_embd_state_row` are not bound; `tests/test_llama_api_coverage.py` records them.
+
+- **stable-diffusion.cpp bumped to `master-1094-3bad892`.** `SDImageGenParams.vae_tile_size` is now in image pixels (0 uses 256); it was in latent units. A value of 32 meant 256 px tiles and now means 32 px tiles. Generation results are freed with the upstream `free_sd_*_generation_result` instead of per-image `free()`. Two new patches keep the shared-ggml build compiling and linking; see `scripts/patches/README.md`. Not exposed: video upscaling, control types (their values are in `_sd_native.ENUMS` only), the prompt-image callback, `flash_attn_mode` / `conv_direct_mode`, and LoRAs in `convert_with_components`.
+
+- **whisper.cpp bumped to `v1.9.5`.** `whisper.h` is unchanged.
+
+- **sqlite-vector bumped to `1.2.0`.** It bounds declared vector dimensions at 2^24 and skips NULL keys in `_sqliteai_vector`. It accepts `max_memory=0` (no cap) and rejects other unparseable sizes. The scalar int8/uint8 cosine kernels now use 64-bit accumulators; 32-bit ones wrapped past ~66k (uint8) and ~133k (int8) dimensions.
+
+- **sqlite-vector's local fixes moved into `scripts/patches/sqlite-vector-inferna.patch`.** `SqliteVectorBuilder` edited the staged sources by string match, and an edit whose target text moved was skipped silently. The patch goes through `Builder._apply_source_patches()`, which fails the build when a patch stops applying. `tests/test_sqlite_vector_msvc.py` rejects unguarded `__builtin_*` calls in the sources MSVC compiles.
 
 - **Upstream version pins moved to `scripts/versions.toml`.** `scripts/manage.py` and `scripts/release_notes.py` both read it; the `LLAMACPP_VERSION`-style env overrides still apply. A TOML file over a `versions.py` module because it is data any tool can read with `tomllib`, without running code. Deps cache keys and the `ci-pr` path filter now include it, so a version bump still invalidates cached builds. The web UI and shaderc pins stay in `manage.py`: they are build tooling, not linked upstreams.
 
 - **Linux `before-all` interpreters pinned to cp312**, because `tomllib` needs 3.11+. This covers the manylinux `before-all` in `pyproject.toml` (was cp310) and the four Linux GPU workflows. Those picked `ls -d /opt/python/cp3*/bin | head -1`, which sorts lexically and selects cp310.
+
+### Removed
+
+- **The macOS whisper ggml link-split.** The macOS static build linked whisper's bundled ggml, because llama.cpp's ggml-metal selected `kernel_im2col_ext` on `KW * IC > 1024` but sized its grid on `KH * KW`, and whisper's encoder got an empty transcript ([ggml#1532](https://github.com/ggml-org/ggml/issues/1532)). ggml 1.0.0 in `b12359` selects on `KH * KW`, and `scripts/repro_ggml_metal_im2col.sh` no longer reproduces. `_whisper_native` now links llama.cpp's ggml on every platform, which also closes the macOS `WITH_DYLIB` gap. `tests/test_whisper_gpu_parity.py` stays as the regression gate.
+
+- **`GGML_PREC_DEFAULT`.** `b12359` removed this deprecated alias of `GGML_PREC_UNDEFINED` (both 0).
+
+- **`stable-diffusion.cpp-msvc-bigobj.patch`.** `master-1094-3bad892` adds `/bigobj` upstream.
+
+### Fixed
+
+- **`Speculative.is_compat(None)` raised `AttributeError`.** It returns `False`.
+
+- **Prediction enum and `sd --prediction` were incomplete.** `Prediction` lacked `FLUX3_FLOW`, `H3_AV_FLOW` and `MING_IMAGE_FLOW`. `--prediction sd3_flow` selected `EPS`, because the name map used `flow`. The choices are now upstream's 11 prediction names. `RngType.COUNT` names the `sampler_rng_type` default, which means "same as `rng_type`".
+
+- **`sd --vae-tile-size` and `--vae-tile-overlap` had no effect.** They were parsed but never passed to `generate()`. The `--vae-tile-size` default changes from a nominal `512x512` to unset, which keeps the 256 px tiles every run actually used.
+
+- **`GGML_NATIVE=ON` and `GGML_OPENMP=ON` meant OFF, silently.** Only `1` meant on. Values other than `0`/`1` now log a warning, as other `manage.py` boolean variables do.
+
+- **`GGML_MAX_NAME=160` did not reach CUDA or HIP sources.** `manage.py` passed it as `-DCMAKE_{C,CXX}_FLAGS`, with MSVC's defaults restated by hand on Windows. CUDA and HIP have separate flag sets, so `.cu` files compiled against the default 64 while the ggml library they link used 160. No current CUDA code reads the misplaced fields. The define now goes in through `CMAKE_<LANG>_FLAGS_INIT`, to which CMake appends its platform defaults, and also reaches CUDA and HIP when those backends are on. `_INIT` applies only to a fresh build directory; the changed configure arguments discard existing ones.
+
+- **whisper.cpp compiled against its bundled ggml headers but linked llama.cpp's ggml.** At v1.9.5 / b12359, 5 constants whisper uses differed, among them `GGML_TYPE_COUNT` (43 vs 44) and 4 `GGML_OP_*` values. None changed behavior at these pins. `manage.py` now injects llama.cpp's ggml source as whisper's `ggml` target. `WHISPER_USE_SYSTEM_GGML` was the alternative, but its CMake package drops the `GGML_USE_<backend>` defines that whisper uses for flash-attention KV padding. Ported from cyllama.
+
+- **`WhisperContext` accepted DTW settings whisper.cpp ignores.** With `flash_attn` on (the default), whisper.cpp silently dropped DTW; with the preset left at `NONE`, init failed with a generic load error. Both raise `ValueError` now. `WhisperAheadsPreset.CUSTOM` and out-of-range presets are rejected, because a custom heads array would have to outlive the context.
+
+- **`inferna transcribe -ng` had no effect.** The CLI built its context with default params, so the GPU stayed on.
+
+- `inferna memory --help` showed examples for a nonexistent `inferna.memory_cli` module. The `LlamaBatchExt.set_embd_state` docstring no longer says the upstream function is unimplemented.
 
 ## [0.9.0]
 

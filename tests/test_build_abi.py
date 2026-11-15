@@ -46,8 +46,8 @@ def test_every_tree_that_links_the_shared_ggml_gets_the_define(manage):
     """llama.cpp and whisper.cpp must both be built with SD's value.
 
     inferna's CMakeLists takes the ggml libs from ``${LLAMACPP_LIB}`` on every
-    platform except the macOS static build, so llama.cpp's and whisper.cpp's
-    object code calls *llama.cpp's* ggml. A tree left on the upstream default
+    platform, so llama.cpp's and whisper.cpp's object code calls *llama.cpp's*
+    ggml. A tree left on the upstream default
     of 64 is compiled against a ``ggml_tensor`` 96 bytes shorter than the one
     being allocated.
     """
@@ -56,13 +56,33 @@ def test_every_tree_that_links_the_shared_ggml_gets_the_define(manage):
     # it. These two have to follow.
     followers = [manage.LlamaCppBuilder(), manage.WhisperCppBuilder()]
     for builder in followers:
-        # The value reaches cmake as a raw -D in CMAKE_{C,CXX}_FLAGS; assert the
-        # builder is wired to emit it rather than re-deriving how.
+        # Assert the builder is wired to the shared helper rather than
+        # re-deriving how the value reaches cmake.
         source = inspect.getsource(type(builder).build)
-        assert "GGML_MAX_NAME" in source, (
+        assert "_ggml_max_name_flags(" in source, (
             f"{builder.name} does not propagate GGML_MAX_NAME to its cmake configure; "
             f"it will compile against a different struct ggml_tensor than the ggml it links"
         )
+
+
+def test_max_name_flags_append_to_platform_defaults(manage, shared_ggml):
+    """`_INIT`, not `CMAKE_<LANG>_FLAGS`: a -D of the latter drops MSVC's /EHsc /GR."""
+    flags = manage.LlamaCppBuilder()._ggml_max_name_flags({})
+    define = f"-DGGML_MAX_NAME={manage.StableDiffusionCppBuilder.GGML_MAX_NAME}"
+    assert flags == {"CMAKE_C_FLAGS_INIT": define, "CMAKE_CXX_FLAGS_INIT": define}
+
+
+@pytest.mark.parametrize("backend, lang", [("GGML_CUDA", "CUDA"), ("GGML_HIP", "HIP")])
+def test_max_name_flags_reach_gpu_compilers(manage, shared_ggml, backend, lang):
+    """CUDA and HIP have their own flag sets; .cu files otherwise see the default 64."""
+    builder = manage.LlamaCppBuilder()
+    assert f"CMAKE_{lang}_FLAGS_INIT" in builder._ggml_max_name_flags({backend: "ON"})
+    assert f"CMAKE_{lang}_FLAGS_INIT" not in builder._ggml_max_name_flags({backend: "OFF"})
+
+
+def test_max_name_flags_unused_for_vendored_ggml(manage, monkeypatch):
+    monkeypatch.setenv("SD_USE_VENDORED_GGML", "1")
+    assert manage.LlamaCppBuilder()._ggml_max_name_flags({}) == {}
 
 
 def test_cmakelists_matches_the_propagated_value(manage):
@@ -227,3 +247,48 @@ def test_shared_ggml_is_the_default_in_manage_and_cmake(manage, monkeypatch):
     assert manage.StableDiffusionCppBuilder.uses_shared_ggml()
     cmake = (ROOT / "CMakeLists.txt").read_text()
     assert re.search(r"option\(SD_USE_VENDORED_GGML\b[^)]*\bOFF\)", cmake)
+
+
+def _whisper_with_src(manage, tmp_path, monkeypatch, platform):
+    monkeypatch.setattr(manage, "PLATFORM", platform)
+    builder = manage.WhisperCppBuilder()
+    monkeypatch.setattr(builder.project, "src", tmp_path)
+    return builder
+
+
+@pytest.mark.parametrize("platform", ["Linux", "Windows", "Darwin"])
+def test_whisper_compiles_llama_ggml(manage, tmp_path, monkeypatch, platform):
+    """Whisper links llama.cpp's ggml, so it must compile against that tree too."""
+    (tmp_path / "llama.cpp" / "ggml").mkdir(parents=True)
+    (tmp_path / "llama.cpp" / "ggml" / "CMakeLists.txt").write_text("")
+    opts = _whisper_with_src(manage, tmp_path, monkeypatch, platform)._ggml_options()
+
+    inject = Path(opts["CMAKE_PROJECT_whisper.cpp_INCLUDE"])
+    assert inject.is_file()
+    assert "INFERNA_GGML_SOURCE_DIR" in inject.read_text()
+    assert opts["INFERNA_GGML_SOURCE_DIR"] == (tmp_path / "llama.cpp" / "ggml").as_posix()
+
+
+EMPTY_WHISPER_GGML = {"CMAKE_PROJECT_whisper.cpp_INCLUDE": "", "INFERNA_GGML_SOURCE_DIR": ""}
+
+
+def test_whisper_falls_back_without_llama_source(manage, tmp_path, monkeypatch):
+    """Empty values, not omitted keys: both are cache variables and would persist."""
+    assert _whisper_with_src(manage, tmp_path, monkeypatch, "Linux")._ggml_options() == EMPTY_WHISPER_GGML
+
+
+WHISPER_INCLUDE = ROOT / "thirdparty" / "whisper.cpp" / "include"
+WHISPER_GGML_HEADERS = sorted(p.name for p in WHISPER_INCLUDE.glob("gg*.h")) if WHISPER_INCLUDE.is_dir() else []
+
+
+@pytest.mark.skipif(not WHISPER_GGML_HEADERS, reason="whisper.cpp headers not installed")
+@pytest.mark.parametrize("name", WHISPER_GGML_HEADERS)
+def test_whisper_ships_the_linked_ggml_headers(name):
+    """libwhisper.a is compiled against these and linked against llama.cpp's ggml.
+
+    A difference means enum values or struct layouts may disagree across the
+    call boundary; at v1.9.5 / b12359 `GGML_TYPE_COUNT` was 43 vs 44.
+    """
+    llama = ROOT / "thirdparty" / "llama.cpp" / "include" / name
+    assert llama.is_file(), f"{name} has no llama.cpp counterpart"
+    assert (WHISPER_INCLUDE / name).read_bytes() == llama.read_bytes()

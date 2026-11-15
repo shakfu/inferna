@@ -20,8 +20,9 @@ from __future__ import annotations
 import os
 import struct
 import logging
+from collections import namedtuple
 from enum import IntEnum
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 from . import _sd_native as _n  # type: ignore[attr-defined]
 
@@ -65,6 +66,7 @@ class RngType(IntEnum):
     STD_DEFAULT = _E["STD_DEFAULT_RNG"]
     CUDA = _E["CUDA_RNG"]
     CPU = _E["CPU_RNG"]
+    COUNT = _E["RNG_TYPE_COUNT"]  # sampler_rng_type default: same as rng_type
 
 
 class SampleMethod(IntEnum):
@@ -122,6 +124,9 @@ class Prediction(IntEnum):
     SEFI_FLOW = _E["SEFI_FLOW_PRED"]
     MINIT2I_FLOW = _E["MINIT2I_FLOW_PRED"]
     SENSENOVA_U1_FLOW = _E["SENSENOVA_U1_FLOW_PRED"]
+    FLUX3_FLOW = _E["FLUX3_FLOW_PRED"]
+    H3_AV_FLOW = _E["H3_AV_FLOW_PRED"]
+    MING_IMAGE_FLOW = _E["MING_IMAGE_FLOW_PRED"]
     COUNT = _E["PREDICTION_COUNT"]
 
 
@@ -250,6 +255,15 @@ class SDImage:
     @property
     def is_valid(self) -> bool:
         return self._native.is_valid
+
+    @property
+    def generation_info(self) -> Optional[str]:
+        """Generation metadata as JSON (``sdcpp.generation/v1``), or None.
+
+        Set on images returned by generation, upscaling and adetailing; None
+        for images built in Python.
+        """
+        return self._native.generation_info
 
     @property
     def shape(self) -> tuple[int, int, int]:
@@ -618,6 +632,7 @@ class SDImageGenParams(_n.SDImageGenParams):
 
     @property
     def vae_tile_size(self) -> tuple[int, int]:
+        """VAE tile size (width, height) in image pixels; 0 uses 256."""
         return (self.vae_tile_size_x, self.vae_tile_size_y)
 
     @vae_tile_size.setter
@@ -626,6 +641,10 @@ class SDImageGenParams(_n.SDImageGenParams):
 
     @property
     def vae_tile_rel_size(self) -> tuple[float, float]:
+        """VAE relative tile size (width, height); > 0 overrides vae_tile_size.
+
+        <= 1 is a fraction of the dimension, > 1 a target tile count.
+        """
         return (self.vae_tile_rel_size_x, self.vae_tile_rel_size_y)
 
     @vae_tile_rel_size.setter
@@ -753,9 +772,15 @@ class SDContext(_n.SDContext):
         slg_scale: float = 0.0,
         flow_shift: float = float("inf"),
         vae_tiling: bool = False,
+        vae_tile_size: Optional[Tuple[int, int]] = None,
+        vae_tile_overlap: Optional[float] = None,
         hires_fix: bool = False,
         hires_scale: float = 2.0,
     ) -> List[SDImage]:
+        """Generate images; ``vae_tile_size`` is (width, height) in pixels.
+
+        ``vae_tile_size`` / ``vae_tile_overlap`` of None keep the defaults (256 px, 0.5).
+        """
         if sample_method is None:
             sample_method = SampleMethod.COUNT
         if scheduler is None:
@@ -779,6 +804,10 @@ class SDContext(_n.SDContext):
         sp.slg_scale = slg_scale
         sp.flow_shift = flow_shift
         params.vae_tiling_enabled = vae_tiling
+        if vae_tile_size is not None:
+            params.vae_tile_size = vae_tile_size
+        if vae_tile_overlap is not None:
+            params.vae_tile_overlap = vae_tile_overlap
         if hires_fix:
             params.set_hires_fix(enabled=True, scale=hires_scale)
         if init_image is not None:
@@ -788,6 +817,25 @@ class SDContext(_n.SDContext):
         if control_image is not None:
             params.set_control_image(control_image, control_strength)
         return self.generate_with_params(params)
+
+    def set_generation_progress_callback(self, callback: Optional[Callable[["SDGenerationProgress"], None]]) -> None:
+        """Set this context's progress callback, or clear it with None.
+
+        Unlike the process-wide :func:`set_progress_callback`, it applies only
+        to this context and reports the stage (sampling, hires, VAE decode).
+        Exceptions raised by ``callback`` are printed, not propagated.
+
+        Raises:
+            RuntimeError: The context is closed or in use by another thread.
+        """
+        if callback is None:
+            super().set_generation_progress_callback(None)
+            return
+
+        def _wrap(*fields: Any) -> None:
+            callback(SDGenerationProgress(*fields))
+
+        super().set_generation_progress_callback(_wrap)
 
     def generate_with_params(self, params: SDImageGenParams) -> List[SDImage]:
         out = super().generate_with_params(params)
@@ -1150,6 +1198,16 @@ def set_log_callback(callback: Optional[Callable[[LogLevel, str], None]]) -> Non
             _logger.warning("Exception in sd log callback: %s", e)
 
     _n.set_log_callback(_wrap)
+
+
+SDGenerationProgress = namedtuple(
+    "SDGenerationProgress", ["stage", "detail", "unit", "sample_pass", "completed", "total"]
+)
+SDGenerationProgress.__doc__ = """One event from SDContext.set_generation_progress_callback.
+
+``total == 0`` means unknown. ``sample_pass`` counts from 1 since registration.
+String fields are ``None`` when upstream leaves them unset.
+"""
 
 
 def set_progress_callback(callback: Optional[Callable[[int, int, float], None]]) -> None:

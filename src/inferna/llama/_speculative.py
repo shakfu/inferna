@@ -76,7 +76,16 @@ class Speculative:
         empty in the target context, then attempting partial removal. Using an
         empty seq id means a caller-prefilled seq 0 (the typical case) is left
         untouched.
+
+        Returns:
+            True if the model supports partial KV removal; False if it does not,
+            or if ``ctx_target`` is None.
+
+        Raises:
+            RuntimeError: ``ctx_target`` has no empty sequence to probe.
         """
+        if ctx_target is None:
+            return False
         # Find an empty sequence to probe with so we don't disturb caller data.
         # n_seq_max defaults to 1 in many configs; in that case the only seq
         # available is 0, and we can only probe non-destructively when it's

@@ -1,4 +1,4 @@
-"""Tests for source-patch application in `scripts/manage.py` (`GgmlBuilder._apply_patch`)."""
+"""Tests for source-patch application in `scripts/manage.py` (`Builder._apply_patch`)."""
 
 import importlib.util
 import shutil
@@ -103,3 +103,11 @@ def test_other_trees_always_get_ggml_patches(tmp_path, monkeypatch, cls_name):
     monkeypatch.setenv("SD_USE_VENDORED_GGML", "0")
     seen = _patches_seen(monkeypatch, getattr(manage, cls_name))
     assert any(n.startswith("ggml-") for n in seen)
+
+
+def test_sqlite_vector_gets_only_its_own_patch(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    seen: list[str] = []
+    monkeypatch.setattr(manage.Builder, "_apply_patch", lambda self, p: seen.append(p.name))
+    manage.SqliteVectorBuilder()._apply_source_patches()
+    assert seen == ["sqlite-vector-inferna.patch"]

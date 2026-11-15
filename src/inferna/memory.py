@@ -583,19 +583,19 @@ def main() -> int:
         epilog="""
 Examples:
   # Basic memory estimation
-  python -m inferna.memory_cli models/model.gguf
+  inferna memory models/model.gguf
 
   # With GPU memory constraint (8GB)
-  python -m inferna.memory_cli models/model.gguf --gpu-memory 8192
+  inferna memory models/model.gguf --gpu-memory 8192
 
   # Multi-GPU setup (2x 4GB GPUs)
-  python -m inferna.memory_cli models/model.gguf --gpu-memory 4096,4096
+  inferna memory models/model.gguf --gpu-memory 4096,4096
 
   # Custom context and batch size
-  python -m inferna.memory_cli models/model.gguf --gpu-memory 8192 --ctx-size 4096 --batch-size 2
+  inferna memory models/model.gguf --gpu-memory 8192 --ctx-size 4096 --batch-size 2
 
   # Quick memory overview only
-  python -m inferna.memory_cli models/model.gguf --overview-only
+  inferna memory models/model.gguf --overview-only
         """,
     )
 

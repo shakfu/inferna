@@ -171,13 +171,20 @@ struct WhisperContextW {
     nb::object busy_lock;  // threading.Lock instance, exposed to Python as `_busy_lock`
 
     WhisperContextW(const std::string& model_path, std::optional<WhisperContextParamsW*> params_opt) {
-        // Reuse Python-side validation for typed/clear error messages.
-        nb::module_ validation = nb::module_::import_("inferna.utils.validation");
-        validation.attr("validate_whisper_file")(model_path, "kind"_a = "whisper model");
-
         whisper_context_params cp = params_opt && *params_opt
             ? (*params_opt)->c
             : whisper_context_default_params();
+        if (cp.dtw_token_timestamps) {
+            // whisper.cpp would silently turn DTW off, or fail with a generic load error.
+            if (cp.flash_attn)
+                throw std::invalid_argument("dtw_token_timestamps requires flash_attn=False");
+            if (cp.dtw_aheads_preset == WHISPER_AHEADS_NONE)
+                throw std::invalid_argument("dtw_token_timestamps requires a dtw_aheads_preset other than NONE");
+        }
+
+        // Reuse Python-side validation for typed/clear error messages.
+        nb::module_ validation = nb::module_::import_("inferna.utils.validation");
+        validation.attr("validate_whisper_file")(model_path, "kind"_a = "whisper model");
         ctx = whisper_init_from_file_with_params(model_path.c_str(), cp);
         if (!ctx) {
             throw std::runtime_error(
@@ -546,6 +553,11 @@ NB_MODULE(_whisper_native, m) {
         .def_prop_rw("dtw_aheads_preset",
             [](WhisperContextParamsW& s){ return (int)s.c.dtw_aheads_preset; },
             [](WhisperContextParamsW& s, int v){
+                // CUSTOM needs a heads array that outlives the context; not exposed.
+                if (v == WHISPER_AHEADS_CUSTOM)
+                    throw std::invalid_argument("WhisperAheadsPreset.CUSTOM is not supported");
+                if (v < WHISPER_AHEADS_NONE || v > WHISPER_AHEADS_LARGE_V3_TURBO)
+                    throw std::invalid_argument("invalid dtw_aheads_preset: " + std::to_string(v));
                 s.c.dtw_aheads_preset = (enum whisper_alignment_heads_preset) v; })
         .def_prop_rw("dtw_n_top",
             [](WhisperContextParamsW& s){ return s.c.dtw_n_top; },

@@ -1251,6 +1251,64 @@ class Builder(AbstractBuilder):
                 f"clean and rebuild."
             )
 
+    def takes_ggml_patches(self) -> bool:
+        """True when ggml-*.patch apply to this tree; they target upstream ggml's layout."""
+        return False
+
+    def _apply_source_patches(self) -> None:
+        """Apply local fixes to the vendored source before building.
+
+        Two sets of ``scripts/patches/*.patch`` files are applied (with
+        ``-p1``, a/ b/ prefixes) to the cloned source tree: ``ggml-*.patch``,
+        which fix the ggml copy that every ggml-backed project vendors, and
+        ``<project>-*.patch`` (e.g. ``stable-diffusion.cpp-*.patch``), which
+        are specific to one upstream. The tree is wiped and re-fetched by
+        ``make reset``/``remake``, so these must run on every build. An
+        already-applied patch is skipped; one that no longer applies fails the
+        build (see `_apply_patch`). The ``.patch`` files are the single source
+        of truth and double as the upstream PR payload; see
+        ``scripts/patches/README.md`` for the rationale and upstream refs.
+        """
+        patch_dir = Path(__file__).resolve().parent / "patches"
+        ggml_patches = sorted(patch_dir.glob("ggml-*.patch")) if self.takes_ggml_patches() else []
+        patches = ggml_patches + sorted(patch_dir.glob(f"{self.name}-*.patch"))
+        for patch in patches:
+            self._apply_patch(patch)
+
+    def _apply_patch(self, patch: Path) -> None:
+        """Apply a single unified diff to ``self.src_dir`` if it isn't already.
+
+        Uses ``git apply`` (which works with or without a git repo) and its
+        ``--check`` / ``--reverse --check`` dry-runs to decide between apply,
+        already-applied, and no-longer-applies.
+
+        A patch that no longer applies is fatal. Skipping it ships the build
+        without the fix, which is how the Metal MSL pin was lost when llama.cpp
+        v0.4.0 moved the code it patched.
+        """
+
+        def _git_apply(*flags: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["git", "apply", *flags, str(patch)],
+                cwd=str(self.src_dir),
+                capture_output=True,
+                text=True,
+            )
+
+        check = _git_apply("--check")
+        if check.returncode == 0:
+            subprocess.run(["git", "apply", str(patch)], cwd=str(self.src_dir), check=True)
+            self.log.info(f"applied patch: {patch.name}")
+        elif _git_apply("--reverse", "--check").returncode == 0:
+            self.log.debug(f"patch already applied, skipping: {patch.name}")
+        else:
+            self.fail(
+                f"{patch.name} no longer applies to {self.name} {self.version} ({self.src_dir}):\n"
+                f"{check.stderr.strip()}\n"
+                f"Rebase it onto this tree, or delete it if upstream fixed the defect, "
+                f"and record which in scripts/patches/README.md."
+            )
+
 
 class GgmlBuilder(Builder):
     """Builder base for ggml-backed projects (llama.cpp / whisper.cpp / sd.cpp).
@@ -1359,90 +1417,34 @@ class GgmlBuilder(Builder):
         """Honour GGML_OPENMP override (upstream default is ON)."""
         openmp = os.environ.get("GGML_OPENMP")
         if openmp is not None:
-            options["GGML_OPENMP"] = "ON" if openmp == "1" else "OFF"
+            options["GGML_OPENMP"] = "ON" if getenv("GGML_OPENMP") else "OFF"
             self.log.info(f"  GGML_OPENMP={options['GGML_OPENMP']}")
 
-    def _ggml_max_name_flags(self) -> dict[str, str]:
-        """CMAKE_{C,CXX}_FLAGS carrying SD's GGML_MAX_NAME, or {} when unused.
+    def _ggml_max_name_flags(self, backend_options: dict[str, Any]) -> dict[str, str]:
+        """CMake options compiling every ggml language with SD's GGML_MAX_NAME, or {} when unused.
 
         Only meaningful when SD shares llama.cpp's ggml; see the note on
         `StableDiffusionCppBuilder.GGML_MAX_NAME` for what a mismatch does to
         `struct ggml_tensor`.
 
-        `-DCMAKE_CXX_FLAGS=...` on the command line *replaces* the cache entry
-        CMake would otherwise initialise, so on Windows the MSVC defaults have
-        to be restated or they are lost -- dropping `/EHsc` and building
-        llama.cpp, whisper.cpp and SD (all of which throw) without an exception
-        model. Neither upstream sets `/EHsc` itself; both rely on CMake's init.
+        Sets `CMAKE_<LANG>_FLAGS_INIT`, to which CMake appends its platform
+        defaults. A `-DCMAKE_<LANG>_FLAGS` replaces them, so MSVC's `/EHsc`
+        had to be restated by hand. CUDA and HIP have their own flag sets, so
+        `.cu` files got the default 64; they are added only when that backend
+        is on, to avoid CMake's unused-variable warning.
         """
         if not StableDiffusionCppBuilder.uses_shared_ggml():
             return {}
-        _def = f"-DGGML_MAX_NAME={StableDiffusionCppBuilder.GGML_MAX_NAME}"
-        if PLATFORM == "Windows":
-            # cmake/Modules/Platform/Windows-MSVC.cmake, CMake >= 3.20.
-            return {
-                "CMAKE_C_FLAGS": f"/DWIN32 /D_WINDOWS {_def}",
-                "CMAKE_CXX_FLAGS": f"/DWIN32 /D_WINDOWS /EHsc {_def}",
-            }
-        return {"CMAKE_C_FLAGS": _def, "CMAKE_CXX_FLAGS": _def}
+        define = f"-DGGML_MAX_NAME={StableDiffusionCppBuilder.GGML_MAX_NAME}"
+        langs = ["C", "CXX"]
+        langs += [
+            lang for lang, opt in (("CUDA", "GGML_CUDA"), ("HIP", "GGML_HIP")) if backend_options.get(opt) == "ON"
+        ]
+        return {f"CMAKE_{lang}_FLAGS_INIT": define for lang in langs}
 
     def takes_ggml_patches(self) -> bool:
         """True when ggml-*.patch apply to this tree; they target upstream ggml's layout."""
         return True
-
-    def _apply_source_patches(self) -> None:
-        """Apply local fixes to the vendored source before building.
-
-        Two sets of ``scripts/patches/*.patch`` files are applied (with
-        ``-p1``, a/ b/ prefixes) to the cloned source tree: ``ggml-*.patch``,
-        which fix the ggml copy that every ggml-backed project vendors, and
-        ``<project>-*.patch`` (e.g. ``stable-diffusion.cpp-*.patch``), which
-        are specific to one upstream. The tree is wiped and re-fetched by
-        ``make reset``/``remake``, so these must run on every build. An
-        already-applied patch is skipped; one that no longer applies fails the
-        build (see `_apply_patch`). The ``.patch`` files are the single source
-        of truth and double as the upstream PR payload; see
-        ``scripts/patches/README.md`` for the rationale and upstream refs.
-        """
-        patch_dir = Path(__file__).resolve().parent / "patches"
-        ggml_patches = sorted(patch_dir.glob("ggml-*.patch")) if self.takes_ggml_patches() else []
-        patches = ggml_patches + sorted(patch_dir.glob(f"{self.name}-*.patch"))
-        for patch in patches:
-            self._apply_patch(patch)
-
-    def _apply_patch(self, patch: Path) -> None:
-        """Apply a single unified diff to ``self.src_dir`` if it isn't already.
-
-        Uses ``git apply`` (which works with or without a git repo) and its
-        ``--check`` / ``--reverse --check`` dry-runs to decide between apply,
-        already-applied, and no-longer-applies.
-
-        A patch that no longer applies is fatal. Skipping it ships the build
-        without the fix, which is how the Metal MSL pin was lost when llama.cpp
-        v0.4.0 moved the code it patched.
-        """
-
-        def _git_apply(*flags: str) -> subprocess.CompletedProcess[str]:
-            return subprocess.run(
-                ["git", "apply", *flags, str(patch)],
-                cwd=str(self.src_dir),
-                capture_output=True,
-                text=True,
-            )
-
-        check = _git_apply("--check")
-        if check.returncode == 0:
-            subprocess.run(["git", "apply", str(patch)], cwd=str(self.src_dir), check=True)
-            self.log.info(f"applied patch: {patch.name}")
-        elif _git_apply("--reverse", "--check").returncode == 0:
-            self.log.debug(f"patch already applied, skipping: {patch.name}")
-        else:
-            self.fail(
-                f"{patch.name} no longer applies to {self.name} {self.version} ({self.src_dir}):\n"
-                f"{check.stderr.strip()}\n"
-                f"Rebase it onto this tree, or delete it if upstream fixed the defect, "
-                f"and record which in scripts/patches/README.md."
-            )
 
 
 class LlamaCppBuilder(GgmlBuilder):
@@ -1508,7 +1510,7 @@ class LlamaCppBuilder(GgmlBuilder):
         # for portable/CI wheels and when GGML_CPU_ALL_VARIANTS is used.
         ggml_native = os.environ.get("GGML_NATIVE")
         if ggml_native is not None:
-            options["GGML_NATIVE"] = "ON" if ggml_native == "1" else "OFF"
+            options["GGML_NATIVE"] = "ON" if getenv("GGML_NATIVE") else "OFF"
             self.log.info(f"  GGML_NATIVE={options['GGML_NATIVE']}")
 
         # CPU all-variants: build ggml-cpu for multiple x86 ISAs (AVX, AVX2,
@@ -1702,7 +1704,7 @@ class LlamaCppBuilder(GgmlBuilder):
         # When SD shares llama.cpp's ggml dylibs, the ggml_tensor struct
         # layout must match. Propagate SD's GGML_MAX_NAME to the llama.cpp
         # build so both sides agree.
-        extra = self._ggml_max_name_flags()
+        extra = self._ggml_max_name_flags(backend_options)
 
         self.cmake_config(
             src_dir=self.src_dir,
@@ -1767,7 +1769,7 @@ class LlamaCppBuilder(GgmlBuilder):
             backend_options["GGML_NATIVE"] = "OFF"
 
         # Match SD's GGML_MAX_NAME so ggml_tensor struct layout is identical
-        extra = self._ggml_max_name_flags()
+        extra = self._ggml_max_name_flags(backend_options)
 
         # macOS: with GGML_BACKEND_DL=ON, ggml builds each backend as a CMake
         # MODULE library, which on Apple is an MH_BUNDLE -- `ld` links only
@@ -2214,6 +2216,30 @@ class WhisperCppBuilder(GgmlBuilder):
         self._apply_openmp(options)
         return options
 
+    INJECT_GGML = Path(__file__).resolve().parent / "cmake" / "whisper-use-llama-ggml.cmake"
+
+    def _ggml_options(self) -> dict[str, Any]:
+        """CMake options compiling whisper against llama.cpp's ggml source tree.
+
+        Whisper links llama.cpp's ggml, so its bundled headers can disagree on
+        enum values (`GGML_TYPE_COUNT` was 43 vs 44 at v1.9.5 / b12359).
+        Injecting the `ggml` target keeps the PUBLIC `GGML_USE_<backend>`
+        defines, which `WHISPER_USE_SYSTEM_GGML` drops; whisper uses them for
+        KV-cache padding. Both values are passed even when empty, because they
+        are CMake cache variables and would otherwise persist.
+        """
+        empty = {"CMAKE_PROJECT_whisper.cpp_INCLUDE": "", "INFERNA_GGML_SOURCE_DIR": ""}
+        llama_ggml = self.project.src / "llama.cpp" / "ggml"
+        if not (llama_ggml / "CMakeLists.txt").exists():
+            self.log.warning(
+                f"{llama_ggml} missing: whisper.cpp compiles its bundled ggml, whose enums may not match the linked one"
+            )
+            return empty
+        return {
+            "CMAKE_PROJECT_whisper.cpp_INCLUDE": self.INJECT_GGML.as_posix(),
+            "INFERNA_GGML_SOURCE_DIR": llama_ggml.as_posix(),
+        }
+
     def build(self, shared: bool = False) -> None:
         """whisper.cpp main build function"""
         if not self.src_dir.exists():
@@ -2230,18 +2256,12 @@ class WhisperCppBuilder(GgmlBuilder):
         # Get backend options
         backend_options = self.get_backend_cmake_options()
 
-        # whisper.cpp builds its own ggml, but only the macOS static build
-        # links it: everywhere else CMakeLists.txt takes the ggml libs from
-        # ${LLAMACPP_LIB}, so `libwhisper.a` and `libcommon.a` end up calling
-        # llama.cpp's ggml. That makes this the third tree that has to agree on
-        # GGML_MAX_NAME -- see the note on StableDiffusionCppBuilder for what a
-        # mismatch does to `struct ggml_tensor`. Whisper has been getting away
-        # with the default (64 against llama.cpp's 160) only because it never
-        # touches `extra`, the one field that moves; that is luck, not design.
-        # Passing it here also keeps the macOS whisper-own-ggml build
-        # self-consistent, since the define reaches whisper's ggml and its own
-        # translation units alike.
-        extra = self._ggml_max_name_flags()
+        # CMakeLists.txt takes the ggml libs from ${LLAMACPP_LIB}, so
+        # `libwhisper.a` and `libcommon.a` call llama.cpp's ggml and must agree
+        # with it on GGML_MAX_NAME (see StableDiffusionCppBuilder.GGML_MAX_NAME)
+        # and on enum values (see _ggml_options).
+        extra = self._ggml_options()
+        extra.update(self._ggml_max_name_flags(backend_options))
 
         self.cmake_config(
             src_dir=self.src_dir,
@@ -2472,13 +2492,6 @@ class StableDiffusionCppBuilder(GgmlBuilder):
         # Get backend options
         backend_options = self.get_backend_cmake_options()
 
-        # MSVC's /bigobj (src/stable-diffusion.cpp exceeds the COFF section
-        # limit) now comes from stable-diffusion.cpp-msvc-bigobj.patch, which
-        # adds it to upstream's own `if (MSVC)` block. Setting CMAKE_CXX_FLAGS
-        # here instead replaced the cache entry CMake initialises and silently
-        # dropped `/EHsc`, leaving a translation unit full of `throw` with no
-        # exception model.
-
         self.cmake_config(
             src_dir=self.src_dir,
             build_dir=self.build_dir,
@@ -2527,6 +2540,8 @@ class SqliteVectorBuilder(Builder):
             self.setup()
         else:
             self.verify_checkout()
+        # Patch the checkout, so the staged copy below carries the fixes.
+        self._apply_source_patches()
         dest = self.thirdparty_dest
         self.log.info(f"staging {self.name} sources into {dest}")
 
@@ -2545,55 +2560,6 @@ class SqliteVectorBuilder(Builder):
         fp16_src = libs_src / "fp16"
         if fp16_src.exists():
             self.copy(fp16_src, dest / "fp16")
-
-        # Patch sqlite-vector.c to:
-        #   1. Define _GNU_SOURCE for strcasestr on older glibc
-        #      (e.g. manylinux/AlmaLinux 8 where strcasestr needs _GNU_SOURCE).
-        #   2. Map strcasecmp / strncasecmp to MSVC equivalents (_stricmp /
-        #      _strnicmp). Upstream uses POSIX names which MSVC's CRT lacks.
-        sqlite_vector_c = dest / "sqlite-vector.c"
-        if sqlite_vector_c.exists():
-            content = sqlite_vector_c.read_text()
-            prepend = ""
-            if "_GNU_SOURCE" not in content:
-                prepend += "#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n"
-            if "INFERNA_MSVC_STRCASECMP_SHIM" not in content:
-                prepend += (
-                    "#if defined(_MSC_VER) && !defined(INFERNA_MSVC_STRCASECMP_SHIM)\n"
-                    "#define INFERNA_MSVC_STRCASECMP_SHIM\n"
-                    "#define strcasecmp  _stricmp\n"
-                    "#define strncasecmp _strnicmp\n"
-                    "#endif\n"
-                )
-            if prepend:
-                sqlite_vector_c.write_text(prepend + content)
-
-        # Patch distance-cpu.c to guard the GCC/Clang-only <cpuid.h> include
-        # behind a non-MSVC check. MSVC's cpuid intrinsics (__cpuidex,
-        # _xgetbv) live in <intrin.h>, which the file pulls in via the
-        # _MSC_VER branches that already exist below the include.
-        distance_cpu_c = dest / "distance-cpu.c"
-        if distance_cpu_c.exists():
-            content = distance_cpu_c.read_text()
-            old = "    #include <cpuid.h>"
-            new = "    #if !defined(_MSC_VER)\n        #include <cpuid.h>\n    #endif"
-            if old in content and new not in content:
-                distance_cpu_c.write_text(content.replace(old, new, 1))
-
-        # Patch distance-avx2.c: its scalar tail calls `__builtin_popcount`
-        # unguarded, which MSVC lacks (LNK2019). Map it to `__popcnt`; every
-        # AVX2 CPU has POPCNT. distance-avx512.c already guards its tail.
-        distance_avx2_c = dest / "distance-avx2.c"
-        if distance_avx2_c.exists():
-            content = distance_avx2_c.read_text()
-            if "INFERNA_MSVC_POPCOUNT_SHIM" not in content:
-                distance_avx2_c.write_text(
-                    "#if defined(_MSC_VER) && !defined(__clang__)\n"
-                    "#define INFERNA_MSVC_POPCOUNT_SHIM\n"
-                    "#include <intrin.h>\n"
-                    "#define __builtin_popcount(x) __popcnt(x)\n"
-                    "#endif\n" + content
-                )
 
 
 # ----------------------------------------------------------------------------

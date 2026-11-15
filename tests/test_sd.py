@@ -1,5 +1,6 @@
 """Tests for the stable diffusion module."""
 
+import gc
 import glob
 import os
 import tempfile
@@ -644,7 +645,6 @@ class TestSDContextIntegration:
         # Image should have some variation (not all black or white)
         assert arr.std() > 5
 
-    @pytest.mark.skip(reason="Multiple generations on same context causes segfault - needs investigation")
     def test_deterministic_seed(self):
         """Test that same seed produces same image."""
         params = SDContextParams()
@@ -677,6 +677,8 @@ class TestSDContextIntegration:
 
         # Should be identical with same seed
         assert np.array_equal(arr1, arr2)
+        del ctx
+        gc.collect()
 
 
 @pytest.mark.skipif(not os.path.exists(MODEL_PATH), reason=f"Model not found at {MODEL_PATH}")

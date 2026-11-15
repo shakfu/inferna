@@ -205,8 +205,22 @@ params = WhisperContextParams()
 params.use_gpu = True           # Use GPU acceleration
 params.flash_attn = True        # Use flash attention
 params.gpu_device = 0           # GPU device index
-params.dtw_token_timestamps = False  # Enable DTW for precise timestamps
+params.dtw_token_timestamps = False  # DTW timestamps; see below
 ```
+
+DTW (dynamic time warping) token timestamps fill `WhisperTokenData.t_dtw`, in 10 ms units. They need `flash_attn = False` and an alignment-head preset matching the model. `WhisperContext` raises `ValueError` otherwise:
+
+```python
+from inferna.whisper import WhisperAheadsPreset
+
+params = WhisperContextParams()
+params.flash_attn = False
+params.dtw_token_timestamps = True
+params.dtw_aheads_preset = WhisperAheadsPreset.BASE_EN  # for ggml-base.en.bin
+# N_TOP_MOST uses the last `dtw_n_top` text layers instead of a model preset.
+```
+
+`WhisperAheadsPreset.CUSTOM` is not supported.
 
 ### WhisperFullParams
 
@@ -408,7 +422,9 @@ def transcribe_with_timestamps(audio_path: str, model_path: str) -> list:
 ```python
 def transcribe_with_word_timestamps(audio_path: str, model_path: str) -> list:
     params = WhisperContextParams()
+    params.flash_attn = False  # DTW requires it off
     params.dtw_token_timestamps = True
+    params.dtw_aheads_preset = WhisperAheadsPreset.BASE_EN  # must match the model
 
     ctx = WhisperContext(model_path, params)
     samples = load_audio(audio_path)

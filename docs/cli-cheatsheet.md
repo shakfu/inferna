@@ -302,6 +302,8 @@ inferna transcribe -m models/ggml-base.en.bin -f audio.wav -osrt -o output
 | `-pp, --print-progress` | Show progress |
 | `-nt, --no-timestamps` | Omit timestamps |
 | `-ng, --no-gpu` | Disable GPU |
+| `-fa, --flash-attn` / `-nfa, --no-flash-attn` | Flash attention on (default) / off |
+| `-dtw, --dtw MODEL` | DTW token timestamps with MODEL's alignment heads (`tiny` ... `large.v3.turbo`). Turns flash attention off; `-ojf` then adds `t_dtw` (seconds) per token |
 | `-v, --verbose` | Show C-level log output from whisper.cpp/ggml |
 
 ---
@@ -469,7 +471,7 @@ All generation subcommands (`txt2img`, `img2img`, `inpaint`, `controlnet`) share
 | `--eta` | float | inf | Eta for samplers (inf = auto-resolve per method) |
 | `--rng` | choice | | RNG type: `std_default`, `cuda`, `cpu` |
 | `--sampler-rng` | choice | | Sampler RNG type |
-| `--prediction` | choice | | Prediction type: `eps`, `v`, `edm_v`, `flow`, `flux_flow`, `flux2_flow` |
+| `--prediction` | choice | | Prediction type: `eps`, `v`, `edm_v`, `sd3_flow`, `flux_flow`, `sefi_flow`, `minit2i_flow`, `sensenova_u1_flow`, `flux3_flow`, `h3_av_flow`, `ming_image_flow` |
 
 ### Guidance Options
 
@@ -499,7 +501,7 @@ All generation subcommands (`txt2img`, `img2img`, `inpaint`, `controlnet`) share
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--vae-tiling` | flag | | Enable VAE tiling for large images |
-| `--vae-tile-size` | string | 512x512 | VAE tile size |
+| `--vae-tile-size` | string | 256x256 | VAE tile size in pixels, WxH |
 | `--vae-tile-overlap` | float | 0.5 | VAE tile overlap fraction |
 
 ### Preview Options

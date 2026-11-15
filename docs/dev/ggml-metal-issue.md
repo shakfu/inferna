@@ -1,3 +1,5 @@
+> **Status (2026-11-15): fixed upstream.** The ggml in llama.cpp `b12359` (ggml 1.0.0) selects `kernel_im2col_ext` on `KH * KW > 1024`, the same quantity the dispatch uses. `scripts/repro_ggml_metal_im2col.sh` with `LLAMA_VER=b12359 WHISPER_VER=v1.9.5` no longer reproduces on an Apple M1. inferna dropped its macOS whisper link-split at `1.0.0a0`; `tests/test_whisper_gpu_parity.py` stays as the regression gate. The text below is the original report.
+
 Reproducible in whisper.cpp on Apple Metal
 
 For transparency: AI was used to help analyze and write up this issue. The defect itself was independently reproduced in two projects, [cyllama](https://github.com/shakfu/cyllama) and [inferna](https://github.com/shakfu/inferna), both of which consume llama.cpp's ggml via llama.cpp, whisper.cpp, and stable-diffusion.cpp.

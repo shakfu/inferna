@@ -58,6 +58,7 @@ MtmdGenAudioType = _N.MtmdGenAudioType
 MtmdGenAudioOutMode = _N.MtmdGenAudioOutMode
 MtmdBatch = _N.MtmdBatch
 MtmdVideo = _N.MtmdVideo
+MtmdResampler = _N.MtmdResampler
 MtmdAudioGenerator = _N.MtmdAudioGenerator
 get_default_media_marker = _N.get_default_media_marker
 get_mmproj_caps = _N.get_mmproj_caps
@@ -201,7 +202,6 @@ GGML_TYPE_COUNT = _N.GGML_TYPE_COUNT
 
 # ggml precision / op / triangular / scale / opt / backend-device-type
 GGML_PREC_UNDEFINED = _N.GGML_PREC_UNDEFINED
-GGML_PREC_DEFAULT = _N.GGML_PREC_DEFAULT
 GGML_PREC_F32 = _N.GGML_PREC_F32
 GGML_PREC_BF16 = _N.GGML_PREC_BF16
 GGML_PREC_F16 = _N.GGML_PREC_F16

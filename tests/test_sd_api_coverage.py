@@ -24,6 +24,24 @@ KNOWN_UNWRAPPED = {
     "sd_cache_params_init": "called by sd_img_gen_params_init, which is wrapped",
     "sd_hires_params_init": "called by sd_img_gen_params_init, which is wrapped",
     "convert": "convert_with_components covers it; convert calls it with no components and n_threads=0",
+    "free_sd_images": "results are freed with free_sd_image_generation_result",
+    "free_sd_audio": "results are freed with free_sd_video_generation_result",
+    **{
+        n: "video upscaling; not bound yet"
+        for n in (
+            "new_video_upscaler_ctx",
+            "free_video_upscaler_ctx",
+            "upscale_video",
+            "sd_video_upscaler_ctx_params_init",
+            "sd_video_upscale_params_init",
+        )
+    },
+    "sd_control_type_name": "control types; not bound yet",
+    "str_to_sd_control_type": "control types; not bound yet",
+    "sd_set_prompt_image_callback": "prompt-image callback; not bound yet",
+    "sd_get_preview_info": "preview pass info; not bound yet",
+    "sd_add_rpc_servers": "not bound yet; SDContextParams.rpc_servers is",
+    "get_upscaler_model_scale": "not bound yet; Upscaler.upscale_factor is",
     "sd_set_backend_eval_callback": (
         "fires per graph node on ggml worker threads with raw ggml_tensor*; "
         "imatrix collection, its practical use, is wrapped"

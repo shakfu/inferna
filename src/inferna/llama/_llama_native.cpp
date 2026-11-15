@@ -1316,6 +1316,7 @@ NB_MODULE(_llama_native, m) {
         PARAM_VAL(LlamaContextParamsW, int,  type_k,            "type_k")
         PARAM_VAL(LlamaContextParamsW, int,  type_v,            "type_v")
         PARAM_VAL(LlamaContextParamsW, size_t, moe_cache_size,  "moe_cache_size")
+        PARAM_VAL(LlamaContextParamsW, float, moe_cache_cpu_share, "moe_cache_cpu_share")
         PARAM_VAL(LlamaContextParamsW, bool, embeddings,        "embeddings")
         PARAM_VAL(LlamaContextParamsW, bool, offload_kqv,       "offload_kqv")
         PARAM_VAL(LlamaContextParamsW, bool, no_perf,           "no_perf")
@@ -2043,7 +2044,8 @@ NB_MODULE(_llama_native, m) {
         }, "idx"_a, "embd"_a)
         .def("set_embd_state", [ext_ptr](LlamaBatchExtW& s, int idx, EmbdArray embd) {
             return llama_batch_ext_set_embd_state(ext_ptr(s), idx, to_llama_embd(embd));
-        }, "idx"_a, "embd"_a, "Set carried-over hidden state for entry idx (not yet implemented upstream).")
+        }, "idx"_a, "embd"_a, "Attach extra hidden state (MTP, deepstack) to entry idx. False for a bad index, a size "
+           "mismatch, state already set, or a context that takes no state embeddings.")
         .def("set_output_embd", [ext_ptr](LlamaBatchExtW& s, int idx, bool value) {
             return llama_batch_ext_set_output_embd(ext_ptr(s), idx, value);
         }, "idx"_a, "value"_a = true)

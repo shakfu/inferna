@@ -16,17 +16,13 @@ class. Background:
   whisper. The base `kernel_im2col` is correct in both snapshots; llama's own
   LLMs never use im2col, so the regression was invisible upstream.
 
-CURRENT STATE (resolved per platform): whisper's ggml linkage is platform-split
-in CMakeLists.txt. On macOS, where the Metal defect bites, `_whisper_native`
-links whisper's OWN self-consistent ggml (static build) and transcribes
-correctly. On Linux / non-Apple, whisper links llama's shared ggml (the
-single-ggml premise) -- the defect is Metal-only, so CUDA/Vulkan/CPU are
-unaffected. Hence this gate is a hard PASS on every default (static) build.
-
-Known gap: the macOS WITH_DYLIB build still links llama's ggml dylibs and so
-remains broken on Metal (an empty transcript) -- see docs/dev/ggml-metal-issue.md.
-This gate has no xfail: if it goes red, that is the intended "do not ship GPU
-whisper on this platform/pin" signal, and macOS-dynamic is exactly such a case.
+CURRENT STATE: fixed upstream. The ggml in llama.cpp b12359 (ggml 1.0.0)
+selects the kernel on `KH*KW <= 1024`, the same quantity the dispatch uses.
+`scripts/repro_ggml_metal_im2col.sh` no longer reproduces at b12359 / whisper
+v1.9.5, so `_whisper_native` links llama's ggml on every platform again (the
+single-ggml premise). This gate keeps the guard: if a later pin regresses,
+it goes red. It has no xfail; red is the "do not ship GPU whisper on this
+platform/pin" signal. History: docs/dev/ggml-metal-issue.md.
 
 What this test guards: for the current llama/whisper/ggml pin combination on
 the current platform, the GPU backend must transcribe correctly and agree with

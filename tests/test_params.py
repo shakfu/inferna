@@ -313,6 +313,7 @@ def test_default_context_params():
     assert params.type_k == 1  # GGML_TYPE_F16 = 1
     assert params.type_v == 1  # GGML_TYPE_F16 = 1
     assert params.moe_cache_size == 0  # disabled
+    assert params.moe_cache_cpu_share == 0.0  # all misses uploaded
     assert params.offload_kqv == True
     assert params.no_perf == True
 
@@ -377,9 +378,9 @@ def test_default_ggml_threadpool_params():
 
 
 def test_ggml_prec_values():
-    # values from ggml.h enum ggml_prec; DEFAULT is a deprecated alias of UNDEFINED
+    # values from ggml.h enum ggml_prec
     assert cy.GGML_PREC_UNDEFINED == 0
-    assert cy.GGML_PREC_DEFAULT == cy.GGML_PREC_UNDEFINED
+    assert not hasattr(cy, "GGML_PREC_DEFAULT")  # removed upstream in b12359
     assert cy.GGML_PREC_F32 == 10
     assert cy.GGML_PREC_BF16 == 15
     assert cy.GGML_PREC_F16 == 20

@@ -49,6 +49,29 @@ KNOWN_UNWRAPPED = {
         "llama_state_seq_set_data": "covered by llama_state_seq_set_data_ext",
         "llama_load_mode_from_str": "reimplemented over llama_load_mode_name; llama.cpp aborts on an unknown name",
         "llama_batch_get_one": "reimplemented as an owned LlamaBatch; llama.cpp's borrows the token buffer",
+        **{
+            f"llama_{n}": "NextN / DFlash speculative-decoding API; not bound yet"
+            for n in (
+                "model_dflash_selector_top_k",
+                "model_target_layer_ids",
+                "model_target_layer_ids_n",
+                "set_embeddings_nextn",
+                "set_nextn_layer_offset",
+                "get_embeddings_nextn",
+                "get_embeddings_nextn_ith",
+                "set_embeddings_layer_inp",
+                "get_embeddings_layer_inp",
+                "set_embeddings_layer_inp_dev",
+                "supports_embd_row",
+                "set_embeddings_nextn_dev",
+                "get_embeddings_nextn_rows",
+                "set_embeddings_nextn_rows",
+                "set_ctx_state_src",
+                "get_ctx_other",
+                "batch_ext_add_embd_row",
+                "batch_ext_set_embd_state_row",
+            )
+        },
     },
     "mtmd.h": {
         "mtmd_bitmap_init_lazy": _MTMD_VIDEO,
@@ -114,7 +137,6 @@ KNOWN_UNWRAPPED = {
 
 # Fields of structs the bindings use that they leave unset, as "struct.field".
 KNOWN_UNBOUND_FIELDS = {
-    "llama_context_params.defrag_thold": "deprecated upstream",
     "llama_context_params.cb_eval": "graph-eval callback; fires per node on ggml worker threads",
     "llama_context_params.cb_eval_user_data": "graph-eval callback; fires per node on ggml worker threads",
     "llama_context_params.abort_callback": "cancellation uses llama_set_abort_callback",

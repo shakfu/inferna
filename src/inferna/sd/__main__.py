@@ -68,11 +68,27 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from .stable_diffusion import (
+        Prediction,
         SampleMethod,
         Scheduler,
         SDContextParams,
         SDImage,
     )
+
+# Upstream's prediction names; literal so --help needs no extension import. Must match prediction_map().
+PREDICTION_CHOICES = [
+    "eps",
+    "v",
+    "edm_v",
+    "sd3_flow",
+    "flux_flow",
+    "sefi_flow",
+    "minit2i_flow",
+    "sensenova_u1_flow",
+    "flux3_flow",
+    "h3_av_flow",
+    "ming_image_flow",
+]
 
 
 def save_image(img: "SDImage", path: str) -> None:
@@ -172,7 +188,7 @@ def validate_model_args(args: argparse.Namespace) -> None:
 
 def create_context_params(args: argparse.Namespace) -> "SDContextParams":
     """Create SDContextParams from CLI args."""
-    from .stable_diffusion import SDContextParams, RngType, Prediction, LoraApplyMode
+    from .stable_diffusion import SDContextParams, RngType, LoraApplyMode
 
     params = SDContextParams()
     if hasattr(args, "model") and args.model:
@@ -244,16 +260,7 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
         rng_map = {"std_default": RngType.STD_DEFAULT, "cuda": RngType.CUDA, "cpu": RngType.CPU}
         params.sampler_rng_type = rng_map.get(args.sampler_rng, RngType.CUDA)
     if hasattr(args, "prediction") and args.prediction:
-        pred_map = {
-            "eps": Prediction.EPS,
-            "v": Prediction.V,
-            "edm_v": Prediction.EDM_V,
-            "flow": Prediction.FLOW,
-            "flux_flow": Prediction.FLUX_FLOW,
-            "sefi_flow": Prediction.SEFI_FLOW,
-            "minit2i_flow": Prediction.MINIT2I_FLOW,
-        }
-        params.prediction = pred_map.get(args.prediction, Prediction.EPS)
+        params.prediction = prediction_map()[args.prediction]
     if hasattr(args, "lora_apply_mode") and args.lora_apply_mode:
         mode_map = {
             "auto": LoraApplyMode.AUTO,
@@ -267,6 +274,29 @@ def create_context_params(args: argparse.Namespace) -> "SDContextParams":
         params.tae_preview_only = True
 
     return params
+
+
+def vae_tile_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    """`SDContext.generate` kwargs for --vae-tile-size / --vae-tile-overlap; unset flags keep the defaults."""
+    kwargs: dict[str, Any] = {}
+    if getattr(args, "vae_tile_size", None):
+        w, sep, h = args.vae_tile_size.lower().partition("x")
+        if not (sep and w.isdigit() and h.isdigit() and int(w) > 0 and int(h) > 0):
+            raise SystemExit(f"Error: --vae-tile-size must be WxH with positive integers, got {args.vae_tile_size!r}")
+        kwargs["vae_tile_size"] = (int(w), int(h))
+    if getattr(args, "vae_tile_overlap", None) is not None:
+        kwargs["vae_tile_overlap"] = args.vae_tile_overlap
+    return kwargs
+
+
+def prediction_map() -> dict[str, "Prediction"]:
+    """Map upstream prediction names (as `sd-cli --prediction` takes them) to `Prediction`."""
+    from .stable_diffusion import Prediction
+
+    # upstream calls FLOW_PRED "sd3_flow"
+    return {
+        ("sd3_flow" if p is Prediction.FLOW else p.name.lower()): p for p in Prediction if p is not Prediction.COUNT
+    }
 
 
 def _parse_enum(value: str, enum: type[IntEnum], from_str: Callable[[str], Any], to_str: Callable[[Any], str], label: str) -> Any:
@@ -378,6 +408,7 @@ def cmd_txt2img(args: argparse.Namespace) -> int:
             slg_scale=args.slg_scale,
             flow_shift=args.flow_shift if getattr(args, "flow_shift", None) is not None else float("inf"),
             vae_tiling=args.vae_tiling,
+            **vae_tile_kwargs(args),
         )
     except RuntimeError as e:
         print(f"\nError: {e}", file=sys.stderr)
@@ -459,6 +490,7 @@ def cmd_img2img(args: argparse.Namespace) -> int:
             slg_scale=args.slg_scale,
             flow_shift=args.flow_shift if getattr(args, "flow_shift", None) is not None else float("inf"),
             vae_tiling=args.vae_tiling,
+            **vae_tile_kwargs(args),
         )
     except RuntimeError as e:
         print(f"\nError: {e}", file=sys.stderr)
@@ -544,6 +576,7 @@ def cmd_inpaint(args: argparse.Namespace) -> int:
             eta=args.eta,
             flow_shift=args.flow_shift if getattr(args, "flow_shift", None) is not None else float("inf"),
             vae_tiling=args.vae_tiling,
+            **vae_tile_kwargs(args),
         )
     except RuntimeError as e:
         print(f"\nError: {e}", file=sys.stderr)
@@ -627,6 +660,7 @@ def cmd_controlnet(args: argparse.Namespace) -> int:
             slg_scale=args.slg_scale,
             flow_shift=args.flow_shift if getattr(args, "flow_shift", None) is not None else float("inf"),
             vae_tiling=args.vae_tiling,
+            **vae_tile_kwargs(args),
         )
     except RuntimeError as e:
         print(f"\nError: {e}", file=sys.stderr)
@@ -906,7 +940,7 @@ def add_common_sampler_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--prediction",
-        choices=["eps", "v", "edm_v", "sd3_flow", "flux_flow", "sefi_flow", "minit2i_flow"],
+        choices=PREDICTION_CHOICES,
         help="Prediction type override",
     )
 
@@ -989,14 +1023,11 @@ def add_common_vae_tiling_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--vae-tiling", dest="vae_tiling", action="store_true", help="Enable VAE tiling for large images"
     )
-    parser.add_argument(
-        "--vae-tile-size", dest="vae_tile_size", default="512x512", help="VAE tile size (default: 512x512)"
-    )
+    parser.add_argument("--vae-tile-size", dest="vae_tile_size", help="VAE tile size in pixels, WxH (default: 256x256)")
     parser.add_argument(
         "--vae-tile-overlap",
         dest="vae_tile_overlap",
         type=float,
-        default=0.5,
         help="VAE tile overlap fraction (default: 0.5)",
     )
 

@@ -501,38 +501,14 @@ else()
     endif()
 endif()
 
-# Whisper ggml linkage -- platform-split:
-#
-#   * Linux / non-Apple: link llama's shared ggml (the single ggml stack this
-#     project ships for all three wrappers). The Metal im2col defect is
-#     Apple-only, so CUDA/Vulkan/CPU run whisper correctly on llama's ggml and
-#     the single-ggml premise holds.
-#
-#   * macOS (APPLE): link whisper's OWN ggml from thirdparty/whisper.cpp/lib.
-#     llama's ggml-metal miscomputes whisper's encoder (1-D im2col with large
-#     input-channel count) -> whisper_full returns rc=0 with an empty
-#     transcript on the Apple GPU backend. whisper's own ggml is self-
-#     consistent and correct. This is the one place the single-ggml premise is
-#     deliberately broken, scoped as tightly as possible, pending an upstream
-#     ggml fix (see docs/dev/ggml-metal-issue.md). Applies to the static build
-#     only; the macOS WITH_DYLIB path remains a documented gap.
-#
-# In all cases whisper's own host libs (libwhisper, libcommon) come from
-# thirdparty/whisper.cpp/lib.
+# Whisper links llama's ggml on every platform: the single ggml this project
+# ships for all three wrappers. whisper.cpp is compiled against that ggml's
+# source tree too (WhisperCppBuilder._ggml_options in scripts/manage.py), so
+# headers and libs agree. Whisper's own host libs (libwhisper, libcommon) come
+# from thirdparty/whisper.cpp/lib.
 if(WITH_WHISPER)
     static_lib(LIB_WHISPER_COMMON "${WHISPERCPP_LIB}" "common")
     static_lib(LIB_WHISPER "${WHISPERCPP_LIB}" "whisper")
-    if(APPLE AND NOT WITH_DYLIB)
-        static_lib(WLIB_GGML "${WHISPERCPP_LIB}" "ggml")
-        static_lib(WLIB_GGML_BASE "${WHISPERCPP_LIB}" "ggml-base")
-        static_lib(WLIB_GGML_CPU "${WHISPERCPP_LIB}" "ggml-cpu")
-        set(WHISPER_GGML_LIBS ${WLIB_GGML} ${WLIB_GGML_BASE} ${WLIB_GGML_CPU})
-        if(GGML_METAL)
-            static_lib(WLIB_GGML_BLAS "${WHISPERCPP_LIB}" "ggml-blas")
-            static_lib(WLIB_GGML_METAL "${WHISPERCPP_LIB}" "ggml-metal")
-            list(APPEND WHISPER_GGML_LIBS ${WLIB_GGML_BLAS} ${WLIB_GGML_METAL})
-        endif()
-    endif()
 endif()
 
 if(WITH_STABLEDIFFUSION)
@@ -798,9 +774,7 @@ if(WITH_WHISPER)
         CXX_STANDARD_REQUIRED ON
     )
 
-    # All branches link llama's shared ggml (the single ggml this project
-    # ships). KNOWN BROKEN on Apple Metal -- whisper's encoder yields empty
-    # transcripts; see docs/dev/ggml-metal-issue.md. CPU / non-Metal correct.
+    # All branches link llama's ggml (the single ggml this project ships).
     if(WITH_DYLIB)
         # See _llama_native: --no-as-needed retains backend libs (ggml-cuda
         # etc.) in NEEDED so auditwheel/delocate can chase and bundle them.
@@ -836,39 +810,23 @@ if(WITH_WHISPER)
             BUILD_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB}"
             INSTALL_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB}"
         )
-    elseif(APPLE)
-        # macOS static against whisper's OWN ggml (WHISPER_GGML_LIBS), NOT
-        # llama's: llama's ggml-metal miscomputes whisper's encoder (see the
-        # prep block above and docs/dev/ggml-metal-issue.md). whisper's TU
-        # references no llama symbols, so this is a clean self-consistent link.
-        # ld64 pulls the needed ggml backend registrations without whole-archive
-        # (verified via standalone relink). rpath is whisper-only.
-        target_link_libraries(_whisper_native PRIVATE
-            "${LIB_WHISPER}"
-            "${LIB_WHISPER_COMMON}"
-            ${WHISPER_GGML_LIBS}
-            ${SYSTEM_LIBS}
-        )
-        set_target_properties(_whisper_native PROPERTIES
-            BUILD_RPATH "${WHISPERCPP_LIB}"
-            INSTALL_RPATH "${WHISPERCPP_LIB}"
-        )
     else()
-        # Windows static against llama's ggml, matching the Linux branch and
-        # the platform-split policy above: the ggml-metal defect that forces
-        # whisper's own ggml is Apple-only, so the single-ggml premise holds
-        # here. WHISPER_GGML_LIBS is deliberately empty off Apple -- linking
-        # whisper.lib without any ggml is what produced ~100 unresolved
-        # ggml_backend_* externals (LNK2019) in _whisper_native.
-        #
-        # No /WHOLEARCHIVE: _llama_native already links the same archives
-        # plainly on Windows, so the backend registrations survive as-is.
+        # macOS / Windows static against llama's ggml. No whole-archive:
+        # _llama_native links the same archives plainly on both, and ld64 / MSVC
+        # keep the backend registrations. Linking whisper without any ggml
+        # produced ~100 unresolved ggml_backend_* externals (LNK2019) on Windows.
         target_link_libraries(_whisper_native PRIVATE
             "${LIB_WHISPER}"
             "${LIB_WHISPER_COMMON}"
             ${_GGML_LIBS}
             ${SYSTEM_LIBS}
         )
+        if(APPLE)
+            set_target_properties(_whisper_native PROPERTIES
+                BUILD_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB}"
+                INSTALL_RPATH "${LLAMACPP_LIB};${WHISPERCPP_LIB}"
+            )
+        endif()
     endif()
 
     install(TARGETS _whisper_native DESTINATION "inferna/whisper")

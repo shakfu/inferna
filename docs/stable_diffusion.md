@@ -302,7 +302,7 @@ params.control_strength = 0.9    # ControlNet strength
 
 # VAE tiling for large images
 params.vae_tiling_enabled = True
-params.vae_tile_size = (512, 512)
+params.vae_tile_size = (512, 512)  # pixels; 0 uses 256
 params.vae_tile_overlap = 0.5
 
 # EasyCache acceleration
@@ -912,7 +912,7 @@ print(type_name(SDType.Q4_0))           # "q4_0"
 print(sample_method_name(SampleMethod.EULER))  # "euler"
 print(scheduler_name(Scheduler.KARRAS))  # "karras"
 print(sample_method_from_str("dpm++2m"))  # SampleMethod.DPMPP2M
-print(version())                         # "master-898-2bb7294+"
+print(version())                         # "master-1094-3bad892+"
 print(list_devices())                    # [("MTL0", "Apple M1"), ("BLAS", "Accelerate"), ("CPU", "Apple M1")]
 ```
 

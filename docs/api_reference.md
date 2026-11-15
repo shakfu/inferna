@@ -1934,7 +1934,7 @@ params.clip_skip = -1
 
 # VAE tiling
 params.vae_tiling_enabled = True
-params.vae_tile_size = (512, 512)
+params.vae_tile_size = (512, 512)  # pixels; 0 uses 256
 params.vae_tile_overlap = 0.5
 
 # Cache acceleration (legacy easycache_* aliases also available)

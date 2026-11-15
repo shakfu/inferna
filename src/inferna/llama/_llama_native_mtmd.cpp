@@ -144,6 +144,19 @@ struct MtmdVideoW {
     }
 };
 
+struct MtmdResamplerW {
+    mtmd_helper_resampler* ptr = nullptr;
+    int32_t rate_in = 0;
+    int32_t rate_out = 0;
+    ~MtmdResamplerW() { close(); }
+    MtmdResamplerW() = default;
+    MtmdResamplerW(const MtmdResamplerW&) = delete;
+    MtmdResamplerW& operator=(const MtmdResamplerW&) = delete;
+    void close() {
+        if (ptr) { mtmd_helper_resampler_free(ptr); ptr = nullptr; }
+    }
+};
+
 struct MtmdAudioGeneratorW {
     mtmd_helper_gen_audio* ptr = nullptr;
     ::llama_context* lctx = nullptr;
@@ -226,7 +239,8 @@ void register_mtmd(nb::module_& m) {
         .value("POCKETTTS",  MTMD_GEN_AUDIO_TYPE_POCKETTTS)
         .value("SOPRANO",    MTMD_GEN_AUDIO_TYPE_SOPRANO)
         .value("LFM3A",      MTMD_GEN_AUDIO_TYPE_LFM3A)
-        .value("CHATTERBOX", MTMD_GEN_AUDIO_TYPE_CHATTERBOX);
+        .value("CHATTERBOX", MTMD_GEN_AUDIO_TYPE_CHATTERBOX)
+        .value("DRAMA3",     MTMD_GEN_AUDIO_TYPE_DRAMA3);
 
     nb::enum_<mtmd_helper_gen_audio_out_mode>(m, "MtmdGenAudioOutMode",
         "What a response that continues a sequence (set_input n_past > 0) outputs.")
@@ -807,6 +821,45 @@ void register_mtmd(nb::module_& m) {
         .def("__exit__", [](MtmdVideoW& s, nb::args){ s.close(); return false; });
 
     // -------------------------------------------------------------------------
+    // MtmdResampler
+    // -------------------------------------------------------------------------
+    nb::class_<MtmdResamplerW>(m, "MtmdResampler",
+        "Streaming resampler for raw mono float32 PCM. Filter state carries across process() "
+        "calls, so use one instance per stream, e.g. to convert capture-rate audio to "
+        "MtmdContext.audio_sample_rate.")
+        .def("__init__", [](MtmdResamplerW* self, int32_t rate_in, int32_t rate_out){
+            if (rate_in <= 0 || rate_out <= 0)
+                throw std::invalid_argument("sample rates must be > 0, got " + std::to_string(rate_in) +
+                                            " -> " + std::to_string(rate_out));
+            new (self) MtmdResamplerW();
+            self->ptr = mtmd_helper_resampler_init(rate_in, rate_out);
+            if (!self->ptr)
+                throw std::runtime_error("Failed to initialize resampler " + std::to_string(rate_in) +
+                                         " -> " + std::to_string(rate_out));
+            self->rate_in = rate_in;
+            self->rate_out = rate_out;
+        }, "rate_in"_a, "rate_out"_a)
+        .def_ro("rate_in", &MtmdResamplerW::rate_in)
+        .def_ro("rate_out", &MtmdResamplerW::rate_out)
+        .def("process", [](MtmdResamplerW& s, std::vector<float> samples){
+            if (!s.ptr) throw std::runtime_error("Resampler is closed");
+            const float* out = nullptr;
+            // Holds the GIL: the call mutates filter state, and close() must not race it.
+            int64_t n_out = mtmd_helper_resampler_process(
+                s.ptr, samples.empty() ? nullptr : samples.data(), samples.size(), &out);
+            if (n_out < 0)
+                throw std::runtime_error("Resampling failed with error code: " + std::to_string(n_out));
+            // out may alias the input (equal rates) or an internal buffer reused next call
+            nb::bytes raw(n_out > 0 ? (const char*) out : "", (size_t) n_out * sizeof(float));
+            return nb::module_::import_("array").attr("array")("f", raw);
+        }, "samples"_a,
+           "Resample one chunk of float32 samples (any float sequence, e.g. array('f')). Returns "
+           "array('f'), which may be empty while the filter fills.")
+        .def("close", [](MtmdResamplerW& s){ s.close(); }, "Release the native resampler. Idempotent.")
+        .def("__enter__", [](nb::object self){ return self; })
+        .def("__exit__", [](MtmdResamplerW& s, nb::args){ s.close(); return false; });
+
+    // -------------------------------------------------------------------------
     // MtmdAudioGenerator
     // -------------------------------------------------------------------------
     nb::class_<MtmdAudioGeneratorW>(m, "MtmdAudioGenerator",
@@ -828,7 +881,7 @@ void register_mtmd(nb::module_& m) {
         }, "llama_ctx"_a, "mtmd_ctx"_a)
         .def("set_input",
             [](MtmdAudioGeneratorW& s, const std::string& prompt, nb::object speaker_obj,
-               std::optional<std::string> lang, int top_k, float top_p, uint32_t seed,
+               std::optional<std::string> lang, int top_k, float top_p, float temp, uint32_t seed,
                bool wav, bool stream, int32_t n_past, mtmd_helper_gen_audio_out_mode out_mode){
                 if (n_past < 0) throw std::invalid_argument("n_past must be >= 0");
                 // upstream reads out_mode only when continuing a sequence
@@ -846,6 +899,7 @@ void register_mtmd(nb::module_& m) {
                 inp.lang = (lang && !lang->empty()) ? lang->c_str() : nullptr;
                 inp.top_k = top_k;
                 inp.top_p = top_p;
+                inp.temp = temp;
                 inp.seed = seed;
                 inp.out_type = wav ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV : MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
                 inp.stream = stream;
@@ -863,11 +917,12 @@ void register_mtmd(nb::module_& m) {
                     (n_past > 0 ? " (only LFM3-Audio can continue a sequence)" : ""));
             },
             "prompt"_a, "speaker"_a.none() = nb::none(), "lang"_a.none() = nb::none(),
-            "top_k"_a = 0, "top_p"_a = 0.0f, "seed"_a = 0xFFFFFFFFu, "wav"_a = true, "stream"_a = false,
+            "top_k"_a = 0, "top_p"_a = 0.0f, "temp"_a = -1.0f, "seed"_a = 0xFFFFFFFFu, "wav"_a = true, "stream"_a = false,
             "n_past"_a = 0, "out_mode"_a = MTMD_HELPER_GEN_AUDIO_OUT_AUTO,
             "Start a new utterance; discards any previous state. ``speaker`` is reference audio for "
             "voice cloning or a voice bitmap from MtmdContext.gen_audio_voice. top_k/top_p of 0 use "
-            "the pipeline default; seed 0xFFFFFFFF is random. ``wav`` selects 16-bit WAV over float32 "
+            "the pipeline default; temp < 0 uses the model default and 0 is greedy, if the model supports it; "
+            "seed 0xFFFFFFFF is random. ``wav`` selects 16-bit WAV over float32 "
             "PCM. With ``stream``, each get_output() returns only new audio; call flush() after the "
             "last step_gen(). n_past > 0 continues a sequence of that many positions with ``prompt`` as raw "
             "text, and out_mode picks what the response outputs (LFM3-Audio only).")

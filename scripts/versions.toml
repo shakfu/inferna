@@ -6,11 +6,11 @@
 # Pin the bNNNNN nightly tag, not the semver tag it duplicates: upstream
 # publishes prebuilt binary assets only under bNNNNN, so `download_release()`
 # (every dynamic GPU wheel) 404s on a vN.N.N pin.
-llama_cpp = "b12110"  # same commit as v0.9.0
-whisper_cpp = "v1.9.4"
+llama_cpp = "b12359"  # same commit as v1.0.0
+whisper_cpp = "v1.9.5"
 # FLOOR for shared-ggml builds: master-883. From master-817 sd.cpp calls ops
 # that exist only in leejet's ggml fork. master-883 (leejet/stable-diffusion.cpp#1999)
 # added SD_USE_UPSTREAM_GGML, which compiles those calls out; see
 # StableDiffusionCppBuilder._ggml_options in manage.py.
-stable_diffusion_cpp = "master-898-2bb7294"
-sqlite_vector = "1.1.2"
+stable_diffusion_cpp = "master-1094-3bad892"
+sqlite_vector = "1.2.0"

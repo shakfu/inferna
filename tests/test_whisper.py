@@ -1045,3 +1045,60 @@ class TestVadContext:
         with pytest.raises(RuntimeError, match="closed"):
             vad.probs()
         vad.close()  # idempotent
+
+
+def test_dtw_params_roundtrip():
+    params = wh.WhisperContextParams()
+    assert params.dtw_aheads_preset == wh.WhisperAheadsPreset.NONE
+    params.dtw_aheads_preset = wh.WhisperAheadsPreset.BASE_EN
+    params.dtw_n_top = 2
+    params.dtw_mem_size = 64 * 1024 * 1024
+    assert params.dtw_aheads_preset == wh.WhisperAheadsPreset.BASE_EN
+    assert params.dtw_n_top == 2
+    assert params.dtw_mem_size == 64 * 1024 * 1024
+
+
+@pytest.mark.parametrize("value", [wh.WhisperAheadsPreset.CUSTOM, -1, wh.WhisperAheadsPreset.LARGE_V3_TURBO + 1])
+def test_dtw_preset_rejects_unsupported(value):
+    with pytest.raises(ValueError):
+        wh.WhisperContextParams().dtw_aheads_preset = value
+
+
+def test_dtw_with_flash_attn_raises():
+    # whisper.cpp would load the model and silently disable DTW.
+    params = wh.WhisperContextParams()
+    params.dtw_token_timestamps = True
+    params.dtw_aheads_preset = wh.WhisperAheadsPreset.BASE_EN
+    assert params.flash_attn
+    with pytest.raises(ValueError, match="flash_attn=False"):
+        wh.WhisperContext("unused.bin", params)
+
+
+def test_dtw_without_preset_raises():
+    params = wh.WhisperContextParams()
+    params.dtw_token_timestamps = True
+    params.flash_attn = False
+    with pytest.raises(ValueError, match="dtw_aheads_preset"):
+        wh.WhisperContext("unused.bin", params)
+
+
+def test_dtw_token_timestamps(whisper_model_path, sample_audio_path):
+    params = wh.WhisperContextParams()
+    params.flash_attn = False
+    params.dtw_token_timestamps = True
+    params.dtw_aheads_preset = wh.WhisperAheadsPreset.BASE_EN
+    samples, _ = load_wav_file(sample_audio_path)
+    ctx = wh.WhisperContext(whisper_model_path, params)
+    ctx.full(samples, wh.WhisperFullParams())
+    eot = ctx.token_eot()
+    t_dtw = [
+        ctx.full_get_token_data(0, j).t_dtw
+        for j in range(ctx.full_n_tokens(0))
+        if ctx.full_get_token_data(0, j).id < eot
+    ]
+    ctx.close()
+    del ctx
+    gc.collect()
+    assert len(t_dtw) > 5
+    assert all(t >= 0 for t in t_dtw)
+    assert t_dtw == sorted(t_dtw)

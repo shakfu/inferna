@@ -97,11 +97,14 @@ inline void sd_apply_ref_image_args(P& p,
 struct SDImageW {
     sd_image_t img{};
     bool owns = false;
+    // sdcpp.generation/v1 JSON copied from an upstream result; unset for Python-built images
+    std::optional<std::string> generation_info;
 
     SDImageW() = default;
     SDImageW(const SDImageW&) = delete;
     SDImageW& operator=(const SDImageW&) = delete;
-    SDImageW(SDImageW&& other) noexcept : img(other.img), owns(other.owns) {
+    SDImageW(SDImageW&& other) noexcept
+        : img(other.img), owns(other.owns), generation_info(std::move(other.generation_info)) {
         other.img = sd_image_t{};
         other.owns = false;
     }
@@ -281,6 +284,7 @@ struct SDImageGenParamsW {
 struct SDContextW {
     sd_ctx_t* ctx = nullptr;
     nb::object busy_lock;
+    nb::object gen_progress_cb;  // keeps the callable passed as C `data` alive
 
     explicit SDContextW(SDContextParamsW& params) {
         // Validation lives Python-side (inferna.utils.validation) for a
@@ -459,6 +463,64 @@ extern "C" void _c_preview_cb(int step, int frame_count, sd_image_t* frames,
     } catch (...) {}
 }
 
+// Forward a context-local progress event to the Python callable in `data`.
+// Exceptions are printed, not propagated: upstream requires callbacks not to throw.
+extern "C" void _c_generation_progress_cb(const sd_generation_progress_t* p, void* data) {
+    nb::gil_scoped_acquire gil;
+    auto str = [](const char* v) -> nb::object { return v ? nb::cast(std::string(v)) : nb::none(); };
+    try {
+        nb::handle((PyObject*) data)(str(p->stage), str(p->detail), str(p->unit),
+                                     p->sample_pass, p->completed, p->total);
+    } catch (nb::python_error& e) {
+        e.restore();
+        PyErr_PrintEx(0);
+    } catch (...) {}
+}
+
+static std::optional<std::string> opt_str(const char* v) {
+    return v ? std::optional<std::string>(v) : std::nullopt;
+}
+
+// Move each result image into an owning SDImage, then free the result. Moved
+// pixels are NULLed in `res` so the upstream free skips them.
+static nb::list take_image_result(sd_image_generation_result_t* res) {
+    nb::list out;
+    try {
+        for (int i = 0; i < res->count; ++i) {
+            auto* w = new SDImageW{};
+            w->img = res->items[i].image;
+            w->owns = true;
+            res->items[i].image.data = nullptr;
+            w->generation_info = opt_str(res->items[i].generation_info);
+            out.append(nb::cast(w, nb::rv_policy::take_ownership));
+        }
+    } catch (...) {
+        free_sd_image_generation_result(res);
+        throw;
+    }
+    free_sd_image_generation_result(res);
+    return out;
+}
+
+// Move each frame into an owning SDImage, then free the result (audio included).
+static nb::list take_video_result(sd_video_generation_result_t* res) {
+    nb::list out;
+    try {
+        for (int i = 0; i < res->frame_count; ++i) {
+            auto* w = new SDImageW{};
+            w->img = res->frames[i];
+            w->owns = true;
+            res->frames[i].data = nullptr;
+            out.append(nb::cast(w, nb::rv_policy::take_ownership));
+        }
+    } catch (...) {
+        free_sd_video_generation_result(res);
+        throw;
+    }
+    free_sd_video_generation_result(res);
+    return out;
+}
+
 // =============================================================================
 // Helpers for module-init (enum int constants). Placed here for visibility.
 // =============================================================================
@@ -525,6 +587,9 @@ static nb::dict make_enum_dict() {
     add("SEFI_FLOW_PRED", SEFI_FLOW_PRED);
     add("MINIT2I_FLOW_PRED", MINIT2I_FLOW_PRED);
     add("SENSENOVA_U1_FLOW_PRED", SENSENOVA_U1_FLOW_PRED);
+    add("FLUX3_FLOW_PRED", FLUX3_FLOW_PRED);
+    add("H3_AV_FLOW_PRED", H3_AV_FLOW_PRED);
+    add("MING_IMAGE_FLOW_PRED", MING_IMAGE_FLOW_PRED);
     add("PREDICTION_COUNT", PREDICTION_COUNT);
 
     add("SD_TYPE_F32", SD_TYPE_F32);
@@ -592,6 +657,18 @@ static nb::dict make_enum_dict() {
     add("LORA_APPLY_AT_RUNTIME", LORA_APPLY_AT_RUNTIME);
     add("LORA_APPLY_MODE_COUNT", LORA_APPLY_MODE_COUNT);
 
+    // Exported for parity with the header; control_type itself is not bound yet.
+    add("SD_CONTROL_TYPE_NONE", SD_CONTROL_TYPE_NONE);
+    add("SD_CONTROL_TYPE_OPENPOSE", SD_CONTROL_TYPE_OPENPOSE);
+    add("SD_CONTROL_TYPE_DEPTH", SD_CONTROL_TYPE_DEPTH);
+    add("SD_CONTROL_TYPE_SCRIBBLE", SD_CONTROL_TYPE_SCRIBBLE);
+    add("SD_CONTROL_TYPE_CANNY", SD_CONTROL_TYPE_CANNY);
+    add("SD_CONTROL_TYPE_NORMAL", SD_CONTROL_TYPE_NORMAL);
+    add("SD_CONTROL_TYPE_SEGMENT", SD_CONTROL_TYPE_SEGMENT);
+    add("SD_CONTROL_TYPE_TILE", SD_CONTROL_TYPE_TILE);
+    add("SD_CONTROL_TYPE_REPAINT", SD_CONTROL_TYPE_REPAINT);
+    add("SD_CONTROL_TYPE_COUNT", SD_CONTROL_TYPE_COUNT);
+
     add("SD_HIRES_UPSCALER_NONE", SD_HIRES_UPSCALER_NONE);
     add("SD_HIRES_UPSCALER_LATENT", SD_HIRES_UPSCALER_LATENT);
     add("SD_HIRES_UPSCALER_LATENT_NEAREST", SD_HIRES_UPSCALER_LATENT_NEAREST);
@@ -635,6 +712,9 @@ NB_MODULE(_sd_native, m) {
         .def_prop_ro("width",    [](SDImageW& s){ return s.img.width; })
         .def_prop_ro("height",   [](SDImageW& s){ return s.img.height; })
         .def_prop_ro("channels", [](SDImageW& s){ return s.img.channel; })
+        .def_prop_ro("generation_info", [](SDImageW& s){ return s.generation_info; },
+            "Generation metadata as JSON (``sdcpp.generation/v1``), or None for images not "
+            "produced by stable-diffusion.cpp.")
         .def_prop_ro("is_valid", [](SDImageW& s){
             return s.img.data != nullptr && s.img.width > 0 && s.img.height > 0;
         })
@@ -764,6 +844,14 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_PATH(SDContextParamsW, p.max_vram,        max_vram_s,        "max_vram")
         SD_PARAM_VAL(SDContextParamsW, bool, p.disable_prefetch, "disable_prefetch")
         SD_PARAM_VAL(SDContextParamsW, bool, p.disable_segmented_compute, "disable_segmented_compute")
+        SD_PARAM_VAL(SDContextParamsW, bool, p.batched_cfg, "batched_cfg")
+        .def_prop_rw("conditioning_cache_size",
+            [](SDContextParamsW& s){ return s.p.conditioning_cache_size; },
+            [](SDContextParamsW& s, int v){
+                if (v < 0) throw std::invalid_argument(
+                    "conditioning_cache_size must be >= 0, got " + std::to_string(v));
+                s.p.conditioning_cache_size = v;
+            }, "Maximum cached conditioning entries per context; 0 disables (default 4).")
         SD_PARAM_VAL(SDContextParamsW, bool, p.eager_load, "eager_load")
         SD_PARAM_VAL(SDContextParamsW, bool, p.auto_fit, "auto_fit")
         SD_PARAM_VAL(SDContextParamsW, float, p.linear_scale, "linear_scale")
@@ -899,11 +987,11 @@ NB_MODULE(_sd_native, m) {
         SD_PARAM_VAL(SDImageGenParamsW, bool,   p.circular_y, "circular_y")
         // VAE tiling
         SD_PARAM_VAL(SDImageGenParamsW, bool,   p.vae_tiling_params.enabled, "vae_tiling_enabled")
-        SD_PARAM_VAL(SDImageGenParamsW, int,    p.vae_tiling_params.tile_size_x, "vae_tile_size_x")
-        SD_PARAM_VAL(SDImageGenParamsW, int,    p.vae_tiling_params.tile_size_y, "vae_tile_size_y")
+        SD_PARAM_VAL(SDImageGenParamsW, int,    p.vae_tiling_params.tile_size_w, "vae_tile_size_x")
+        SD_PARAM_VAL(SDImageGenParamsW, int,    p.vae_tiling_params.tile_size_h, "vae_tile_size_y")
         SD_PARAM_VAL(SDImageGenParamsW, float,  p.vae_tiling_params.target_overlap, "vae_tile_overlap")
-        SD_PARAM_VAL(SDImageGenParamsW, float,  p.vae_tiling_params.rel_size_x, "vae_tile_rel_size_x")
-        SD_PARAM_VAL(SDImageGenParamsW, float,  p.vae_tiling_params.rel_size_y, "vae_tile_rel_size_y")
+        SD_PARAM_VAL(SDImageGenParamsW, float,  p.vae_tiling_params.rel_size_w, "vae_tile_rel_size_x")
+        SD_PARAM_VAL(SDImageGenParamsW, float,  p.vae_tiling_params.rel_size_h, "vae_tile_rel_size_y")
         // Cache params
         SD_PARAM_VAL(SDImageGenParamsW, int,    p.cache.mode, "cache_mode")
         SD_PARAM_VAL(SDImageGenParamsW, float,  p.cache.reuse_threshold, "cache_threshold")
@@ -1108,34 +1196,40 @@ NB_MODULE(_sd_native, m) {
                                         : sd_get_default_sample_method(s.ctx);
             return (int) sd_get_default_scheduler(s.ctx, method);
         }, "sample_method"_a = nb::none())
+        .def("set_generation_progress_callback", [](SDContextW& s, nb::object cb){
+            if (!s.ctx) throw std::runtime_error("Context not initialized");
+            // upstream: register or clear only while the context is idle
+            inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
+            if (cb.is_none()) sd_set_generation_progress_callback(s.ctx, nullptr, nullptr);
+            else sd_set_generation_progress_callback(s.ctx, _c_generation_progress_cb, cb.ptr());
+            s.gen_progress_cb = cb;
+        }, "callback"_a.none(),
+           "Set this context's progress callback, or clear it with None. It receives "
+           "(stage, detail, unit, sample_pass, completed, total); total == 0 means unknown.")
         .def("generate_with_params", [](SDContextW& s, SDImageGenParamsW& params){
             if (!s.ctx) throw std::runtime_error("Context not initialized");
             params.sync_sample();
-            int batch = 0;
-            sd_image_t* result = nullptr;
+            sd_image_generation_result_t* result = nullptr;
             bool ok = false;
 
             {
                 inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
                 nb::gil_scoped_release rel;
-                ok = generate_image(s.ctx, &params.p, &result, &batch);
+                ok = generate_image(s.ctx, &params.p, &result);
             }
 
-            if (!ok || !result) throw std::runtime_error("Image generation failed");
+            if (!result) throw std::runtime_error("Image generation failed");
+            nb::list out = take_image_result(result);
+            int batch = (int) out.size();
+            if (!ok || batch == 0) throw std::runtime_error("Image generation failed");
 
-            nb::list out;
             int n_invalid = 0;
-            for (int i = 0; i < batch; ++i) {
-                auto* w = new SDImageW{};
-                w->img = result[i];
-                w->owns = true;
-                if (!w->img.data || w->img.width == 0 || w->img.height == 0)
-                    n_invalid++;
-                out.append(nb::cast(w, nb::rv_policy::take_ownership));
+            for (auto h : out) {
+                const sd_image_t& img = nb::cast<SDImageW&>(h).img;
+                if (!img.data || img.width == 0 || img.height == 0) n_invalid++;
             }
-            std::free(result);
 
-            if (batch > 0 && n_invalid == batch) {
+            if (n_invalid == batch) {
                 throw std::runtime_error(
                     "Image generation failed: all images have invalid data. "
                     "This usually means GPU memory allocation failed (out of memory). "
@@ -1207,31 +1301,23 @@ NB_MODULE(_sd_native, m) {
                 vid_params.lora_count = (uint32_t) lora_buf.size();
             }
 
-            int num_frames_out = 0;
-            sd_image_t* result = nullptr;
-            sd_audio_t* audio_out = nullptr;
+            sd_video_generation_result_t* result = nullptr;
             bool ok = false;
             {
                 inferna::BusyGuard guard(s.busy_lock, SDContextW::kBusyMsg);
                 nb::gil_scoped_release rel;
-                ok = generate_video(s.ctx, &vid_params, &result,
-                                    &num_frames_out, &audio_out, nullptr);
+                ok = generate_video(s.ctx, &vid_params, &result);
             }
 
-            // Video generation produces frames only; discard any audio track.
-            if (audio_out) free_sd_audio(audio_out);
-            if (!ok || !result) throw std::runtime_error("Video generation failed");
+            if (!result) throw std::runtime_error("Video generation failed");
+            // Generated audio is not exposed; the result free releases it.
+            nb::list out = take_video_result(result);
+            if (!ok) throw std::runtime_error("Video generation failed");
 
-            nb::list out;
+            int num_frames_out = (int) out.size();
             int n_invalid = 0;
-            for (int i = 0; i < num_frames_out; ++i) {
-                auto* w = new SDImageW{};
-                w->img = result[i];
-                w->owns = true;
-                if (!w->img.data) n_invalid++;
-                out.append(nb::cast(w, nb::rv_policy::take_ownership));
-            }
-            std::free(result);
+            for (auto h : out)
+                if (!nb::cast<SDImageW&>(h).img.data) n_invalid++;
             if (num_frames_out > 0 && n_invalid == num_frames_out)
                 throw std::runtime_error(
                     "Video generation failed: all frames have invalid data. "
@@ -1267,27 +1353,21 @@ NB_MODULE(_sd_native, m) {
             params.sync_sample();
             auto c = [](const std::optional<std::string>& v){ return v ? v->c_str() : nullptr; };
             sd_adetailer_params_t ad{c(prompt), c(negative_prompt), c(extra_args)};
-            sd_image_t* result = nullptr;
-            int n = 0;
+            sd_image_generation_result_t* result = nullptr;
             bool ok;
             {
                 // adetail_image runs generate_image on `sd`
                 inferna::BusyGuard guard(s.busy_lock, ADetailerW::kBusyMsg);
                 inferna::BusyGuard sd_guard(sd.busy_lock, SDContextW::kBusyMsg);
                 nb::gil_scoped_release rel;
-                ok = adetail_image(s.ctx, sd.ctx, image.img, &ad, &params.p, &result, &n);
+                ok = adetail_image(s.ctx, sd.ctx, image.img, &ad, &params.p, &result);
             }
-            if (!ok || n != 1 || !result) {
-                free_sd_images(result, n);
+            nb::list out = result ? take_image_result(result) : nb::list();
+            if (!ok || out.size() != 1)
                 throw std::runtime_error("ADetailer failed; see the stable-diffusion.cpp log");
-            }
-            auto* w = new SDImageW{};
-            w->img = result[0];
-            w->owns = true;
-            std::free(result);
-            return w;
+            return nb::object(out[0]);
         }, "sd_ctx"_a, "image"_a, "params"_a, "prompt"_a = nb::none(), "negative_prompt"_a = nb::none(),
-           "extra_args"_a = nb::none(), nb::rv_policy::take_ownership,
+           "extra_args"_a = nb::none(),
            "Detect regions in image and re-inpaint each with sd_ctx; returns the composited image.");
 
     nb::class_<UpscalerW>(m, "Upscaler")
@@ -1303,24 +1383,13 @@ NB_MODULE(_sd_native, m) {
         .def("upscale", [](UpscalerW& s, SDImageW& image, int factor){
             if (!s.ctx) throw std::runtime_error("Upscaler not initialized");
             if (factor == 0) factor = get_upscale_factor(s.ctx);
-            sd_image_t* result = nullptr;
-            int n_images = 0;
-            bool ok = ::upscale(s.ctx, image.img, (uint32_t)factor,
-                                &result, &n_images);
-            if (!ok || !result || n_images <= 0 || !result[0].data) {
-                if (result) {
-                    for (int i = 0; i < n_images; ++i) std::free(result[i].data);
-                    std::free(result);
-                }
+            sd_image_generation_result_t* result = nullptr;
+            bool ok = ::upscale(s.ctx, image.img, (uint32_t)factor, &result);
+            if (!result) throw std::runtime_error("Upscaling failed");
+            nb::list out = take_image_result(result);
+            if (!ok || out.size() == 0 || !nb::cast<SDImageW&>(out[0]).img.data)
                 throw std::runtime_error("Upscaling failed");
-            }
-            // Keep the first image; its data buffer is handed to the wrapper.
-            auto* w = new SDImageW{};
-            w->img = result[0];
-            w->owns = true;
-            for (int i = 1; i < n_images; ++i) std::free(result[i].data);
-            std::free(result);
-            return nb::cast(w, nb::rv_policy::take_ownership);
+            return nb::object(out[0]);
         }, "image"_a, "factor"_a = 0);
 
     // -------------------------------------------------------------------------
@@ -1382,7 +1451,7 @@ NB_MODULE(_sd_native, m) {
                                               (sd_type_t)output_type,
                                               // sd.cpp builds a std::string from it; null crashes
                                               tensor_type_rules ? tensor_type_rules->c_str() : "", convert_name,
-                                              n_threads);
+                                              n_threads, /*loras=*/nullptr, /*lora_count=*/0);
     });
 
     // The imatrix is process-wide: collection accumulates over every

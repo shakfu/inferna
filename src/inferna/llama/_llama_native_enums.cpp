@@ -94,7 +94,6 @@ void register_enums(nb::module_& m) {
 
     // -------- ggml precision --------
     EXPORT(GGML_PREC_UNDEFINED);
-    EXPORT(GGML_PREC_DEFAULT);  // deprecated upstream alias of UNDEFINED
     EXPORT(GGML_PREC_F32);
     EXPORT(GGML_PREC_BF16);
     EXPORT(GGML_PREC_F16);
